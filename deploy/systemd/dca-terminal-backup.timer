@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily DCA Terminal PostgreSQL backup timer
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+RandomizedDelaySec=15m
+Unit=dca-terminal-backup.service
+
+[Install]
+WantedBy=timers.target

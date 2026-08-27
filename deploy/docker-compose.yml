@@ -1,0 +1,147 @@
+name: ${COMPOSE_PROJECT_NAME:-dca-terminal}
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:18.6-alpine}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-dca_terminal}
+      POSTGRES_USER: ${POSTGRES_USER:-dca_terminal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      TZ: ${APP_TIMEZONE:-America/New_York}
+    volumes:
+      # PostgreSQL 18+ stores PGDATA below this versioned parent directory.
+      - postgres_data:/var/lib/postgresql
+    networks:
+      - backend
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  api:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
+      DATABASE_URL: "jdbc:postgresql://postgres:5432/${POSTGRES_DB:-dca_terminal}"
+      DATABASE_USERNAME: ${POSTGRES_USER:-dca_terminal}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
+      FLYWAY_ENABLED: ${FLYWAY_ENABLED:-true}
+      SERVER_PORT: "8080"
+      TZ: ${APP_TIMEZONE:-America/New_York}
+      APP_TIMEZONE: ${APP_TIMEZONE:-America/New_York}
+      APP_THEME: ${APP_THEME:-System}
+      APP_SECURITY_ENABLED: ${APP_SECURITY_ENABLED:-true}
+      APP_COOKIE_SECURE: ${APP_COOKIE_SECURE:-true}
+      APP_USERNAME: ${APP_USERNAME:-admin}
+      APP_PASSWORD_HASH: ${APP_PASSWORD_HASH:?APP_PASSWORD_HASH must be set}
+      MARKET_SYNC_ENABLED: ${MARKET_SYNC_ENABLED:-true}
+      MARKET_SYNC_CRON: "${MARKET_SYNC_CRON:-0 30 18 * * MON-FRI}"
+      MARKET_DATA_PRIMARY_PROVIDER: ${MARKET_DATA_PRIMARY_PROVIDER:-YAHOO}
+      MARKET_DATA_FALLBACK_PROVIDER: ${MARKET_DATA_FALLBACK_PROVIDER:-TWELVE_DATA}
+      YAHOO_PROXY_URL: ${YAHOO_PROXY_URL:-}
+      TWELVE_DATA_API_KEY: ${TWELVE_DATA_API_KEY:-}
+      ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    expose:
+      - "8080"
+    networks:
+      - backend
+      - edge
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          wget -q -O - http://127.0.0.1:8080/actuator/health
+          | grep -Eq '"status"[[:space:]]*:[[:space:]]*"UP"'
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api/v1}
+    restart: unless-stopped
+    expose:
+      - "80"
+    networks:
+      - edge
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q --spider http://127.0.0.1/
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  caddy:
+    image: ${CADDY_IMAGE:-caddy:2-alpine}
+    restart: unless-stopped
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN must be set}
+      CADDY_EMAIL: ${CADDY_EMAIL:?CADDY_EMAIL must be set}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - edge
+    depends_on:
+      web:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  backend:
+    internal: true
+  edge:

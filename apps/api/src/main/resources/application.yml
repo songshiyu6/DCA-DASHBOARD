@@ -1,0 +1,81 @@
+spring:
+  application:
+    name: dca-terminal-api
+  mvc:
+    problemdetails:
+      enabled: true
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/dca_terminal}
+    username: ${DATABASE_USERNAME:dca}
+    password: ${DATABASE_PASSWORD:dca}
+    hikari:
+      maximum-pool-size: ${DATABASE_POOL_SIZE:10}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+        format_sql: false
+  flyway:
+    enabled: ${FLYWAY_ENABLED:true}
+    locations: classpath:db/migration
+  jackson:
+    time-zone: UTC
+    default-property-inclusion: non_null
+  cache:
+    type: caffeine
+
+server:
+  port: ${SERVER_PORT:8080}
+  forward-headers-strategy: framework
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        secure: ${APP_COOKIE_SECURE:true}
+        same-site: lax
+  error:
+    include-message: never
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: ${HEALTH_SHOW_DETAILS:never}
+
+dca:
+  timezone: ${APP_TIMEZONE:America/New_York}
+  ui:
+    theme: ${APP_THEME:System}
+  scheduler:
+    enabled: ${MARKET_SYNC_ENABLED:true}
+    cron: '${MARKET_SYNC_CRON:0 30 18 * * MON-FRI}'
+  market-data:
+    yahoo:
+      base-url: ${YAHOO_BASE_URL:https://query2.finance.yahoo.com}
+      timeout-ms: ${YAHOO_TIMEOUT_MS:5000}
+      proxy-url: ${YAHOO_PROXY_URL:}
+    twelve-data:
+      api-key: ${TWELVE_DATA_API_KEY:}
+      base-url: ${TWELVE_DATA_BASE_URL:https://api.twelvedata.com}
+    alpha-vantage:
+      api-key: ${ALPHA_VANTAGE_API_KEY:}
+      base-url: ${ALPHA_VANTAGE_BASE_URL:https://www.alphavantage.co}
+    primary: ${MARKET_DATA_PRIMARY_PROVIDER:${MARKET_DATA_PRIMARY:YAHOO}}
+    fallback: ${MARKET_DATA_FALLBACK_PROVIDER:${MARKET_DATA_FALLBACK:TWELVE_DATA}}
+    quote-ttl-seconds: ${MARKET_QUOTE_TTL_SECONDS:60}
+    profile-ttl-hours: ${MARKET_PROFILE_TTL_HOURS:24}
+    provider-attempts: ${MARKET_DATA_PROVIDER_ATTEMPTS:2}
+  security:
+    enabled: ${APP_SECURITY_ENABLED:true}
+    username: ${APP_USERNAME:admin}
+    password-hash: ${APP_PASSWORD_HASH:}
+    cookie-secure: ${APP_COOKIE_SECURE:true}

@@ -1,0 +1,9 @@
+[Unit]
+Description=DCA Terminal PostgreSQL backup
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+Environment=DCA_ENV_FILE=/opt/dca-terminal/deploy/.env
+ExecStart=/opt/dca-terminal/deploy/scripts/backup-postgres.sh

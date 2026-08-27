@@ -1,0 +1,36 @@
+# Local secrets and deployment state
+.env
+deploy/.env
+deploy/backups/
+deploy/.local/
+
+# Node / frontend artifacts
+node_modules/
+apps/web/node_modules/
+apps/web/dist/
+apps/web/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Java / Gradle artifacts
+.gradle/
+apps/api/.gradle/
+apps/api/build/
+apps/api/out/
+
+# Test and local tooling output
+coverage/
+playwright-report/
+test-results/
+.cache/
+.DS_Store
+*.log
+
+# Local IDE files
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo

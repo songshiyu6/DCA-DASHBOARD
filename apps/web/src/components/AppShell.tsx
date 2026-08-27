@@ -1,0 +1,62 @@
+import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { ArrowLeftRight, CalendarClock, ChevronDown, Globe2, LayoutDashboard, LineChart, LogOut, Menu, Settings, X } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { api } from '../lib/api'
+
+const navItems = [
+  { key: 'dashboard', to: '/', icon: LayoutDashboard },
+  { key: 'plan', to: '/plan', icon: CalendarClock },
+  { key: 'etfs', to: '/etfs', icon: LineChart },
+  { key: 'transactions', to: '/transactions', icon: ArrowLeftRight },
+  { key: 'settings', to: '/settings', icon: Settings },
+] as const
+
+export function AppShell() {
+  const { t, i18n } = useTranslation()
+  const location = useLocation()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const [mobileOpen, setMobileOpen] = useState(false)
+  const [profileOpen, setProfileOpen] = useState(false)
+  const title = location.pathname.startsWith('/etfs/') ? 'etfs' : navItems.find((item) => item.to === location.pathname)?.key ?? 'dashboard'
+
+  const toggleLanguage = () => {
+    const next = i18n.language === 'zh' ? 'en' : 'zh'
+    void i18n.changeLanguage(next)
+    localStorage.setItem('dca-language', next)
+  }
+
+  const logout = async () => {
+    try {
+      await api.logout()
+    } catch {
+      // The local session must still be cleared when the API is unavailable.
+    } finally {
+      queryClient.setQueryData(['session'], { data: { authenticated: false }, meta: { status: 'FRESH', source: 'API' } })
+      navigate('/login', { replace: true })
+    }
+  }
+
+  return <div className="app-shell">
+    <aside className={`sidebar ${mobileOpen ? 'sidebar-open' : ''}`}>
+      <div className="brand-lockup"><span className="brand-mark"><span /></span><span><strong>DCA</strong><small>TERMINAL</small></span></div>
+      <div className="workspace-switcher"><span className="workspace-avatar">S</span><span className="workspace-copy"><strong>Personal</strong><small>Investing workspace</small></span><ChevronDown size={14} /></div>
+      <nav className="primary-nav" aria-label="Primary navigation">
+        <span className="nav-label">Workspace</span>
+        {navItems.map(({ key, to, icon: Icon }) => <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => `nav-link ${isActive ? 'nav-link-active' : ''}`} onClick={() => setMobileOpen(false)}><Icon size={17} strokeWidth={1.8} /><span>{t(`nav.${key}`)}</span>{key === 'plan' ? <span className="nav-pulse" /> : null}</NavLink>)}
+      </nav>
+      <div className="sidebar-bottom"><div className="connection-state"><span className="connection-dot" /><span><strong>Local workspace</strong><small>Demo fallback ready</small></span></div></div>
+    </aside>
+    {mobileOpen ? <button className="mobile-scrim" aria-label="Close navigation" onClick={() => setMobileOpen(false)} /> : null}
+    <div className="app-main">
+      <header className="topbar">
+        <button className="icon-button mobile-menu" aria-label="Open navigation" aria-expanded={mobileOpen} onClick={() => setMobileOpen(true)}><Menu size={20} /></button>
+        <div className="breadcrumbs"><span>DCA TERMINAL</span><span className="breadcrumb-separator">/</span><strong>{title === 'dashboard' ? t('nav.dashboard') : title === 'plan' ? t('nav.plan') : title === 'transactions' ? t('nav.transactions') : title === 'settings' ? t('nav.settings') : t('nav.etfs')}</strong></div>
+        <div className="topbar-actions"><button className="icon-button language-button" onClick={toggleLanguage} title="Switch language"><Globe2 size={16} /><span>{i18n.language === 'zh' ? '中' : 'EN'}</span></button><span className="topbar-divider" /><div className="profile-menu"><button className="profile-button" onClick={() => setProfileOpen((open) => !open)}><span className="profile-avatar">SS</span><span className="profile-name">Song</span><ChevronDown size={14} /></button>{profileOpen ? <div className="profile-popover"><div className="profile-popover-header"><strong>Song Shiyu</strong><small>Personal account</small></div><button onClick={logout}><LogOut size={15} />Sign out</button></div> : null}</div></div>
+      </header>
+      <main className="page-content"><Outlet /></main>
+    </div>
+  </div>
+}

@@ -1,0 +1,25 @@
+{
+    email {$CADDY_EMAIL}
+}
+
+{$APP_DOMAIN} {
+    encode zstd gzip
+
+    header {
+        -Server
+    }
+
+    @api path /api/*
+    handle @api {
+        reverse_proxy api:8080
+    }
+
+    handle {
+        reverse_proxy web:80
+    }
+
+    log {
+        output stdout
+        format json
+    }
+}

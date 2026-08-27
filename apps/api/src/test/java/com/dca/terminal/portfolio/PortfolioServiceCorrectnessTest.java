@@ -86,4 +86,79 @@ class PortfolioServiceCorrectnessTest {
         assertNull(holding.returnPercent());
         assertNull(holding.allocation());
     }
+
+    @Test
+    void replaysHistoryIncrementallyWithoutUsingAStarterTransactionOrFuturePrice() {
+        UUID instrumentId = UUID.randomUUID();
+        InstrumentEntity instrument = mock(InstrumentEntity.class);
+        when(instrument.getId()).thenReturn(instrumentId);
+        when(instrument.getSymbol()).thenReturn("VOO");
+        when(instrument.getName()).thenReturn("Vanguard S&P 500 ETF");
+
+        TransactionEntity buy = new TransactionEntity();
+        buy.setInstrument(instrument);
+        buy.setTransactionType(TransactionType.BUY);
+        buy.setTradeDate(LocalDate.of(2026, 8, 1));
+        buy.setQuantity(new BigDecimal("1"));
+        buy.setUnitPrice(new BigDecimal("100"));
+        buy.setFee(BigDecimal.ZERO);
+        buy.setLedgerOrder(1L);
+        TransactionEntity laterBuy = new TransactionEntity();
+        laterBuy.setInstrument(instrument);
+        laterBuy.setTransactionType(TransactionType.BUY);
+        laterBuy.setTradeDate(LocalDate.of(2026, 8, 20));
+        laterBuy.setQuantity(new BigDecimal("1"));
+        laterBuy.setUnitPrice(new BigDecimal("200"));
+        laterBuy.setFee(BigDecimal.ZERO);
+        laterBuy.setLedgerOrder(2L);
+
+        TransactionRepository transactions = mock(TransactionRepository.class);
+        when(transactions.findAllByOrderByTradeDateAscLedgerOrderAscIdAsc()).thenReturn(List.of(buy, laterBuy));
+        PortfolioSnapshotRepository snapshots = mock(PortfolioSnapshotRepository.class);
+        when(snapshots.findAllBySnapshotDateBetweenOrderBySnapshotDateAsc(any(), any())).thenReturn(List.of());
+        SplitEventRepository splits = mock(SplitEventRepository.class);
+        when(splits.findAllByInstrumentIdInAndEffectiveDateLessThanEqualOrderByInstrumentIdAscEffectiveDateAsc(
+                anyCollection(), any(LocalDate.class))).thenReturn(List.of());
+        PriceDailyRepository prices = mock(PriceDailyRepository.class);
+        when(prices.findAllByInstrumentIdInAndTradeDateLessThanEqualOrderByInstrumentIdAscTradeDateDesc(
+            anyCollection(), any(LocalDate.class))).thenReturn(List.of(
+                dailyPrice(instrument, "2026-08-01", "100"),
+                dailyPrice(instrument, "2026-08-10", "110"),
+                dailyPrice(instrument, "2026-08-20", "200"),
+                dailyPrice(instrument, "2026-08-27", "210")));
+        MarketDataService marketData = mock(MarketDataService.class);
+        when(marketData.providerPriority()).thenReturn(List.of(ProviderId.YAHOO, ProviderId.TWELVE_DATA));
+
+        PortfolioService service = new PortfolioService(transactions, mock(InstrumentRepository.class), prices,
+                mock(QuoteLatestRepository.class), splits, snapshots, mock(PlanRepository.class), mock(AssetRepository.class),
+                marketData, Clock.fixed(Instant.parse("2026-08-27T12:00:00Z"), ZoneOffset.UTC), ZoneOffset.UTC);
+
+        List<PortfolioDtos.HistoryPoint> history = service.history("1M");
+
+        PortfolioDtos.HistoryPoint beforeLaterPurchase = history.stream()
+                .filter(point -> point.date().equals(LocalDate.of(2026, 8, 10))).findFirst().orElseThrow();
+        PortfolioDtos.HistoryPoint laterPurchaseDate = history.stream()
+                .filter(point -> point.date().equals(LocalDate.of(2026, 8, 20))).findFirst().orElseThrow();
+        PortfolioDtos.HistoryPoint latest = history.getLast();
+        assertDecimal("110", beforeLaterPurchase.marketValue());
+        assertDecimal("100", beforeLaterPurchase.costBasis());
+        assertDecimal("400", laterPurchaseDate.marketValue());
+        assertDecimal("300", laterPurchaseDate.costBasis());
+        assertDecimal("420", latest.marketValue());
+        assertDecimal("300", latest.costBasis());
+    }
+
+    private static PriceDailyEntity dailyPrice(InstrumentEntity instrument, String date, String close) {
+        PriceDailyEntity price = new PriceDailyEntity();
+        price.setInstrument(instrument);
+        price.setTradeDate(LocalDate.parse(date));
+        price.setClose(new BigDecimal(close));
+        price.setAdjustedClose(new BigDecimal(close));
+        price.setSource("YAHOO");
+        return price;
+    }
+
+    private static void assertDecimal(String expected, BigDecimal actual) {
+        assertEquals(0, new BigDecimal(expected).compareTo(actual));
+    }
 }

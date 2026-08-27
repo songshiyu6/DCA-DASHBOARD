@@ -3,6 +3,7 @@ package com.dca.terminal.transaction;
 import com.dca.terminal.common.DomainException;
 import com.dca.terminal.instrument.InstrumentEntity;
 import com.dca.terminal.instrument.InstrumentRepository;
+import com.dca.terminal.marketdata.MarketDataService;
 import com.dca.terminal.marketdata.SplitEventRepository;
 import com.dca.terminal.plan.PlanService;
 import com.dca.terminal.portfolio.PortfolioService;
@@ -103,7 +104,8 @@ class TransactionServiceValidationTest {
 
     private static TransactionService service(InstrumentRepository instruments, TransactionRepository transactions,
                                                PlanService plans, PortfolioService portfolio) {
-        return new TransactionService(transactions, instruments, mock(SplitEventRepository.class), plans, portfolio);
+        return new TransactionService(transactions, instruments, mock(SplitEventRepository.class),
+                mock(MarketDataService.class), plans, portfolio);
     }
 
     private static InstrumentEntity instrument(String symbol) {

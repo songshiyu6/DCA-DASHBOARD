@@ -28,41 +28,102 @@ public final class FifoCalculator {
     public static Calculation calculate(List<TransactionEntity> transactions,
                                         Map<UUID, List<SplitEventEntity>> splits,
                                         LocalDate asOf) {
-        Map<UUID, Deque<Lot>> lots = new HashMap<>();
-        Map<UUID, BigDecimal> realizedByInstrument = new HashMap<>();
-        BigDecimal realized = BigDecimal.ZERO;
-        BigDecimal dividends = BigDecimal.ZERO;
-        BigDecimal standaloneFees = BigDecimal.ZERO;
-        BigDecimal totalFees = BigDecimal.ZERO;
-        List<TransactionEntity> ordered = transactions.stream()
-                .filter(transaction -> !transaction.getTradeDate().isAfter(asOf))
-                .sorted(Comparator.comparing(TransactionEntity::getTradeDate)
-                        .thenComparing(TransactionEntity::getLedgerOrder, Comparator.nullsLast(Long::compareTo))
-                        .thenComparing(TransactionEntity::getCreatedAt, Comparator.nullsLast(java.time.Instant::compareTo))
-                .thenComparing(transaction -> transaction.getId() == null ? "" : transaction.getId().toString()))
-                .toList();
-        Map<UUID, List<SplitEventEntity>> canonicalSplits = splits == null ? Map.of() : splits.entrySet().stream()
-                .collect(java.util.stream.Collectors.toMap(Map.Entry::getKey,
-                        entry -> canonicalSplits(entry.getValue()), (first, ignored) -> first));
-        Map<UUID, Integer> splitIndex = new HashMap<>();
-        for (TransactionEntity transaction : ordered) {
-            UUID instrumentId = transaction.getInstrument().getId();
-            Deque<Lot> instrumentLots = lots.computeIfAbsent(instrumentId, ignored -> new ArrayDeque<>());
+        return calculate(transactions, splits, asOf, List.of());
+    }
+
+    public static Calculation calculate(List<TransactionEntity> transactions,
+                                        Map<UUID, List<SplitEventEntity>> splits,
+                                        LocalDate asOf,
+                                        List<ProviderId> providerPriority) {
+        return replay(transactions, splits, providerPriority).calculateThrough(asOf);
+    }
+
+    public static Replay replay(List<TransactionEntity> transactions,
+                                Map<UUID, List<SplitEventEntity>> splits,
+                                List<ProviderId> providerPriority) {
+        return new Replay(transactions, splits, providerPriority);
+    }
+
+    private static List<SplitEventEntity> canonicalSplits(List<SplitEventEntity> source,
+                                                          List<ProviderId> providerPriority) {
+        if (source == null || source.isEmpty()) return List.of();
+        Map<LocalDate, SplitEventEntity> selected = new java.util.LinkedHashMap<>();
+        source.stream()
+                .filter(java.util.Objects::nonNull)
+                .sorted(Comparator.comparing(SplitEventEntity::getEffectiveDate)
+                        .thenComparing(event -> ProviderPriority.rank(event.getSource(), providerPriority))
+                        .thenComparing(SplitEventEntity::getCreatedAt, Comparator.nullsLast(Instant::compareTo))
+                        .thenComparing(event -> event.getId() == null ? "" : event.getId().toString()))
+                .forEach(event -> selected.putIfAbsent(event.getEffectiveDate(), event));
+        return selected.values().stream().sorted(Comparator.comparing(SplitEventEntity::getEffectiveDate)).toList();
+    }
+
+    public static final class Replay {
+        private final List<TransactionEntity> orderedTransactions;
+        private final Map<UUID, List<SplitEventEntity>> canonicalSplits;
+        private final Map<UUID, Deque<Lot>> lots = new HashMap<>();
+        private final Map<UUID, BigDecimal> realizedByInstrument = new HashMap<>();
+        private final Map<UUID, Integer> splitIndex = new HashMap<>();
+        private int transactionIndex;
+        private LocalDate currentAsOf;
+        private BigDecimal realized = BigDecimal.ZERO;
+        private BigDecimal dividends = BigDecimal.ZERO;
+        private BigDecimal standaloneFees = BigDecimal.ZERO;
+        private BigDecimal totalFees = BigDecimal.ZERO;
+
+        private Replay(List<TransactionEntity> transactions, Map<UUID, List<SplitEventEntity>> splits,
+                       List<ProviderId> providerPriority) {
+            List<ProviderId> priority = providerPriority == null ? List.of() : providerPriority.stream()
+                    .filter(java.util.Objects::nonNull).toList();
+            orderedTransactions = (transactions == null ? List.<TransactionEntity>of() : transactions).stream()
+                    .sorted(Comparator.comparing(TransactionEntity::getTradeDate)
+                            .thenComparing(TransactionEntity::getLedgerOrder, Comparator.nullsLast(Long::compareTo))
+                            .thenComparing(TransactionEntity::getCreatedAt, Comparator.nullsLast(Instant::compareTo))
+                            .thenComparing(transaction -> transaction.getId() == null ? "" : transaction.getId().toString()))
+                    .toList();
+            canonicalSplits = splits == null ? Map.of() : splits.entrySet().stream()
+                    .collect(java.util.stream.Collectors.toMap(Map.Entry::getKey,
+                            entry -> canonicalSplits(entry.getValue(), priority), (first, ignored) -> first));
+        }
+
+        public Calculation calculateThrough(LocalDate asOf) {
+            if (asOf == null) throw new IllegalArgumentException("Valuation date is required");
+            if (currentAsOf != null && asOf.isBefore(currentAsOf)) {
+                throw new IllegalArgumentException("Replay dates must be non-decreasing");
+            }
+            while (transactionIndex < orderedTransactions.size()
+                    && !orderedTransactions.get(transactionIndex).getTradeDate().isAfter(asOf)) {
+                TransactionEntity transaction = orderedTransactions.get(transactionIndex++);
+                UUID instrumentId = transaction.getInstrument().getId();
+                Deque<Lot> instrumentLots = lots.computeIfAbsent(instrumentId, ignored -> new ArrayDeque<>());
+                applySplitsThrough(instrumentId, instrumentLots, transaction.getTradeDate());
+                applyTransaction(transaction, instrumentId, instrumentLots);
+            }
+            // Apply corporate actions that occurred after the last transaction but before the valuation date.
+            lots.forEach((instrumentId, instrumentLots) -> applySplitsThrough(instrumentId, instrumentLots, asOf));
+            currentAsOf = asOf;
+            return snapshot();
+        }
+
+        private void applySplitsThrough(UUID instrumentId, Deque<Lot> instrumentLots, LocalDate date) {
             List<SplitEventEntity> instrumentSplits = canonicalSplits.getOrDefault(instrumentId, List.of());
             int index = splitIndex.getOrDefault(instrumentId, 0);
             while (index < instrumentSplits.size()
-                    && !instrumentSplits.get(index).getEffectiveDate().isAfter(transaction.getTradeDate())) {
+                    && !instrumentSplits.get(index).getEffectiveDate().isAfter(date)) {
                 applySplit(instrumentLots, instrumentSplits.get(index));
                 index++;
             }
             splitIndex.put(instrumentId, index);
+        }
+
+        private void applyTransaction(TransactionEntity transaction, UUID instrumentId, Deque<Lot> instrumentLots) {
             switch (transaction.getTransactionType()) {
                 case BUY -> {
                     BigDecimal quantity = requiredPositive(transaction.getQuantity(), "BUY quantity");
                     BigDecimal price = required(transaction.getUnitPrice(), "BUY unit price");
                     BigDecimal fee = DecimalMath.zeroIfNull(transaction.getFee());
                     BigDecimal cost = quantity.multiply(price, MC).add(fee, MC);
-                    instrumentLots.addLast(new Lot(quantity, cost.divide(quantity, MC)));
+                    instrumentLots.addLast(new Lot(quantity, cost.divide(quantity, MC), cost));
                     totalFees = totalFees.add(fee, MC);
                 }
                 case SELL -> {
@@ -88,31 +149,17 @@ public final class FifoCalculator {
                 }
             }
         }
-        // Apply corporate actions that occurred after the last transaction but before the valuation date.
-        lots.forEach((instrumentId, instrumentLots) -> {
-            List<SplitEventEntity> instrumentSplits = canonicalSplits.getOrDefault(instrumentId, List.of());
-            int index = splitIndex.getOrDefault(instrumentId, 0);
-            while (index < instrumentSplits.size()
-                    && !instrumentSplits.get(index).getEffectiveDate().isAfter(asOf)) {
-                applySplit(instrumentLots, instrumentSplits.get(index));
-                index++;
-            }
-        });
-        return new Calculation(lots, realizedByInstrument, realized, dividends, standaloneFees, totalFees);
-    }
 
-    private static List<SplitEventEntity> canonicalSplits(List<SplitEventEntity> source) {
-        if (source == null || source.isEmpty()) return List.of();
-        List<ProviderId> priority = ProviderPriority.ordered(ProviderId.YAHOO, ProviderId.TWELVE_DATA);
-        Map<LocalDate, SplitEventEntity> selected = new java.util.LinkedHashMap<>();
-        source.stream()
-                .filter(java.util.Objects::nonNull)
-                .sorted(Comparator.comparing(SplitEventEntity::getEffectiveDate)
-                        .thenComparing(event -> ProviderPriority.rank(event.getSource(), priority))
-                        .thenComparing(SplitEventEntity::getCreatedAt, Comparator.nullsLast(Instant::compareTo))
-                        .thenComparing(event -> event.getId() == null ? "" : event.getId().toString()))
-                .forEach(event -> selected.putIfAbsent(event.getEffectiveDate(), event));
-        return selected.values().stream().sorted(Comparator.comparing(SplitEventEntity::getEffectiveDate)).toList();
+        private Calculation snapshot() {
+            Map<UUID, Deque<Lot>> copiedLots = new HashMap<>();
+            lots.forEach((instrumentId, instrumentLots) -> {
+                Deque<Lot> copy = new ArrayDeque<>();
+                instrumentLots.forEach(lot -> copy.addLast(new Lot(lot.quantity(), lot.unitCost(), lot.costBasis())));
+                copiedLots.put(instrumentId, copy);
+            });
+            return new Calculation(copiedLots, new HashMap<>(realizedByInstrument), realized, dividends,
+                    standaloneFees, totalFees);
+        }
     }
 
     private static void applySplit(Deque<Lot> lots, SplitEventEntity split) {
@@ -121,10 +168,9 @@ public final class FifoCalculator {
             throw new DomainException(HttpStatus.UNPROCESSABLE_ENTITY, "INVALID_SPLIT", "Split ratio must be positive");
         }
         BigDecimal ratio = split.getNumerator().divide(split.getDenominator(), MC);
-        BigDecimal inverse = split.getDenominator().divide(split.getNumerator(), MC);
         lots.forEach(lot -> {
             lot.quantity = lot.quantity.multiply(ratio, MC);
-            lot.unitCost = lot.unitCost.multiply(inverse, MC);
+            lot.unitCost = lot.costBasis.divide(lot.quantity, MC);
         });
     }
 
@@ -134,10 +180,18 @@ public final class FifoCalculator {
         while (remaining.signum() > 0 && !lots.isEmpty()) {
             Lot lot = lots.peekFirst();
             BigDecimal used = lot.quantity.min(remaining);
-            cost = cost.add(used.multiply(lot.unitCost, MC), MC);
+            BigDecimal usedCost = used.compareTo(lot.quantity) == 0
+                    ? lot.costBasis : lot.costBasis.multiply(used, MC).divide(lot.quantity, MC);
+            cost = cost.add(usedCost, MC);
             lot.quantity = lot.quantity.subtract(used, MC);
             remaining = remaining.subtract(used, MC);
-            if (lot.quantity.signum() == 0) lots.removeFirst();
+            lot.costBasis = lot.costBasis.subtract(usedCost, MC);
+            if (lot.quantity.signum() == 0) {
+                lot.costBasis = BigDecimal.ZERO;
+                lots.removeFirst();
+            } else {
+                lot.unitCost = lot.costBasis.divide(lot.quantity, MC);
+            }
         }
         if (remaining.signum() > 0) {
             throw new DomainException(HttpStatus.UNPROCESSABLE_ENTITY, "INSUFFICIENT_HOLDINGS",
@@ -170,14 +224,21 @@ public final class FifoCalculator {
     public static final class Lot {
         private BigDecimal quantity;
         private BigDecimal unitCost;
+        private BigDecimal costBasis;
 
         public Lot(BigDecimal quantity, BigDecimal unitCost) {
+            this(quantity, unitCost, quantity.multiply(unitCost, MC));
+        }
+
+        private Lot(BigDecimal quantity, BigDecimal unitCost, BigDecimal costBasis) {
             this.quantity = quantity;
             this.unitCost = unitCost;
+            this.costBasis = costBasis;
         }
 
         public BigDecimal quantity() { return quantity; }
         public BigDecimal unitCost() { return unitCost; }
+        public BigDecimal costBasis() { return costBasis; }
     }
 
     public record Position(UUID instrumentId, BigDecimal shares, BigDecimal costBasis, BigDecimal realizedPnl) { }
@@ -211,7 +272,7 @@ public final class FifoCalculator {
             List<Position> result = new ArrayList<>();
             lots.forEach((instrumentId, instrumentLots) -> {
                 BigDecimal shares = instrumentLots.stream().map(Lot::quantity).reduce(BigDecimal.ZERO, (a, b) -> a.add(b, MC));
-                BigDecimal basis = instrumentLots.stream().map(lot -> lot.quantity().multiply(lot.unitCost(), MC))
+                BigDecimal basis = instrumentLots.stream().map(Lot::costBasis)
                         .reduce(BigDecimal.ZERO, (a, b) -> a.add(b, MC));
                 if (shares.signum() != 0) {
                     result.add(new Position(instrumentId, shares, basis, realizedByInstrument.getOrDefault(instrumentId, BigDecimal.ZERO)));

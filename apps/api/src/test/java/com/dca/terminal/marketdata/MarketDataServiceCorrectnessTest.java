@@ -246,15 +246,60 @@ class MarketDataServiceCorrectnessTest {
         assertEquals(ProviderId.YAHOO, service.providerPriority().getFirst());
     }
 
+    @Test
+    void treatsTheLastFridayCloseAsFreshOnTheFollowingWeekend() {
+        UUID instrumentId = UUID.randomUUID();
+        InstrumentEntity instrument = mock(InstrumentEntity.class);
+        when(instrument.getId()).thenReturn(instrumentId);
+        when(instrument.getSymbol()).thenReturn("VOO");
+        PriceDailyRepository prices = mock(PriceDailyRepository.class);
+        when(prices.findAllByInstrumentIdAndTradeDateBetweenOrderByTradeDateAsc(
+                eq(instrumentId), any(), any())).thenReturn(List.of(price(instrument,
+                LocalDate.of(2026, 8, 28), "500", "YAHOO")));
+
+        MarketDataService service = service(mock(InstrumentRepository.class), prices, provider(ProviderId.YAHOO),
+                Clock.fixed(Instant.parse("2026-08-29T16:00:00Z"), ZoneOffset.UTC));
+
+        var response = service.prices(instrument, "1W");
+
+        assertEquals(FreshnessStatus.FRESH, response.status());
+        assertEquals(LocalDate.of(2026, 8, 28), response.asOf());
+    }
+
+    @Test
+    void treatsTheLastPreHolidayCloseAsFreshOnAnObservedMarketHoliday() {
+        UUID instrumentId = UUID.randomUUID();
+        InstrumentEntity instrument = mock(InstrumentEntity.class);
+        when(instrument.getId()).thenReturn(instrumentId);
+        when(instrument.getSymbol()).thenReturn("VOO");
+        PriceDailyRepository prices = mock(PriceDailyRepository.class);
+        when(prices.findAllByInstrumentIdAndTradeDateBetweenOrderByTradeDateAsc(
+                eq(instrumentId), any(), any())).thenReturn(List.of(price(instrument,
+                LocalDate.of(2026, 7, 2), "500", "YAHOO")));
+
+        MarketDataService service = service(mock(InstrumentRepository.class), prices, provider(ProviderId.YAHOO),
+                Clock.fixed(Instant.parse("2026-07-03T20:00:00Z"), ZoneOffset.UTC));
+
+        var response = service.prices(instrument, "1W");
+
+        assertEquals(FreshnessStatus.FRESH, response.status());
+        assertEquals(LocalDate.of(2026, 7, 2), response.asOf());
+    }
+
     private static MarketDataService service(InstrumentRepository instruments, MarketDataProvider provider) {
-        return service(instruments, mock(PriceDailyRepository.class), provider);
+        return service(instruments, mock(PriceDailyRepository.class), provider, CLOCK);
     }
 
     private static MarketDataService service(InstrumentRepository instruments, PriceDailyRepository prices,
                                              MarketDataProvider provider) {
+        return service(instruments, prices, provider, CLOCK);
+    }
+
+    private static MarketDataService service(InstrumentRepository instruments, PriceDailyRepository prices,
+                                             MarketDataProvider provider, Clock clock) {
         return new MarketDataService(instruments, prices, mock(QuoteLatestRepository.class),
                 mock(SplitEventRepository.class), mock(FundNavDailyRepository.class), settings(), List.of(provider),
-                CLOCK, ZoneOffset.UTC, "YAHOO", "TWELVE_DATA", 60, 1);
+                clock, ZoneOffset.UTC, "YAHOO", "TWELVE_DATA", 60, 1);
     }
 
     private static AppSettingRepository settings(AppSettingEntity... values) {

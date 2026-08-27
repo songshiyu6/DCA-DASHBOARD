@@ -3,6 +3,7 @@ package com.dca.terminal.transaction;
 import com.dca.terminal.common.DomainException;
 import com.dca.terminal.instrument.InstrumentEntity;
 import com.dca.terminal.marketdata.MarketDataEntities.SplitEventEntity;
+import com.dca.terminal.marketdata.ProviderId;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.HashMap;
@@ -14,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class FifoCalculatorTest {
+    private static final List<ProviderId> DEFAULT_PRIORITY = List.of(ProviderId.YAHOO, ProviderId.TWELVE_DATA);
 
     @Test
     void consumesOldestLotsAndIncludesExecutionFeesInBasisAndProceeds() {
@@ -23,7 +25,7 @@ class FifoCalculatorTest {
         TransactionEntity sell = transaction(instrument, TransactionType.SELL, "2026-03-05", "1", "150", "3");
 
         FifoCalculator.Calculation calculation = FifoCalculator.calculate(
-                List.of(firstBuy, secondBuy, sell), new HashMap<>(), LocalDate.of(2026, 3, 31));
+                List.of(firstBuy, secondBuy, sell), new HashMap<>(), LocalDate.of(2026, 3, 31), DEFAULT_PRIORITY);
 
         FifoCalculator.Position position = calculation.positions().get(0);
         assertDecimal("2", position.shares());
@@ -46,7 +48,7 @@ class FifoCalculatorTest {
         Map<java.util.UUID, List<SplitEventEntity>> splits = new HashMap<>();
         splits.put(instrument.getId(), List.of(split));
         FifoCalculator.Calculation calculation = FifoCalculator.calculate(
-                List.of(buy, sell), splits, LocalDate.of(2026, 2, 28));
+                List.of(buy, sell), splits, LocalDate.of(2026, 2, 28), DEFAULT_PRIORITY);
 
         FifoCalculator.Position position = calculation.positions().get(0);
         assertDecimal("1", position.shares());
@@ -65,7 +67,7 @@ class FifoCalculatorTest {
         sell.setLedgerOrder(12L);
 
         FifoCalculator.Calculation calculation = FifoCalculator.calculate(
-                List.of(sell, secondBuy, firstBuy), Map.of(), LocalDate.of(2026, 3, 5));
+                List.of(sell, secondBuy, firstBuy), Map.of(), LocalDate.of(2026, 3, 5), DEFAULT_PRIORITY);
 
         assertDecimal("1", calculation.positions().getFirst().shares());
         assertDecimal("200", calculation.positions().getFirst().costBasis());
@@ -85,7 +87,7 @@ class FifoCalculatorTest {
         Map<java.util.UUID, List<SplitEventEntity>> splits = new HashMap<>();
         splits.put(instrument.getId(), List.of(twelveData, yahoo));
         FifoCalculator.Calculation calculation = FifoCalculator.calculate(
-                List.of(buy, sell), splits, LocalDate.of(2026, 2, 28));
+                List.of(buy, sell), splits, LocalDate.of(2026, 2, 28), DEFAULT_PRIORITY);
 
         assertDecimal("1", calculation.positions().getFirst().shares());
         assertDecimal("50", calculation.positions().getFirst().costBasis());
@@ -101,7 +103,7 @@ class FifoCalculatorTest {
         standaloneFee.setAmount(new BigDecimal("3"));
 
         FifoCalculator.Calculation calculation = FifoCalculator.calculate(
-                List.of(dividend, standaloneFee), Map.of(), LocalDate.of(2026, 1, 31));
+                List.of(dividend, standaloneFee), Map.of(), LocalDate.of(2026, 1, 31), DEFAULT_PRIORITY);
 
         assertDecimal("25", calculation.dividends());
         assertDecimal("3", calculation.standaloneFees());
@@ -109,8 +111,45 @@ class FifoCalculatorTest {
 
         dividend.setFee(new BigDecimal("1"));
         DomainException exception = assertThrows(DomainException.class,
-                () -> FifoCalculator.calculate(List.of(dividend), Map.of(), LocalDate.of(2026, 1, 31)));
+                () -> FifoCalculator.calculate(List.of(dividend), Map.of(), LocalDate.of(2026, 1, 31), DEFAULT_PRIORITY));
         assertEquals("INVALID_TRANSACTION", exception.code());
+    }
+
+    @Test
+    void usesTheRuntimeProviderPriorityForConflictingSplits() {
+        InstrumentEntity instrument = instrumentWithId("QQQ");
+        TransactionEntity buy = transaction(instrument, TransactionType.BUY, "2026-01-05", "1", "100", "0");
+        SplitEventEntity yahoo = split(instrument, "2026-02-10", "2", "1", "YAHOO");
+        SplitEventEntity twelveData = split(instrument, "2026-02-10", "3", "1", "TWELVE_DATA");
+
+        FifoCalculator.Calculation calculation = FifoCalculator.calculate(
+                List.of(buy), Map.of(instrument.getId(), List.of(yahoo, twelveData)),
+                LocalDate.of(2026, 2, 28), List.of(ProviderId.TWELVE_DATA, ProviderId.YAHOO));
+
+        assertDecimal("3", calculation.positions().getFirst().shares());
+        assertDecimal("100", calculation.positions().getFirst().costBasis());
+    }
+
+    @Test
+    void advancesTransactionsAndSplitsWithoutMutatingEarlierSnapshots() {
+        InstrumentEntity instrument = instrumentWithId("VOO");
+        TransactionEntity buy = transaction(instrument, TransactionType.BUY, "2026-01-05", "1", "100", "0");
+        TransactionEntity sell = transaction(instrument, TransactionType.SELL, "2026-01-10", "0.5", "120", "0");
+        SplitEventEntity split = split(instrument, "2026-01-15", "2", "1", "YAHOO");
+        TransactionEntity laterBuy = transaction(instrument, TransactionType.BUY, "2026-01-20", "1", "80", "0");
+
+        FifoCalculator.Replay replay = FifoCalculator.replay(
+                List.of(buy, sell, laterBuy), Map.of(instrument.getId(), List.of(split)), DEFAULT_PRIORITY);
+
+        FifoCalculator.Calculation beforeSplit = replay.calculateThrough(LocalDate.of(2026, 1, 10));
+        FifoCalculator.Calculation afterSplit = replay.calculateThrough(LocalDate.of(2026, 1, 20));
+
+        assertDecimal("0.5", beforeSplit.positions().getFirst().shares());
+        assertDecimal("50", beforeSplit.positions().getFirst().costBasis());
+        assertDecimal("10", beforeSplit.realized());
+        assertDecimal("2", afterSplit.positions().getFirst().shares());
+        assertDecimal("130", afterSplit.positions().getFirst().costBasis());
+        assertDecimal("10", afterSplit.realized());
     }
 
     private static InstrumentEntity instrument(String symbol) {

@@ -5,6 +5,7 @@ import com.dca.terminal.instrument.InstrumentEntity;
 import com.dca.terminal.instrument.InstrumentRepository;
 import com.dca.terminal.marketdata.MarketDataEntities.SplitEventEntity;
 import com.dca.terminal.marketdata.SplitEventRepository;
+import com.dca.terminal.marketdata.MarketDataService;
 import com.dca.terminal.portfolio.PortfolioService;
 import com.dca.terminal.plan.PlanService;
 import jakarta.validation.Valid;
@@ -42,15 +43,17 @@ public class TransactionService {
     private final TransactionRepository transactionRepository;
     private final InstrumentRepository instrumentRepository;
     private final SplitEventRepository splitEventRepository;
+    private final MarketDataService marketDataService;
     private final PlanService planService;
     private final PortfolioService portfolioService;
 
     public TransactionService(TransactionRepository transactionRepository, InstrumentRepository instrumentRepository,
-                              SplitEventRepository splitEventRepository, PlanService planService,
-                              PortfolioService portfolioService) {
+                              SplitEventRepository splitEventRepository, MarketDataService marketDataService,
+                              PlanService planService, PortfolioService portfolioService) {
         this.transactionRepository = transactionRepository;
         this.instrumentRepository = instrumentRepository;
         this.splitEventRepository = splitEventRepository;
+        this.marketDataService = marketDataService;
         this.planService = planService;
         this.portfolioService = portfolioService;
     }
@@ -204,7 +207,7 @@ public class TransactionService {
         transactions.stream().map(transaction -> transaction.getInstrument().getId()).distinct()
                 .forEach(id -> splits.put(id,
                         splitEventRepository.findAllByInstrumentIdAndEffectiveDateLessThanEqualOrderByEffectiveDateAsc(id, asOf)));
-        FifoCalculator.calculate(transactions, splits, asOf);
+        FifoCalculator.calculate(transactions, splits, asOf, marketDataService.providerPriority());
     }
 
     private void validateRequest(TransactionRequest request) {

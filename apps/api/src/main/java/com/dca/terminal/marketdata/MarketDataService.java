@@ -247,6 +247,7 @@ public class MarketDataService {
         }
         try {
             ProviderCall<List<PriceBar>> result = callWithProvider(provider -> provider.getHistoricalPrices(instrument, from, today));
+            LocalDate latestAvailable = latestStored.map(PriceDailyEntity::getTradeDate).orElse(null);
             int saved = 0;
             for (PriceBar bar : result.value()) {
                 PriceDailyEntity entity = priceRepository.findByInstrumentIdAndTradeDateAndSource(
@@ -262,11 +263,11 @@ public class MarketDataService {
                 entity.setSource(result.provider().name());
                 priceRepository.save(entity);
                 saved++;
+                if (latestAvailable == null || bar.tradeDate().isAfter(latestAvailable)) latestAvailable = bar.tradeDate();
             }
             int splits = syncSplits(instrument, providers.get(result.provider()), from, today);
-            FreshnessStatus status = saved == 0
-                    ? latestStored.isPresent() ? FreshnessStatus.STALE : FreshnessStatus.INSUFFICIENT_HISTORY
-                    : FreshnessStatus.FRESH;
+            FreshnessStatus status = latestAvailable == null
+                    ? FreshnessStatus.INSUFFICIENT_HISTORY : dailyFreshnessStatus(latestAvailable, today);
             instrument.setDataStatus(status);
             instrumentRepository.save(instrument);
             log.info("market sync completed ticker={} source={} rows={} splits={} status={}",
@@ -302,7 +303,7 @@ public class MarketDataService {
         List<PriceDailyEntity> rows = canonicalPrices(priceRepository
                 .findAllByInstrumentIdAndTradeDateBetweenOrderByTradeDateAsc(instrument.getId(), from, today));
         FreshnessStatus status = rows.isEmpty() ? FreshnessStatus.INSUFFICIENT_HISTORY
-                : rows.get(rows.size() - 1).getTradeDate().isBefore(today) ? FreshnessStatus.STALE : FreshnessStatus.FRESH;
+                : dailyFreshnessStatus(rows.get(rows.size() - 1).getTradeDate(), today);
         return new PriceHistoryResponse(rows.stream()
                 .map(entity -> new PricePoint(entity.getTradeDate().toString(), entity.getClose(), entity.getAdjustedClose())).toList(),
                 status, rows.isEmpty() ? null : rows.get(rows.size() - 1).getSource(),
@@ -323,9 +324,11 @@ public class MarketDataService {
                     latest.get().getAsk(), latest.get().getMarketTimestamp(), latest.get().getRetrievedAt());
         }
         MarketMetricsCalculator.Metrics result = MarketMetricsCalculator.calculate(bars, quote, today, quoteStatus);
+        FreshnessStatus status = result.status() == FreshnessStatus.FRESH && !bars.isEmpty()
+                ? dailyFreshnessStatus(bars.get(bars.size() - 1).tradeDate(), today) : result.status();
         return new MetricsResponse(result.oneDay(), result.oneMonth(), result.threeMonths(), result.ytd(), result.oneYear(),
                 result.threeYearCagr(), result.fiftyTwoWeekHigh(), result.fiftyTwoWeekLow(), result.currentDrawdown(),
-                result.maxDrawdown1Y(), result.status(), bars.isEmpty() ? null : bars.get(bars.size() - 1).tradeDate());
+                result.maxDrawdown1Y(), status, bars.isEmpty() ? null : bars.get(bars.size() - 1).tradeDate());
     }
 
     @Transactional
@@ -416,6 +419,11 @@ public class MarketDataService {
             default -> throw new DomainException(HttpStatus.BAD_REQUEST, "INVALID_PRICE_RANGE",
                     "Unsupported price range: " + range);
         };
+    }
+
+    private FreshnessStatus dailyFreshnessStatus(LocalDate latestDate, LocalDate today) {
+        return latestDate == null || latestDate.isBefore(MarketCalendar.latestExpectedTradingDate(today))
+                ? FreshnessStatus.STALE : FreshnessStatus.FRESH;
     }
 
     private ProviderId parseProvider(String value, ProviderId fallback, boolean allowNone) {

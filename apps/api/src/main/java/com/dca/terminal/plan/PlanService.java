@@ -151,6 +151,10 @@ public class PlanService {
         }
         amount = DecimalMath.cents(amount);
         List<InvestmentPlanAssetEntity> assets = assetRepository.findAllByPlanIdOrderByIdAsc(planId);
+        if (assets.isEmpty()) {
+            return new RecommendationResponse(amount, FreshnessStatus.PARTIAL, List.of(),
+                    "Plan has no assets; recommendation is unavailable");
+        }
         Map<UUID, BigDecimal> allCurrentValues = portfolioService.currentMarketValues();
         // The denominator is deliberately limited to this plan's assets. Holdings outside the plan
         // must remain visible in the portfolio, but cannot change this plan's contribution split.
@@ -234,7 +238,7 @@ public class PlanService {
                         || cycle.status() == CycleStatus.UPCOMING
                         || (cycle.status() == CycleStatus.PARTIAL
                         && YearMonth.parse(cycle.period()).equals(currentPeriod)
-                        && today.getDayOfMonth() <= plan.getExecutionEndDay()))
+                        && today.getDayOfMonth() <= executionEndDay(currentPeriod, plan)))
                 .sorted(Comparator.comparing(CycleResponse::period))
                 .toList();
         if (candidates.isEmpty()) return Optional.empty();
@@ -315,11 +319,13 @@ public class PlanService {
     }
 
     private int daysUntilWindow(LocalDate today, YearMonth period, InvestmentPlanEntity plan) {
-        LocalDate firstExecutionDate = period.atDay(Math.min(plan.getExecutionStartDay(), period.lengthOfMonth()));
+        int startDay = executionStartDay(period, plan);
+        int endDay = executionEndDay(period, plan);
+        LocalDate firstExecutionDate = period.atDay(startDay);
         if (period.equals(YearMonth.from(today))
-                && today.getDayOfMonth() >= plan.getExecutionStartDay()
-                && today.getDayOfMonth() <= plan.getExecutionEndDay()) {
-            return Math.max(0, plan.getExecutionEndDay() - today.getDayOfMonth() + 1);
+                && today.getDayOfMonth() >= startDay
+                && today.getDayOfMonth() <= endDay) {
+            return Math.max(0, endDay - today.getDayOfMonth() + 1);
         }
         if (period.equals(YearMonth.from(today)) && today.isBefore(firstExecutionDate)) {
             long days = java.time.temporal.ChronoUnit.DAYS.between(today, firstExecutionDate);
@@ -330,6 +336,14 @@ public class PlanService {
             return (int) Math.min(Integer.MAX_VALUE, Math.max(0, days));
         }
         return 0;
+    }
+
+    private int executionStartDay(YearMonth period, InvestmentPlanEntity plan) {
+        return Math.min(plan.getExecutionStartDay(), period.lengthOfMonth());
+    }
+
+    private int executionEndDay(YearMonth period, InvestmentPlanEntity plan) {
+        return Math.min(plan.getExecutionEndDay(), period.lengthOfMonth());
     }
 
     private void apply(InvestmentPlanEntity plan, PlanRequest request, PlanStatus status) {
@@ -423,8 +437,8 @@ public class PlanService {
         else if (executed.signum() > 0) status = CycleStatus.PARTIAL;
         else if (period.isAfter(YearMonth.from(today))) status = CycleStatus.UPCOMING;
         else if (period.isBefore(YearMonth.from(today))) status = CycleStatus.SKIPPED;
-        else if (today.getDayOfMonth() < cycle.getPlan().getExecutionStartDay()) status = CycleStatus.UPCOMING;
-        else if (today.getDayOfMonth() <= cycle.getPlan().getExecutionEndDay()) status = CycleStatus.OPEN;
+        else if (today.getDayOfMonth() < executionStartDay(period, cycle.getPlan())) status = CycleStatus.UPCOMING;
+        else if (today.getDayOfMonth() <= executionEndDay(period, cycle.getPlan())) status = CycleStatus.OPEN;
         else status = CycleStatus.SKIPPED;
         cycle.setExecutedAmount(executed);
         cycle.setStatus(status);

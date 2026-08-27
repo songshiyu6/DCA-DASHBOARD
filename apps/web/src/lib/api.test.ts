@@ -170,4 +170,23 @@ describe('API contract adapter', () => {
     expect(error).toBeInstanceOf(ApiError)
     expect(error).toMatchObject({ status: 503, code: 'MARKET_DATA_UNAVAILABLE' })
   })
+
+  it('does not invent daily OHLC values when the API only returns close fields', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      data: [{ date: '2026-08-27', close: 620.21, adjustedClose: 620.18 }],
+      dataStatus: 'FRESH',
+      source: 'YAHOO',
+    })))
+    const { api } = await loadApi()
+
+    const result = await api.getPrices('VOO', '1Y')
+
+    expect(result.data).toEqual([{
+      date: '2026-08-27',
+      open: undefined,
+      close: '620.21',
+      adjustedClose: '620.18',
+      volume: undefined,
+    }])
+  })
 })

@@ -84,6 +84,19 @@ class PlanServiceTest {
         assertEquals("PRICE_UNAVAILABLE", response.items().get(0).reason());
     }
 
+    @Test
+    void returnsPartialRecommendationForAnEmptyPersistedPlan() {
+        UUID planId = UUID.randomUUID();
+        InvestmentPlanEntity plan = mockPlan(planId, "1000");
+        PortfolioService portfolio = mock(PortfolioService.class);
+
+        var response = service(planId, plan, List.of(), portfolio).recommendation(planId, bd("1000"));
+
+        assertEquals(FreshnessStatus.PARTIAL, response.status());
+        assertTrue(response.items().isEmpty());
+        assertTrue(response.message().contains("no assets"));
+    }
+
     private static PlanService service(UUID planId, InvestmentPlanEntity plan, List<InvestmentPlanAssetEntity> assets,
                                         PortfolioService portfolio) {
         PlanRepository planRepository = mock(PlanRepository.class);

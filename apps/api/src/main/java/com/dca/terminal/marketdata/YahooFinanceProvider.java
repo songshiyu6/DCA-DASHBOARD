@@ -13,6 +13,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -104,11 +105,13 @@ public class YahooFinanceProvider implements MarketDataProvider {
     @Override
     public ProviderQuote getLatestQuote(InstrumentEntity instrument) {
         JsonNode result = chart(instrument.getSymbol(), "5d", "1d", null, null);
-        JsonNode meta = result.path("chart").path("result").path(0).path("meta");
+        JsonNode meta = chartResult(result).path("meta");
         BigDecimal price = decimal(meta, "regularMarketPrice");
         BigDecimal previousClose = decimal(meta, "previousClose");
         if (previousClose == null) previousClose = decimal(meta, "chartPreviousClose");
-        if (price == null) throw new ProviderException(id(), "Yahoo returned no regular market price", false);
+        if (price == null || price.signum() <= 0) {
+            throw new ProviderException(id(), "Yahoo returned no valid regular market price", false);
+        }
         Instant timestamp = instant(meta, "regularMarketTime");
         return new ProviderQuote(price, previousClose, decimal(meta, "bid"), decimal(meta, "ask"),
                         timestamp, Instant.now());
@@ -117,7 +120,7 @@ public class YahooFinanceProvider implements MarketDataProvider {
     @Override
     public List<PriceBar> getHistoricalPrices(InstrumentEntity instrument, LocalDate from, LocalDate to) {
         JsonNode result = chart(instrument.getSymbol(), null, "1d", from, to.plusDays(1));
-        JsonNode chart = result.path("chart").path("result").path(0);
+        JsonNode chart = chartResult(result);
         JsonNode timestamps = chart.path("timestamp");
         JsonNode quote = chart.path("indicators").path("quote").path(0);
         JsonNode adjusted = chart.path("indicators").path("adjclose").path(0).path("adjclose");
@@ -137,12 +140,15 @@ public class YahooFinanceProvider implements MarketDataProvider {
     @Override
     public List<IntradayBar> getIntradayPrices(InstrumentEntity instrument, LocalDate from, LocalDate to) {
         JsonNode result = chart(instrument.getSymbol(), null, "5m", from, to.plusDays(1));
-        JsonNode chart = result.path("chart").path("result").path(0);
+        JsonNode chart = chartResult(result);
         JsonNode timestamps = chart.path("timestamp");
         JsonNode quote = chart.path("indicators").path("quote").path(0);
+        ZoneId exchangeZone = exchangeZone(chart.path("meta"));
         List<IntradayBar> bars = new ArrayList<>();
         for (int i = 0; i < timestamps.size(); i++) {
             Instant timestamp = Instant.ofEpochSecond(timestamps.get(i).asLong());
+            LocalDate tradeDate = timestamp.atZone(exchangeZone).toLocalDate();
+            if (tradeDate.isBefore(from) || tradeDate.isAfter(to)) continue;
             BigDecimal close = decimalAt(quote.path("close"), i);
             if (close != null) {
                 bars.add(new IntradayBar(timestamp, decimalAt(quote.path("open"), i),
@@ -164,7 +170,7 @@ public class YahooFinanceProvider implements MarketDataProvider {
             JsonNode stats = result.path("defaultKeyStatistics");
             JsonNode profile = result.path("assetProfile");
             return Optional.of(new EtfProfile(
-                    text(profile, "longBusinessSummary", instrument.getName()),
+                    instrument.getName(),
                     instrument.getExchange(), text(detail, "currency", instrument.getCurrency()),
                     text(profile, "fundFamily", instrument.getIssuer()),
                     decimalValue(detail, "annualReportExpenseRatio"),
@@ -178,16 +184,37 @@ public class YahooFinanceProvider implements MarketDataProvider {
     @Override
     public List<SplitEvent> getSplits(InstrumentEntity instrument, LocalDate from, LocalDate to) {
         JsonNode result = chart(instrument.getSymbol(), null, "1d", from, to.plusDays(1), "splits");
-        JsonNode splits = result.path("chart").path("result").path(0).path("events").path("splits");
+        JsonNode splits = chartResult(result).path("events").path("splits");
         if (!splits.isObject()) return Collections.emptyList();
         List<SplitEvent> events = new ArrayList<>();
-        splits.fields().forEachRemaining(entry -> {
-            JsonNode value = entry.getValue();
-            Instant timestamp = Instant.ofEpochSecond(Long.parseLong(entry.getKey()));
-            events.add(new SplitEvent(timestamp.atZone(ZoneOffset.UTC).toLocalDate(),
-                    decimal(value, "numerator"), decimal(value, "denominator")));
-        });
+        var entries = splits.fields();
+        while (entries.hasNext()) {
+            var entry = entries.next();
+            try {
+                JsonNode value = entry.getValue();
+                LocalDate effectiveDate = Instant.ofEpochSecond(Long.parseLong(entry.getKey()))
+                        .atZone(ZoneOffset.UTC).toLocalDate();
+                if (effectiveDate.isBefore(from) || effectiveDate.isAfter(to)) continue;
+                BigDecimal numerator = decimal(value, "numerator");
+                BigDecimal denominator = decimal(value, "denominator");
+                if (numerator == null || denominator == null
+                        || numerator.signum() <= 0 || denominator.signum() <= 0) {
+                    throw new IllegalArgumentException("invalid split event");
+                }
+                events.add(new SplitEvent(effectiveDate, numerator, denominator));
+            } catch (RuntimeException exception) {
+                throw new ProviderException(id(), "Yahoo split response could not be decoded", false, exception);
+            }
+        }
         return events;
+    }
+
+    private JsonNode chartResult(JsonNode root) {
+        JsonNode result = root.path("chart").path("result");
+        if (!result.isArray() || result.size() == 0 || !result.get(0).isObject()) {
+            throw new ProviderException(id(), "Yahoo returned an empty or invalid chart", false);
+        }
+        return result.get(0);
     }
 
     private JsonNode chart(String symbol, String range, String interval, LocalDate from, LocalDate to) {
@@ -270,5 +297,14 @@ public class YahooFinanceProvider implements MarketDataProvider {
     private static Instant instant(JsonNode node, String field) {
         JsonNode value = node.path(field);
         return value.isNumber() ? Instant.ofEpochSecond(value.asLong()) : null;
+    }
+
+    private static ZoneId exchangeZone(JsonNode node) {
+        String name = text(node, "exchangeTimezoneName", "UTC");
+        try {
+            return ZoneId.of(name);
+        } catch (RuntimeException ignored) {
+            return ZoneOffset.UTC;
+        }
     }
 }

@@ -268,8 +268,8 @@ export function getFixtureMetrics(symbol: string): ApiResult<EtfMetrics> {
     peak = decimalMax(peak, adjustedPoint)
     maxDrawdown = decimalMin(maxDrawdown, adjustedPoint.div(peak).minus(1))
   }
-  const high52Week = oneYearHistory.reduce((high, point) => decimalMax(high, point.high), new Decimal(0))
-  const low52Week = oneYearHistory.reduce((low, point) => decimalMin(low, point.low), new Decimal('999999999'))
+  const high52Week = oneYearHistory.reduce((high, point) => decimalMax(high, point.high ?? point.close), new Decimal(0))
+  const low52Week = oneYearHistory.reduce((low, point) => decimalMin(low, point.low ?? point.close), new Decimal('999999999'))
   const relativeReturn = (start: PricePoint | undefined): string | null => start ? latest.div(start.adjustedClose ?? start.close).minus(1).toFixed(6) : null
   const cagr = threeYearPoint ? latest.div(threeYearPoint.adjustedClose ?? threeYearPoint.close).pow(new Decimal('365.2425').div(daysBetween(threeYearPoint.date, latestDate))).minus(1).toFixed(6) : null
   return localResult({

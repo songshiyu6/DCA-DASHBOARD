@@ -1,5 +1,6 @@
 package com.dca.terminal.marketdata;
 
+import com.dca.terminal.instrument.InstrumentEntity;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -8,6 +9,9 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -84,6 +88,84 @@ class YahooFinanceProviderTest {
 
         assertTrue(exception.retryable());
         assertTrue(exception.getMessage().contains("429"));
+    }
+
+    @Test
+    void preservesCanonicalInstrumentNameWhenProfileContainsOnlyYahooDescription() {
+        InstrumentEntity instrument = new InstrumentEntity();
+        instrument.setSymbol("VOO");
+        instrument.setName("Vanguard S&P 500 ETF");
+        instrument.setExchange("NYSEArca");
+        instrument.setCurrency("USD");
+
+        server.when("/v10/finance/quoteSummary/VOO", uri -> new Response(200, """
+                {
+                  "quoteSummary": {"result": [{
+                    "assetProfile": {
+                      "longBusinessSummary": "A long fund description that is not its display name",
+                      "fundFamily": "Vanguard"
+                    },
+                    "summaryDetail": {
+                      "currency": "USD",
+                      "annualReportExpenseRatio": {"raw": 0.0003},
+                      "yield": {"raw": 0.012}
+                    },
+                    "defaultKeyStatistics": {"totalAssets": {"raw": 1000000}}
+                  }]}
+                }
+                """));
+
+        var profile = provider.getProfile(instrument).orElseThrow();
+
+        assertEquals("Vanguard S&P 500 ETF", profile.name());
+        assertEquals("Vanguard", profile.issuer());
+        assertEquals(0, profile.expenseRatio().compareTo(new java.math.BigDecimal("0.0003")));
+    }
+
+    @Test
+    void filtersIntradayBarsToTheRequestedExchangeTradingDate() {
+        InstrumentEntity instrument = new InstrumentEntity();
+        instrument.setSymbol("VOO");
+        String body = """
+                {
+                  "chart": {"result": [{
+                    "meta": {"exchangeTimezoneName": "America/New_York"},
+                    "timestamp": [%d, %d, %d],
+                    "indicators": {"quote": [{
+                      "open": [1, 2, 3], "high": [1, 2, 3], "low": [1, 2, 3],
+                      "close": [1, 2, 3], "volume": [10, 20, 30]
+                    }]}
+                  }], "error": null}
+                }
+                """.formatted(
+                epoch("2026-08-27T00:00:00Z"),
+                epoch("2026-08-27T13:30:00Z"),
+                epoch("2026-08-28T00:00:00Z"));
+        server.when("/v8/finance/chart/VOO", uri -> new Response(200, body));
+
+        List<ProviderModels.IntradayBar> bars = provider.getIntradayPrices(
+                instrument, LocalDate.of(2026, 8, 27), LocalDate.of(2026, 8, 27));
+
+        assertEquals(2, bars.size());
+        assertEquals("2026-08-27", bars.get(0).timestamp().atZone(ZoneId.of("America/New_York")).toLocalDate().toString());
+        assertEquals(2, bars.get(0).close().intValue());
+        assertEquals(3, bars.get(1).close().intValue());
+    }
+
+    @Test
+    void rejectsMalformedSplitEventInsteadOfLeakingParserFailure() {
+        InstrumentEntity instrument = new InstrumentEntity();
+        instrument.setSymbol("VOO");
+        server.when("/v8/finance/chart/VOO", uri -> new Response(200, """
+                {"chart":{"result":[{"events":{"splits":{"not-a-timestamp":{"numerator":2,"denominator":1}}}}],"error":null}}
+                """));
+
+        assertThrows(ProviderException.class, () -> provider.getSplits(
+                instrument, LocalDate.of(2026, 1, 1), LocalDate.of(2026, 12, 31)));
+    }
+
+    private static long epoch(String value) {
+        return Instant.parse(value).getEpochSecond();
     }
 
     private static String query(URI uri, String key) {

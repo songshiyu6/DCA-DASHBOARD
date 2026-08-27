@@ -75,7 +75,7 @@ export function DashboardPage() {
     <DataStateBanner status={meta.status} message={meta.message} source={meta.source === 'FIXTURE' ? t('common.demoData') : meta.source} asOf={meta.asOf} retrievedAt={meta.retrievedAt} />
     <div className="metric-grid metric-grid-main">
       <MetricCard label={t('dashboard.portfolio')} value={formatMoney(summary.marketValue)} detail={`Across ${data.holdings.length} tracked ETFs`} icon={CircleDollarSign} tone="accent" />
-      <MetricCard label={t('dashboard.totalPnl')} value={formatSignedMoney(summary.totalPnl)} detail={decimal(summary.netInvested).gt(0) ? `${formatSignedPercent(decimal(summary.totalPnl).div(summary.netInvested).toString())} since inception` : '—'} icon={TrendingUp} tone={trendClass(summary.totalPnl) === 'trend-negative' ? 'negative' : 'positive'} />
+      <MetricCard label={t('dashboard.totalPnl')} value={formatSignedMoney(summary.totalPnl)} detail={summary.totalPnl !== null && decimal(summary.netInvested).gt(0) ? `${formatSignedPercent(decimal(summary.totalPnl).div(summary.netInvested).toString())} since inception` : '—'} icon={TrendingUp} tone={trendClass(summary.totalPnl) === 'trend-negative' ? 'negative' : 'positive'} />
       <MetricCard label={t('dashboard.netInvested')} value={formatMoney(summary.netInvested)} detail={`${formatMoney(summary.costBasis)} remaining cost basis`} icon={ShieldCheck} />
       <MetricCard label={t('dashboard.personalXirr')} value={formatSignedPercent(summary.xirr)} detail="Money-weighted return" icon={ArrowUpRight} tone="positive" />
     </div>

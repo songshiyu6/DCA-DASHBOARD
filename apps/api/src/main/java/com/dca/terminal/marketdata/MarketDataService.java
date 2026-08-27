@@ -200,6 +200,9 @@ public class MarketDataService {
         try {
             ProviderCall<ProviderQuote> result = callWithProvider(provider -> provider.getLatestQuote(instrument));
             ProviderQuote quote = result.value();
+            if (quote.price() == null || quote.price().signum() <= 0) {
+                throw new ProviderException(result.provider(), "Provider returned no valid quote", false);
+            }
             QuoteLatestEntity entity = cached.orElseGet(QuoteLatestEntity::new);
             entity.setInstrumentId(instrument.getId());
             entity.setPrice(quote.price());
@@ -472,6 +475,9 @@ public class MarketDataService {
             for (int attempt = 1; attempt <= providerAttempts; attempt++) {
                 try {
                     T value = operation.apply(provider);
+                    if (value == null) {
+                        throw new ProviderException(providerId, "Provider returned an empty response", false);
+                    }
                     if (value instanceof List<?> list && list.isEmpty()) {
                         emptyValue = value;
                         emptyProvider = providerId;

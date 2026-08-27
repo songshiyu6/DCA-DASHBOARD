@@ -48,8 +48,8 @@ export interface Quote {
 export interface PricePoint {
   date: string
   open?: string
-  high: string
-  low: string
+  high?: string
+  low?: string
   close: string
   adjustedClose: string | null
   volume?: string
@@ -77,9 +77,9 @@ export interface Holding {
   avgCost: string
   price: string | null
   todayPercent: string | null
-  marketValue: string
+  marketValue: string | null
   costBasis: string
-  unrealizedPnl: string
+  unrealizedPnl: string | null
   returnPercent: string | null
   allocation: string | null
   dataStatus?: DataStatus | null
@@ -90,7 +90,7 @@ export interface AllocationRow {
   targetWeight: string | null
   actualWeight: string | null
   drift: string | null
-  marketValue: string
+  marketValue: string | null
 }
 
 export type CycleStatus = 'UPCOMING' | 'OPEN' | 'PARTIAL' | 'COMPLETED' | 'SKIPPED'
@@ -174,10 +174,10 @@ export interface DashboardSummary {
   marketValue: string
   costBasis: string
   netInvested: string
-  unrealizedPnl: string
+  unrealizedPnl: string | null
   realizedPnl: string
   dividendIncome: string
-  totalPnl: string
+  totalPnl: string | null
   xirr: string | null
 }
 

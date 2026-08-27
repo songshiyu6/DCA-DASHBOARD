@@ -181,6 +181,42 @@ class PlanServiceCorrectnessTest {
         assertTrue(response.items().getFirst().suggestedAmount().signum() > 0);
     }
 
+    @Test
+    void opensAThirtyFirstDayWindowOnTheLastDayOfFebruary() {
+        UUID planId = UUID.randomUUID();
+        UUID cycleId = UUID.randomUUID();
+        InvestmentPlanEntity plan = mock(InvestmentPlanEntity.class);
+        when(plan.getId()).thenReturn(planId);
+        when(plan.getStartDate()).thenReturn(LocalDate.of(2026, 1, 1));
+        when(plan.getExecutionStartDay()).thenReturn(31);
+        when(plan.getExecutionEndDay()).thenReturn(31);
+
+        InvestmentPlanCycleEntity cycle = mock(InvestmentPlanCycleEntity.class);
+        when(cycle.getId()).thenReturn(cycleId);
+        when(cycle.getPlan()).thenReturn(plan);
+        when(cycle.getPeriod()).thenReturn("2026-02");
+        when(cycle.getPlannedAmount()).thenReturn(bd("1000"));
+        when(cycle.getOpenedAt()).thenReturn(null);
+        when(cycle.getCompletedAt()).thenReturn(null);
+
+        PlanRepository plans = mock(PlanRepository.class);
+        when(plans.findById(planId)).thenReturn(Optional.of(plan));
+        CycleRepository cycles = mock(CycleRepository.class);
+        when(cycles.findByPlanIdAndPeriod(planId, "2026-02")).thenReturn(Optional.of(cycle));
+        TransactionRepository transactions = mock(TransactionRepository.class);
+        when(transactions.findAllByPlanCycleIdOrderByTradeDateAscLedgerOrderAscIdAsc(cycleId)).thenReturn(List.of());
+        CycleAssetRepository cycleAssets = mock(CycleAssetRepository.class);
+        when(cycleAssets.findAllByCycleIdOrderByIdAsc(cycleId)).thenReturn(List.of());
+
+        PlanService service = new PlanService(plans, mock(AssetRepository.class), cycles, cycleAssets,
+                mock(InstrumentRepository.class), transactions, mock(PortfolioService.class),
+                Clock.fixed(Instant.parse("2026-02-28T12:00:00Z"), ZoneId.of("UTC")), ZoneId.of("UTC"));
+
+        CycleResponse response = service.cycle(planId, "2026-02");
+
+        assertEquals(CycleStatus.OPEN, response.status());
+    }
+
     private static InstrumentEntity instrument(String symbol, UUID id) {
         InstrumentEntity instrument = mock(InstrumentEntity.class);
         when(instrument.getSymbol()).thenReturn(symbol);

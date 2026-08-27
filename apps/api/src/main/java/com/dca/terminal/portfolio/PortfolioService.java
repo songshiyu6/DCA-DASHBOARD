@@ -126,9 +126,10 @@ public class PortfolioService {
             FifoCalculator.Calculation calculation = FifoCalculator.calculate(allTransactions, splits, date);
             BigDecimal marketValue = BigDecimal.ZERO;
             FreshnessStatus status = FreshnessStatus.FRESH;
+            boolean complete = true;
             for (FifoCalculator.Position position : calculation.positions()) {
                 PriceAtDate price = priceAt(position.instrumentId(), date, prices.getOrDefault(position.instrumentId(), List.of()));
-                if (price.price() == null) { status = FreshnessStatus.PARTIAL; continue; }
+                if (price.price() == null) { status = FreshnessStatus.PARTIAL; complete = false; continue; }
                 marketValue = marketValue.add(position.shares().multiply(price.price(), MC), MC);
                 if (price.status() != FreshnessStatus.FRESH) status = FreshnessStatus.PARTIAL;
             }
@@ -136,7 +137,7 @@ public class PortfolioService {
                     .reduce(BigDecimal.ZERO, (a, b) -> a.add(b, MC));
             BigDecimal netInvested = netInvested(allTransactions, date);
             result.add(new HistoryPoint(date, marketValue, netInvested, costBasis,
-                    marketValue.subtract(costBasis, MC), status));
+                    complete ? marketValue.subtract(costBasis, MC) : null, status));
         }
         return result;
     }
@@ -160,7 +161,8 @@ public class PortfolioService {
                 .map(instrument -> {
                     PriceAtDate price = currentPrices.getOrDefault(instrument.getId(),
                             new PriceAtDate(null, FreshnessStatus.UNAVAILABLE, null));
-                    BigDecimal value = ledger.marketValues.getOrDefault(instrument.getId(), BigDecimal.ZERO);
+                    BigDecimal value = price.price() == null
+                            ? null : ledger.marketValues.getOrDefault(instrument.getId(), BigDecimal.ZERO);
                     return new CurrentValuation(instrument.getId(), value, price.price(), price.status());
                 })
                 .toList();
@@ -179,8 +181,9 @@ public class PortfolioService {
         planned.values().stream()
                 .sorted(Comparator.comparing(asset -> asset.getInstrument().getSymbol()))
                 .forEach(asset -> {
-                    BigDecimal value = ledger.marketValues.getOrDefault(asset.getInstrument().getId(), BigDecimal.ZERO);
-                    BigDecimal actual = total.signum() == 0 ? null : value.divide(total, MC);
+                    BigDecimal value = ledger.marketValues.get(asset.getInstrument().getId());
+                    BigDecimal actual = !ledger.complete || value == null || total.signum() == 0
+                            ? null : value.divide(total, MC);
                     BigDecimal target = asset.getTargetWeight();
                     result.add(new PortfolioDtos.AllocationResponse(asset.getInstrument().getSymbol(), target, actual,
                             actual == null ? null : actual.subtract(target, MC), value));
@@ -189,8 +192,9 @@ public class PortfolioService {
                 .filter(position -> !planned.containsKey(position.instrumentId()))
                 .sorted(Comparator.comparing(position -> ledger.instruments.get(position.instrumentId()).getSymbol()))
                 .forEach(position -> {
-                    BigDecimal value = ledger.marketValues.getOrDefault(position.instrumentId(), BigDecimal.ZERO);
-                    BigDecimal actual = total.signum() == 0 ? null : value.divide(total, MC);
+                    BigDecimal value = ledger.marketValues.get(position.instrumentId());
+                    BigDecimal actual = !ledger.complete || value == null || total.signum() == 0
+                            ? null : value.divide(total, MC);
                     InstrumentEntity instrument = ledger.instruments.get(position.instrumentId());
                     result.add(new PortfolioDtos.AllocationResponse(instrument.getSymbol(), null, actual, null, value));
                 });
@@ -227,28 +231,33 @@ public class PortfolioService {
         Map<UUID, PriceAtDate> loadedPrices = loadCurrentPrices(positionIds, asOf);
         BigDecimal marketValue = BigDecimal.ZERO;
         FreshnessStatus status = FreshnessStatus.FRESH;
+        boolean complete = true;
         for (FifoCalculator.Position position : calculation.positions()) {
             PriceAtDate price = loadedPrices.getOrDefault(position.instrumentId(),
                     new PriceAtDate(null, FreshnessStatus.UNAVAILABLE, null));
             prices.put(position.instrumentId(), price);
-            if (price.price() == null) { status = FreshnessStatus.PARTIAL; continue; }
+            if (price.price() == null) {
+                status = FreshnessStatus.PARTIAL;
+                complete = false;
+                continue;
+            }
             BigDecimal value = position.shares().multiply(price.price(), MC);
             values.put(position.instrumentId(), value);
             marketValue = marketValue.add(value, MC);
             if (price.status() != FreshnessStatus.FRESH) status = FreshnessStatus.PARTIAL;
         }
-        return new Ledger(transactions, calculation, instruments, values, prices, marketValue, status);
+        return new Ledger(transactions, calculation, instruments, values, prices, marketValue, status, complete);
     }
 
     private SummaryResponse summary(Ledger ledger, LocalDate asOf) {
         BigDecimal costBasis = ledger.calculation.positions().stream().map(FifoCalculator.Position::costBasis)
                 .reduce(BigDecimal.ZERO, (a, b) -> a.add(b, MC));
-        BigDecimal unrealized = ledger.marketValue.subtract(costBasis, MC);
+        BigDecimal unrealized = ledger.complete ? ledger.marketValue.subtract(costBasis, MC) : null;
         BigDecimal invested = netInvested(ledger.transactions, asOf);
-        BigDecimal totalPnl = ledger.calculation.realized().add(unrealized, MC)
-                .add(ledger.calculation.dividends(), MC).subtract(ledger.calculation.standaloneFees(), MC);
-        List<XirrCalculator.CashFlow> flows = cashFlows(ledger.transactions, asOf, ledger.marketValue);
-        BigDecimal xirr = XirrCalculator.solve(flows);
+        BigDecimal totalPnl = ledger.complete ? ledger.calculation.realized().add(unrealized, MC)
+                .add(ledger.calculation.dividends(), MC).subtract(ledger.calculation.standaloneFees(), MC) : null;
+        BigDecimal xirr = ledger.complete
+                ? XirrCalculator.solve(cashFlows(ledger.transactions, asOf, ledger.marketValue)) : null;
         return new SummaryResponse(ledger.marketValue, costBasis, invested, unrealized, ledger.calculation.realized(),
                 ledger.calculation.dividends(), ledger.calculation.totalFees(), totalPnl, xirr, ledger.status, clock.instant());
     }
@@ -256,12 +265,14 @@ public class PortfolioService {
     private HoldingResponse holding(FifoCalculator.Position position, Ledger ledger, BigDecimal total) {
         InstrumentEntity instrument = ledger.instruments.get(position.instrumentId());
         PriceAtDate price = ledger.prices.get(position.instrumentId());
-        BigDecimal value = ledger.marketValues.getOrDefault(position.instrumentId(), BigDecimal.ZERO);
+        BigDecimal value = ledger.marketValues.get(position.instrumentId());
         BigDecimal avgCost = position.shares().signum() == 0 ? BigDecimal.ZERO
                 : position.costBasis().divide(position.shares(), MC);
-        BigDecimal unrealized = value.subtract(position.costBasis(), MC);
-        BigDecimal returnRate = position.costBasis().signum() == 0 ? null : unrealized.divide(position.costBasis(), MC);
-        BigDecimal allocation = total.signum() == 0 ? BigDecimal.ZERO : value.divide(total, MC);
+        BigDecimal unrealized = value == null ? null : value.subtract(position.costBasis(), MC);
+        BigDecimal returnRate = value == null || position.costBasis().signum() == 0
+                ? null : unrealized.divide(position.costBasis(), MC);
+        BigDecimal allocation = !ledger.complete || value == null || total.signum() == 0
+                ? null : value.divide(total, MC);
         BigDecimal todayPercent = price.changePercent();
         return new HoldingResponse(instrument.getSymbol(), instrument.getName(), price.price(), todayPercent,
                 position.shares(), avgCost, position.costBasis(), value, unrealized, returnRate, allocation,
@@ -300,19 +311,21 @@ public class PortfolioService {
     }
 
     private PriceAtDate currentPrice(UUID instrumentId, QuoteLatestEntity quote, List<PriceDailyEntity> daily) {
-        if (quote != null && quote.getPrice() != null) {
+        if (quote != null && quote.getPrice() != null && quote.getPrice().signum() > 0) {
             FreshnessStatus status = quote.getStatus() == null ? FreshnessStatus.STALE : quote.getStatus();
             return new PriceAtDate(quote.getPrice(), status, quote.getChangePercent());
         }
         PriceDailyEntity last = daily.stream().max(Comparator.comparing(PriceDailyEntity::getTradeDate)).orElse(null);
-        return last == null ? new PriceAtDate(null, FreshnessStatus.UNAVAILABLE, null)
+        return last == null || last.getClose() == null || last.getClose().signum() <= 0
+                ? new PriceAtDate(null, FreshnessStatus.UNAVAILABLE, null)
                 : new PriceAtDate(last.getClose(), FreshnessStatus.STALE, null);
     }
 
     private PriceAtDate priceAt(UUID instrumentId, LocalDate date, List<PriceDailyEntity> daily) {
         PriceDailyEntity price = daily.stream().filter(row -> !row.getTradeDate().isAfter(date))
                 .max(Comparator.comparing(PriceDailyEntity::getTradeDate)).orElse(null);
-        return price == null ? new PriceAtDate(null, FreshnessStatus.UNAVAILABLE, null)
+        return price == null || price.getClose() == null || price.getClose().signum() <= 0
+                ? new PriceAtDate(null, FreshnessStatus.UNAVAILABLE, null)
                 : new PriceAtDate(price.getClose(), price.getTradeDate().equals(date) ? FreshnessStatus.FRESH : FreshnessStatus.STALE, null);
     }
 
@@ -364,7 +377,9 @@ public class PortfolioService {
             };
             flows.add(new XirrCalculator.CashFlow(transaction.getTradeDate(), amount));
         }
-        if (currentValue.signum() > 0) flows.add(new XirrCalculator.CashFlow(asOf, currentValue));
+        if (currentValue != null && currentValue.signum() > 0) {
+            flows.add(new XirrCalculator.CashFlow(asOf, currentValue));
+        }
         return flows;
     }
 
@@ -387,5 +402,6 @@ public class PortfolioService {
                                    FreshnessStatus status) { }
     private record Ledger(List<TransactionEntity> transactions, FifoCalculator.Calculation calculation,
                           Map<UUID, InstrumentEntity> instruments, Map<UUID, BigDecimal> marketValues,
-                          Map<UUID, PriceAtDate> prices, BigDecimal marketValue, FreshnessStatus status) { }
+                          Map<UUID, PriceAtDate> prices, BigDecimal marketValue, FreshnessStatus status,
+                          boolean complete) { }
 }

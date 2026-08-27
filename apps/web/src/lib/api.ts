@@ -152,10 +152,10 @@ export function normalizeDashboardData(value: unknown): DashboardData {
       marketValue: stringValue(summary.marketValue),
       costBasis: stringValue(summary.costBasis),
       netInvested: stringValue(summary.netInvested),
-      unrealizedPnl: stringValue(summary.unrealizedPnl),
+      unrealizedPnl: nullableString(summary.unrealizedPnl),
       realizedPnl: stringValue(summary.realizedPnl),
       dividendIncome: stringValue(summary.dividendIncome),
-      totalPnl: stringValue(summary.totalPnl),
+      totalPnl: nullableString(summary.totalPnl),
       xirr: nullableString(summary.xirr),
     },
     nextDca: rawNextDca ? {
@@ -179,9 +179,9 @@ export function normalizeDashboardData(value: unknown): DashboardData {
       avgCost: stringValue(holding.avgCost),
       price: nullableString(holding.price),
       todayPercent: nullableString(holding.todayPercent ?? holding.today),
-      marketValue: stringValue(holding.marketValue),
+      marketValue: nullableString(holding.marketValue),
       costBasis: stringValue(holding.costBasis),
-      unrealizedPnl: stringValue(holding.unrealizedPnl),
+      unrealizedPnl: nullableString(holding.unrealizedPnl),
       returnPercent: nullableString(holding.returnPercent ?? holding.returnRate),
       allocation: nullableString(holding.allocation),
       dataStatus: dataStatus(holding.dataStatus) ?? dataStatus(holding.status),
@@ -191,7 +191,7 @@ export function normalizeDashboardData(value: unknown): DashboardData {
       targetWeight: nullableString(row.targetWeight),
       actualWeight: nullableString(row.actualWeight),
       drift: nullableString(row.drift),
-      marketValue: stringValue(row.marketValue),
+      marketValue: nullableString(row.marketValue),
     })),
     contributionProgress: rawProgress ? {
       year: typeof rawProgress.year === 'number' ? rawProgress.year : new Date().getFullYear(),
@@ -240,15 +240,19 @@ function normalizeMetrics(value: unknown): EtfMetrics {
 
 function normalizePricePoints(value: unknown): PricePoint[] {
   if (!Array.isArray(value)) return []
-  return value.filter(isRecord).map((point) => ({
-    date: typeof point.date === 'string' ? point.date : '',
-    open: nullableString(point.open) ?? undefined,
-    high: stringValue(point.high),
-    low: stringValue(point.low),
-    close: stringValue(point.close),
-    adjustedClose: nullableString(point.adjustedClose),
-    volume: nullableString(point.volume) ?? undefined,
-  }))
+  return value.filter(isRecord).map((point) => {
+    const high = nullableString(point.high)
+    const low = nullableString(point.low)
+    return {
+      date: typeof point.date === 'string' ? point.date : '',
+      open: nullableString(point.open) ?? undefined,
+      ...(high === null ? {} : { high }),
+      ...(low === null ? {} : { low }),
+      close: stringValue(point.close),
+      adjustedClose: nullableString(point.adjustedClose),
+      volume: nullableString(point.volume) ?? undefined,
+    }
+  })
 }
 
 function normalizeSettings(value: unknown): AppSettings {

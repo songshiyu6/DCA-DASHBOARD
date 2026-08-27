@@ -107,6 +107,32 @@ class MarketDataServiceCorrectnessTest {
     }
 
     @Test
+    void turnsNullProviderQuoteIntoUnavailableDataInsteadOfAnInternalError() {
+        UUID instrumentId = UUID.randomUUID();
+        InstrumentEntity instrument = mock(InstrumentEntity.class);
+        when(instrument.getId()).thenReturn(instrumentId);
+        when(instrument.getSymbol()).thenReturn("VOO");
+        when(instrument.getName()).thenReturn("Vanguard S&P 500 ETF");
+        when(instrument.getCurrency()).thenReturn("USD");
+        MarketDataProvider yahoo = provider(ProviderId.YAHOO);
+        when(yahoo.getLatestQuote(instrument)).thenReturn(null);
+        QuoteLatestRepository quotes = mock(QuoteLatestRepository.class);
+        when(quotes.findById(instrumentId)).thenReturn(Optional.empty());
+        when(quotes.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        FundNavDailyRepository nav = mock(FundNavDailyRepository.class);
+        when(nav.findTopByInstrumentIdOrderByNavDateDesc(instrumentId)).thenReturn(Optional.empty());
+
+        MarketDataService marketData = new MarketDataService(mock(InstrumentRepository.class),
+                mock(PriceDailyRepository.class), quotes, mock(SplitEventRepository.class), nav, settings(),
+                List.of(yahoo), CLOCK, ZoneOffset.UTC, "YAHOO", "TWELVE_DATA", 60, 1);
+
+        var response = marketData.latestQuote(instrument);
+
+        assertEquals(FreshnessStatus.UNAVAILABLE, response.status());
+        assertEquals(null, response.price());
+    }
+
+    @Test
     void performsInitialFiveYearSyncAndExposesIncompleteStateWhenNoBarsArrive() {
         InstrumentRepository instruments = mock(InstrumentRepository.class);
         when(instruments.findBySymbolIgnoreCase("VOO")).thenReturn(Optional.empty());

@@ -29,7 +29,7 @@ public class PortfolioSnapshotEntity extends CreatedEntity {
     private BigDecimal netCashFlow;
     @Column(name = "realized_pl", nullable = false, precision = 20, scale = 6)
     private BigDecimal realizedPnl;
-    @Column(name = "unrealized_pl", nullable = false, precision = 20, scale = 6)
+    @Column(name = "unrealized_pl", precision = 20, scale = 6)
     private BigDecimal unrealizedPnl;
     @Column(name = "dividend_income", nullable = false, precision = 20, scale = 6)
     private BigDecimal dividendIncome;

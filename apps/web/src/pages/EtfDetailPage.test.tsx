@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import '../lib/i18n'
@@ -12,6 +12,7 @@ const mockedApi = vi.hoisted(() => ({
   getQuote: vi.fn(),
   getMetrics: vi.fn(),
   getPrices: vi.fn(),
+  syncInstrument: vi.fn(),
   untrackInstrument: vi.fn(),
 }))
 
@@ -33,6 +34,7 @@ beforeEach(() => {
   mockedApi.getQuote.mockResolvedValue({ data: quote, meta: { status: 'FRESH', source: 'YAHOO' } })
   mockedApi.getMetrics.mockResolvedValue({ data: metrics, meta: { status: 'FRESH', source: 'YAHOO' } })
   mockedApi.getPrices.mockResolvedValue({ data: prices, meta: { status: 'FRESH', source: 'YAHOO' } })
+  mockedApi.syncInstrument.mockResolvedValue({ data: { symbol: 'VOO', barsSaved: 0, splitsSaved: 0, status: 'FRESH', completedAt: '2026-08-27T20:02:00Z' }, meta: { status: 'FRESH', source: 'YAHOO' } })
 })
 
 describe('ETF detail metrics', () => {
@@ -44,5 +46,17 @@ describe('ETF detail metrics', () => {
     expect(screen.getByText('$620.21')).toBeInTheDocument()
     expect(screen.getByText('$620.10')).toBeInTheDocument()
     expect(screen.getByText('+15.30%')).toBeInTheDocument()
+  })
+
+  it('offers a history sync retry when the provider returned no daily bars', async () => {
+    mockedApi.getInstrument.mockResolvedValue({ data: { ...fixtureInstruments[0], dataStatus: 'INSUFFICIENT_HISTORY' }, meta: { status: 'INSUFFICIENT_HISTORY', source: 'YAHOO' } })
+    mockedApi.getPrices.mockResolvedValue({ data: [], meta: { status: 'INSUFFICIENT_HISTORY', source: 'YAHOO', message: 'The provider returned no usable daily bars yet' } })
+
+    renderPage()
+
+    expect((await screen.findAllByText('The provider returned no usable daily bars yet')).length).toBe(2)
+    fireEvent.click(screen.getAllByRole('button', { name: /Retry/i })[0])
+
+    await waitFor(() => expect(mockedApi.syncInstrument).toHaveBeenCalledWith('VOO'))
   })
 })

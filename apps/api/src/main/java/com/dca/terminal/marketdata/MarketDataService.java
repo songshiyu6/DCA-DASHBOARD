@@ -133,8 +133,14 @@ public class MarketDataService {
         }
         Optional<InstrumentEntity> existing = instrumentRepository.findBySymbolIgnoreCase(symbol);
         if (existing.isPresent()) {
-            existing.get().setTracked(true);
-            return existing.get();
+            InstrumentEntity instrument = existing.get();
+            instrument.setTracked(true);
+            // Re-adding an ETF is also an explicit recovery action for an
+            // earlier failed or incomplete initial history sync.
+            if (instrument.getDataStatus() != FreshnessStatus.FRESH) {
+                sync(instrument);
+            }
+            return instrument;
         }
         List<ProviderSearchResult> found;
         ProviderCall<List<ProviderSearchResult>> providerCall = null;
@@ -243,7 +249,7 @@ public class MarketDataService {
         if (from.isAfter(today)) {
             instrument.setDataStatus(FreshnessStatus.FRESH);
             instrumentRepository.save(instrument);
-            return new SyncResponse(instrument.getSymbol(), 0, 0, FreshnessStatus.FRESH, clock.instant());
+            return new SyncResponse(instrument.getSymbol(), 0, 0, FreshnessStatus.FRESH, clock.instant(), null);
         }
         try {
             ProviderCall<List<PriceBar>> result = callWithProvider(provider -> provider.getHistoricalPrices(instrument, from, today));
@@ -272,15 +278,28 @@ public class MarketDataService {
             instrumentRepository.save(instrument);
             log.info("market sync completed ticker={} source={} rows={} splits={} status={}",
                     instrument.getSymbol(), result.provider(), saved, splits, status);
-            return new SyncResponse(instrument.getSymbol(), saved, splits, status, clock.instant());
+            return new SyncResponse(instrument.getSymbol(), saved, splits, status, clock.instant(),
+                    syncMessage(status));
         } catch (ProviderException exception) {
             FreshnessStatus status = latestStored.isPresent() ? FreshnessStatus.STALE : FreshnessStatus.UNAVAILABLE;
             instrument.setDataStatus(status);
             instrumentRepository.save(instrument);
             log.warn("market sync unavailable ticker={} provider={} status={} reason={}",
                     instrument.getSymbol(), exception.provider(), status, exception.getMessage());
-            return new SyncResponse(instrument.getSymbol(), 0, 0, status, clock.instant());
+            return new SyncResponse(instrument.getSymbol(), 0, 0, status, clock.instant(),
+                    status == FreshnessStatus.STALE
+                            ? "Historical sync failed; existing data was retained"
+                            : "Historical data is temporarily unavailable; retry when the provider recovers");
         }
+    }
+
+    private String syncMessage(FreshnessStatus status) {
+        if (status == FreshnessStatus.FRESH) return null;
+        if (status == FreshnessStatus.STALE) return "Historical data is delayed";
+        if (status == FreshnessStatus.INSUFFICIENT_HISTORY) {
+            return "The provider returned no usable daily bars yet";
+        }
+        return "Historical data is temporarily unavailable; retry when the provider recovers";
     }
 
     @Transactional(readOnly = true)
@@ -304,11 +323,16 @@ public class MarketDataService {
                 .findAllByInstrumentIdAndTradeDateBetweenOrderByTradeDateAsc(instrument.getId(), from, today));
         FreshnessStatus status = rows.isEmpty() ? FreshnessStatus.INSUFFICIENT_HISTORY
                 : dailyFreshnessStatus(rows.get(rows.size() - 1).getTradeDate(), today);
+        String message = switch (status) {
+            case STALE -> "Historical data is delayed";
+            case INSUFFICIENT_HISTORY -> "Historical data is unavailable; retry the sync when the provider recovers";
+            default -> null;
+        };
         return new PriceHistoryResponse(rows.stream()
                 .map(entity -> new PricePoint(entity.getTradeDate().toString(), entity.getClose(), entity.getAdjustedClose())).toList(),
                 status, rows.isEmpty() ? null : rows.get(rows.size() - 1).getSource(),
                 rows.isEmpty() ? null : rows.get(rows.size() - 1).getTradeDate(), clock.instant(),
-                status == FreshnessStatus.STALE ? "Historical data is delayed" : null);
+                message);
     }
 
     @Transactional(readOnly = true)

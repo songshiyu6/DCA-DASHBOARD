@@ -38,7 +38,7 @@ export function OfflineState({ status, message }: { status: DataStatus; message?
   </div>
 }
 
-export function DataStateBanner({ status, message, source, asOf, retrievedAt }: { status: DataStatus; message?: string; source?: string; asOf?: string; retrievedAt?: string }) {
+export function DataStateBanner({ status, message, source, asOf, retrievedAt, onRetry }: { status: DataStatus; message?: string; source?: string; asOf?: string; retrievedAt?: string; onRetry?: () => void }) {
   const { t } = useTranslation()
   if (status === 'FRESH' && !message) return null
   const statusLabel = t(`status.${status}`)
@@ -49,5 +49,6 @@ export function DataStateBanner({ status, message, source, asOf, retrievedAt }: 
     {detail ? <span>{detail}</span> : null}
     {timestamp ? <small>{timestamp}</small> : null}
     {source ? <small>{source}</small> : null}
+    {onRetry ? <button type="button" className="button button-ghost button-small" onClick={onRetry}><RefreshCw size={14} />{t('common.retry')}</button> : null}
   </div>
 }

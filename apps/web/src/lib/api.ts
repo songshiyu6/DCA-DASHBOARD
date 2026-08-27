@@ -7,6 +7,7 @@ import type {
   DataStatus,
   EtfMetrics,
   Instrument,
+  InstrumentSyncResult,
   InvestmentPlan,
   PlanCycle,
   PricePoint,
@@ -443,6 +444,22 @@ export const api = {
   getInstrument: (symbol: string): Promise<ApiResult<Instrument>> => read(`/instruments/${encodeURIComponent(symbol.toUpperCase())}`, () => getFixtureInstrument(symbol)),
   trackInstrument: (symbol: string): Promise<ApiResult<Instrument>> => mutate('/instruments', { symbol: symbol.toUpperCase() }, () => trackFixtureInstrument(symbol)),
   untrackInstrument: (symbol: string): Promise<ApiResult<Instrument>> => mutate(`/instruments/${encodeURIComponent(symbol.toUpperCase())}`, undefined, () => untrackFixtureInstrument(symbol), 'DELETE'),
+  syncInstrument: async (symbol: string): Promise<ApiResult<InstrumentSyncResult>> => {
+    const result = await mutate(`/instruments/${encodeURIComponent(symbol.toUpperCase())}/sync`, undefined,
+      () => ({ data: { symbol: symbol.toUpperCase(), barsSaved: 0, splitsSaved: 0, status: 'STALE' as const, completedAt: new Date().toISOString(), message: 'API unavailable. Retry when the API is reachable.' }, meta: { status: 'STALE', source: 'FIXTURE' } }))
+    const value: Record<string, unknown> = isRecord(result.data) ? result.data : {}
+    return {
+      ...result,
+      data: {
+        symbol: typeof value.symbol === 'string' ? value.symbol : symbol.toUpperCase(),
+        barsSaved: typeof value.barsSaved === 'number' ? value.barsSaved : 0,
+        splitsSaved: typeof value.splitsSaved === 'number' ? value.splitsSaved : 0,
+        status: dataStatus(value.status) ?? dataStatus(value.dataStatus) ?? result.meta.status,
+        completedAt: typeof value.completedAt === 'string' ? value.completedAt : new Date().toISOString(),
+        message: typeof value.message === 'string' ? value.message : null,
+      },
+    }
+  },
   getQuote: (symbol: string): Promise<ApiResult<Quote>> => read(`/instruments/${encodeURIComponent(symbol.toUpperCase())}/quote`, () => getFixtureQuote(symbol)),
   getMetrics: async (symbol: string): Promise<ApiResult<EtfMetrics>> => {
     const result = await read(`/instruments/${encodeURIComponent(symbol.toUpperCase())}/metrics`, () => getFixtureMetrics(symbol))

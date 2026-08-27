@@ -171,6 +171,25 @@ describe('API contract adapter', () => {
     expect(error).toMatchObject({ status: 503, code: 'MARKET_DATA_UNAVAILABLE' })
   })
 
+  it('posts a history sync request and preserves its actionable result', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ token: 'csrf-test-token', headerName: 'X-XSRF-TOKEN' }))
+      .mockResolvedValueOnce(jsonResponse({
+        symbol: 'VOO', barsSaved: 1255, splitsSaved: 0, status: 'FRESH',
+        completedAt: '2026-08-27T20:02:00Z', message: null,
+      }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { api } = await loadApi()
+
+    const result = await api.syncInstrument('voo')
+    const syncCall = fetchMock.mock.calls[1] as [string, RequestInit]
+
+    expect(syncCall[0]).toBe('/api/v1/instruments/VOO/sync')
+    expect(syncCall[1].method).toBe('POST')
+    expect(new Headers(syncCall[1].headers).get('X-XSRF-TOKEN')).toBe('csrf-test-token')
+    expect(result.data).toMatchObject({ symbol: 'VOO', barsSaved: 1255, status: 'FRESH', message: null })
+  })
+
   it('does not invent daily OHLC values when the API only returns close fields', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
       data: [{ date: '2026-08-27', close: 620.21, adjustedClose: 620.18 }],

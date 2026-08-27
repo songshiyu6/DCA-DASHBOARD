@@ -180,13 +180,22 @@ The sync response has this shape:
   "barsSaved": 1258,
   "splitsSaved": 0,
   "status": "FRESH",
-  "completedAt": "2026-08-27T20:02:00Z"
+  "completedAt": "2026-08-27T20:02:00Z",
+  "message": null
 }
 ```
 
-The current live provider implementation is Yahoo Finance. Twelve Data and
-Alpha Vantage are registered provider slots but their current adapters are
-placeholders; configuring their keys does not yet provide a live fallback.
+The current default live provider is Yahoo Finance. Twelve Data provides live
+search, quote, daily/intraday history, profile, and split capabilities when its
+server-side key is configured. Alpha Vantage provides the optional ETF profile
+capability. A provider key is never sent to the browser.
+
+Yahoo's chart edge may return HTTP 429 for browser-shaped User-Agent strings.
+The adapter uses a minimal `Mozilla/5.0` User-Agent and keeps the bounded retry
+and fallback policy above. A provider outage never creates placeholder bars:
+the instrument remains visible with `UNAVAILABLE` or
+`INSUFFICIENT_HISTORY`, the sync endpoint returns a status/message, and the
+ETF detail view exposes a manual retry action.
 
 ## Transactions
 

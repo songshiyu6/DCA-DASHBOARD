@@ -26,7 +26,12 @@ public final class MarketDataDtos {
                                   Instant asOf, Instant retrievedAt) { }
 
     public record SyncResponse(String symbol, int barsSaved, int splitsSaved,
-                               FreshnessStatus status, Instant completedAt) { }
+                               FreshnessStatus status, Instant completedAt, String message) {
+        public SyncResponse(String symbol, int barsSaved, int splitsSaved,
+                            FreshnessStatus status, Instant completedAt) {
+            this(symbol, barsSaved, splitsSaved, status, completedAt, null);
+        }
+    }
 
     public record ProviderStatus(String id, boolean configured) { }
 

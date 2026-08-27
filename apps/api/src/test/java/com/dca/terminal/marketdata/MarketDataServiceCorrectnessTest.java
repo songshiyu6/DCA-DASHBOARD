@@ -181,6 +181,32 @@ class MarketDataServiceCorrectnessTest {
     }
 
     @Test
+    void readdingAnIncompleteInstrumentRetriesItsHistorySync() {
+        InstrumentRepository instruments = mock(InstrumentRepository.class);
+        InstrumentEntity existing = new InstrumentEntity();
+        existing.setSymbol("VOO");
+        existing.setName("Vanguard S&P 500 ETF");
+        existing.setDataStatus(FreshnessStatus.UNAVAILABLE);
+        when(instruments.findBySymbolIgnoreCase("VOO")).thenReturn(Optional.of(existing));
+        when(instruments.save(any(InstrumentEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        PriceDailyRepository prices = mock(PriceDailyRepository.class);
+        when(prices.findTopByInstrumentIdOrderByTradeDateDesc(any())).thenReturn(Optional.empty());
+        when(prices.findByInstrumentIdAndTradeDateAndSource(any(), any(), any())).thenReturn(Optional.empty());
+        when(prices.save(any(PriceDailyEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        MarketDataProvider yahoo = provider(ProviderId.YAHOO);
+        when(yahoo.getHistoricalPrices(any(), any(), any())).thenReturn(List.of(
+                new PriceBar(LocalDate.of(2026, 8, 27), bd("500"), bd("510"), bd("490"), bd("505"), bd("505"), 100L)));
+        when(yahoo.getSplits(any(), any(), any())).thenReturn(List.of());
+
+        InstrumentEntity result = service(instruments, prices, yahoo).add("VOO");
+
+        assertEquals(FreshnessStatus.FRESH, result.getDataStatus());
+        verify(yahoo).getHistoricalPrices(any(), eq(LocalDate.of(2021, 8, 27)), eq(LocalDate.of(2026, 8, 27)));
+        verify(prices).save(any(PriceDailyEntity.class));
+    }
+
+    @Test
     void readsOneCanonicalPricePerDateUsingConfiguredProviderPriority() {
         UUID instrumentId = UUID.randomUUID();
         InstrumentEntity instrument = mock(InstrumentEntity.class);
@@ -198,6 +224,22 @@ class MarketDataServiceCorrectnessTest {
 
         assertEquals(FreshnessStatus.FRESH, response.status());
         assertEquals(List.of(bd("100"), bd("101")), response.data().stream().map(MarketDataDtos.PricePoint::close).toList());
+    }
+
+    @Test
+    void marksEmptyDailyHistoryAsInsufficientWithAnActionableMessage() {
+        UUID instrumentId = UUID.randomUUID();
+        InstrumentEntity instrument = mock(InstrumentEntity.class);
+        when(instrument.getId()).thenReturn(instrumentId);
+        PriceDailyRepository prices = mock(PriceDailyRepository.class);
+        when(prices.findAllByInstrumentIdAndTradeDateBetweenOrderByTradeDateAsc(eq(instrumentId), any(), any()))
+                .thenReturn(List.of());
+
+        var response = service(mock(InstrumentRepository.class), prices, provider(ProviderId.YAHOO))
+                .prices(instrument, "5Y");
+
+        assertEquals(FreshnessStatus.INSUFFICIENT_HISTORY, response.status());
+        assertEquals("Historical data is unavailable; retry the sync when the provider recovers", response.message());
     }
 
     @Test

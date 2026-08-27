@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { fireEvent, render, screen } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
 import '../lib/i18n'
 import { DataStateBanner } from './DataState'
 
@@ -10,5 +10,14 @@ describe('data freshness banner', () => {
     expect(screen.getByText('Market data delayed')).toBeInTheDocument()
     expect(screen.getByText('YAHOO')).toBeInTheDocument()
     expect(screen.getByText(/Aug 26, 2026/)).toBeInTheDocument()
+  })
+
+  it('exposes a retry action for unavailable data', () => {
+    const onRetry = vi.fn()
+    render(<DataStateBanner status="UNAVAILABLE" message="Historical data is temporarily unavailable" onRetry={onRetry} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+
+    expect(onRetry).toHaveBeenCalledOnce()
   })
 })

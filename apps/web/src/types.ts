@@ -55,6 +55,15 @@ export interface PricePoint {
   volume?: string
 }
 
+export interface InstrumentSyncResult {
+  symbol: string
+  barsSaved: number
+  splitsSaved: number
+  status: DataStatus
+  completedAt: string
+  message?: string | null
+}
+
 export interface EtfMetrics {
   oneDay: string | null
   oneMonth: string | null

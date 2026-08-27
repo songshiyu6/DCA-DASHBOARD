@@ -1,7 +1,13 @@
 package com.dca.terminal.instrument;
 
 import com.dca.terminal.common.DomainException;
+import com.dca.terminal.common.FreshnessStatus;
+import com.dca.terminal.config.JacksonConfig;
 import com.dca.terminal.marketdata.MarketDataService;
+import com.dca.terminal.marketdata.MarketDataDtos.PriceHistoryResponse;
+import com.dca.terminal.marketdata.MarketDataDtos.PricePoint;
+import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -10,6 +16,7 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Import;
 
 import static com.dca.terminal.instrument.InstrumentDtos.SearchResult;
 import static org.mockito.Mockito.when;
@@ -19,6 +26,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @WebMvcTest(controllers = InstrumentController.class)
 @AutoConfigureMockMvc(addFilters = false)
+@Import(JacksonConfig.class)
 class InstrumentSearchControllerJsonTest {
     @Autowired
     private MockMvc mockMvc;
@@ -48,5 +56,26 @@ class InstrumentSearchControllerJsonTest {
         mockMvc.perform(get("/api/v1/instruments/search").param("q", "UNKNOWN"))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value("MARKET_DATA_UNAVAILABLE"));
+    }
+
+    @Test
+    void returnsDailyHistoryEnvelopeWithStatusAndAdjustedClose() throws Exception {
+        InstrumentEntity instrument = new InstrumentEntity();
+        instrument.setSymbol("VOO");
+        when(marketDataService.getInstrument("VOO")).thenReturn(instrument);
+        when(marketDataService.prices(instrument, "5Y")).thenReturn(new PriceHistoryResponse(
+                List.of(new PricePoint("2026-08-27", new java.math.BigDecimal("505.00"),
+                        new java.math.BigDecimal("504.50"))),
+                FreshnessStatus.FRESH, "YAHOO", LocalDate.of(2026, 8, 27),
+                Instant.parse("2026-08-27T20:00:00Z"), null));
+
+        mockMvc.perform(get("/api/v1/instruments/VOO/prices").param("range", "5Y"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].date").value("2026-08-27"))
+                .andExpect(jsonPath("$.data[0].close").value("505.00"))
+                .andExpect(jsonPath("$.data[0].adjustedClose").value("504.50"))
+                .andExpect(jsonPath("$.dataStatus").value("FRESH"))
+                .andExpect(jsonPath("$.source").value("YAHOO"))
+                .andExpect(jsonPath("$.asOf").value("2026-08-27"));
     }
 }

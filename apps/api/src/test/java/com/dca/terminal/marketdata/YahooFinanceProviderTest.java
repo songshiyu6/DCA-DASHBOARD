@@ -23,6 +23,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import static com.dca.terminal.marketdata.ProviderModels.PriceBar;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -68,7 +70,7 @@ class YahooFinanceProviderTest {
         assertEquals("QQQ", query(server.requests().getFirst(), "query"));
         assertEquals("en-US", query(server.requests().getFirst(), "lang"));
         assertEquals("US", query(server.requests().getFirst(), "region"));
-        assertTrue(server.userAgents().getFirst().contains("Mozilla/5.0"));
+        assertEquals("Mozilla/5.0", server.userAgents().getFirst());
     }
 
     @Test
@@ -85,6 +87,66 @@ class YahooFinanceProviderTest {
         server.when("/v6/finance/autocomplete", uri -> new Response(429, "Too Many Requests"));
 
         ProviderException exception = assertThrows(ProviderException.class, () -> provider.search("QQQ"));
+
+        assertTrue(exception.retryable());
+        assertTrue(exception.getMessage().contains("429"));
+    }
+
+    @Test
+    void parsesYahooDailyChartWithAdjustedCloseAndDateBoundaries() {
+        server.when("/v8/finance/chart/VOO", uri -> new Response(200, """
+                {
+                  "chart": {"result": [{
+                    "meta": {"symbol":"VOO"},
+                    "timestamp": [%d, %d, %d],
+                    "indicators": {
+                      "quote": [{
+                        "open": [499, 509, 519], "high": [505, 515, 525],
+                        "low": [495, 505, 515], "close": [500, 510, 520],
+                        "volume": [100, 200, 300]
+                      }],
+                      "adjclose": [{"adjclose": [498, 508, 518]}]
+                    }
+                  }], "error": null}
+                }
+                """.formatted(
+                epoch("2026-08-25T13:30:00Z"),
+                epoch("2026-08-26T13:30:00Z"),
+                epoch("2026-08-27T13:30:00Z"))));
+        InstrumentEntity instrument = new InstrumentEntity();
+        instrument.setSymbol("VOO");
+
+        List<PriceBar> bars = provider.getHistoricalPrices(instrument,
+                LocalDate.of(2026, 8, 26), LocalDate.of(2026, 8, 27));
+
+        assertEquals(2, bars.size());
+        assertEquals(LocalDate.of(2026, 8, 26), bars.getFirst().tradeDate());
+        assertEquals(new java.math.BigDecimal("508"), bars.getFirst().adjustedClose());
+        assertEquals(new java.math.BigDecimal("520"), bars.getLast().close());
+        assertEquals("1d", query(server.requests().getFirst(), "interval"));
+        assertTrue(query(server.requests().getFirst(), "period1") != null);
+        assertTrue(query(server.requests().getFirst(), "period2") != null);
+    }
+
+    @Test
+    void rejectsAnEmptyYahooDailyChart() {
+        server.when("/v8/finance/chart/VOO", uri -> new Response(200,
+                "{\"chart\":{\"result\":[],\"error\":null}}"));
+        InstrumentEntity instrument = new InstrumentEntity();
+        instrument.setSymbol("VOO");
+
+        assertThrows(ProviderException.class, () -> provider.getHistoricalPrices(instrument,
+                LocalDate.of(2026, 8, 26), LocalDate.of(2026, 8, 27)));
+    }
+
+    @Test
+    void marksRateLimitedDailyChartAsRetryable() {
+        server.when("/v8/finance/chart/VOO", uri -> new Response(429, "Too Many Requests"));
+        InstrumentEntity instrument = new InstrumentEntity();
+        instrument.setSymbol("VOO");
+
+        ProviderException exception = assertThrows(ProviderException.class, () -> provider.getHistoricalPrices(instrument,
+                LocalDate.of(2026, 8, 26), LocalDate.of(2026, 8, 27)));
 
         assertTrue(exception.retryable());
         assertTrue(exception.getMessage().contains("429"));

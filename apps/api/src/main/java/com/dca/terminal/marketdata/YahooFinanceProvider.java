@@ -36,8 +36,10 @@ import org.springframework.web.util.UriComponentsBuilder;
 
 @Component
 public class YahooFinanceProvider implements MarketDataProvider {
-    private static final String USER_AGENT =
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36";
+    // Yahoo's chart edge currently rejects the browser-shaped UA used by the
+    // old client with HTTP 429. A minimal UA is accepted by both query hosts
+    // and still identifies this as a normal HTTP client.
+    private static final String USER_AGENT = "Mozilla/5.0";
     private static final Logger log = LoggerFactory.getLogger(YahooFinanceProvider.class);
     private final RestClient client;
     private final ObjectMapper objectMapper;

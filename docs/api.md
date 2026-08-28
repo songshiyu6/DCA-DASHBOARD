@@ -341,10 +341,11 @@ constraint.
 CSV uploads are bounded before import: the default multipart file limit is
 1 MiB, the default multipart request limit is 2 MiB, the default maximum is
 10,000 data rows, and each field is limited to 1,000 characters. These limits can be changed with
-`TRANSACTION_MAX_CSV_SIZE`, `TRANSACTION_MAX_CSV_ROWS`, and
-`TRANSACTION_MAX_CSV_FIELD_LENGTH`. Exceeding the file or row limit returns
-HTTP 413 with `CSV_FILE_TOO_LARGE` or `CSV_TOO_MANY_ROWS`; an overlong field is
-reported as a preview row validation error and causes the whole commit to fail.
+`TRANSACTION_MAX_CSV_SIZE`, `TRANSACTION_MAX_CSV_REQUEST_SIZE`,
+`TRANSACTION_MAX_CSV_ROWS`, and `TRANSACTION_MAX_CSV_FIELD_LENGTH`. Exceeding
+the file or row limit returns HTTP 413 with `CSV_FILE_TOO_LARGE` or
+`CSV_TOO_MANY_ROWS`; an overlong field is reported as a preview row validation
+error and causes the whole commit to fail.
 The service never logs a complete CSV row or the contents of `notes`.
 
 ## Portfolio and dashboard

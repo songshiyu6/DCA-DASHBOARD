@@ -45,9 +45,12 @@ jobs:
 
       - name: Run web lint when defined
         run: |
-          if [ "$(npm pkg get scripts.lint)" != "null" ]; then
+          if node -e "const p = require('./package.json'); process.exit(p.scripts?.lint ? 0 : 1)"; then
             npm run lint
           fi
+
+      - name: Run web typecheck
+        run: npm run typecheck
 
       - name: Run web tests
         run: npm test -- --run

@@ -1,0 +1,69 @@
+/* Focused mobile/interaction fixes kept separate from the main stylesheet for easy review. */
+
+.etf-card-open {
+  background: transparent;
+  color: inherit;
+  display: block;
+  padding: 0;
+  text-align: left;
+  width: 100%;
+}
+
+.etf-card-footer-actions {
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
+}
+
+.etf-order-controls {
+  align-items: center;
+  display: inline-flex;
+  gap: 2px;
+}
+
+.etf-order-button {
+  height: 24px;
+  width: 24px;
+}
+
+.plan-page .form-footer {
+  margin-top: 8px;
+  order: 10;
+}
+
+.asset-editor-row .input-suffix {
+  min-width: 0;
+  width: 100%;
+}
+
+.asset-editor-row .input-suffix input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-right: 2px;
+  width: 100%;
+}
+
+.asset-editor-row .input-suffix > span {
+  flex: 0 0 auto;
+}
+
+.asset-editor-row > .field-error {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 620px) {
+  .asset-editor-header,
+  .asset-editor-row {
+    gap: 6px;
+    grid-template-columns: minmax(0, 1fr) 84px 28px;
+  }
+
+  .etf-card-footer-actions {
+    gap: 6px;
+  }
+
+  .etf-order-button {
+    height: 28px;
+    width: 28px;
+  }
+}

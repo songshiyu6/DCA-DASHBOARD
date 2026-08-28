@@ -12,6 +12,11 @@ describe('financial display formatting', () => {
     expect(formatSignedPercent('-0.016')).toBe('-1.60%')
   })
 
+  it('keeps missing financial percentages visibly missing', () => {
+    expect(formatPercent(null)).toBe('—')
+    expect(formatSignedPercent(undefined)).toBe('—')
+  })
+
   it('keeps fractional shares readable', () => {
     expect(formatShares('18.43210000')).toBe('18.4321')
     expect(formatShares('0')).toBe('0')

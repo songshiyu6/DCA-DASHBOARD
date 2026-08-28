@@ -71,6 +71,7 @@ healthcheck. It is not one of the public API contract endpoints.
 | `GET` | `/api/v1/instruments/{symbol}/prices?range=1Y` | `{ data, dataStatus, source, asOf, retrievedAt, message }` daily chart envelope |
 | `GET` | `/api/v1/instruments/{symbol}/prices?range=1D` | Same envelope with on-demand five-minute provider bars |
 | `POST` | `/api/v1/instruments/{symbol}/sync` | Fetches missing daily bars/splits and returns a sync summary |
+| `POST` | `/api/v1/instruments/{symbol}/sync/full` | Re-fetches the bounded five-year history without clearing existing rows |
 | `GET` | `/api/v1/instruments/providers` | Provider IDs, configured flags, primary, and fallback IDs |
 
 `GET /api/v1/instruments` returns only instrument identity/profile fields. It
@@ -184,6 +185,24 @@ The sync response has this shape:
   "message": null
 }
 ```
+
+`POST /api/v1/instruments/{symbol}/sync/full` returns the same `SyncResponse`
+shape. It is an explicit operator repair path with a hard five-year window and
+the normal provider retry/fallback limits. It fetches bars and splits before
+persistence, upserts by instrument/date/source, and never deletes existing
+rows first. A provider failure retains the previous rows and reports a
+degraded status. Operators should take and verify a PostgreSQL backup, record
+pre/post row counts and representative raw/adjusted values, and use the
+checked-in restore script if validation requires rollback.
+
+Metrics that require adjusted-close endpoints (`oneMonth`, `threeMonths`,
+`ytd`, `oneYear`, `threeYearCagr`, `currentDrawdown`, and `maxDrawdown1Y`) are
+null when a required adjusted value is missing. With the current non-null JSON
+serialization, those null properties may be omitted on the wire; the web client
+normalizes an omitted or explicit null value to its missing display `--`, never
+to `0%`. The response carries `dataStatus: "PARTIAL"` or
+`"INSUFFICIENT_HISTORY"`. The 52-week high and low continue to use raw high and
+low.
 
 The current default live provider is Yahoo Finance. Twelve Data provides live
 search, quote, daily/intraday history, profile, and split capabilities when its

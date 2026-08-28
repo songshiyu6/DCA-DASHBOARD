@@ -63,13 +63,15 @@ public final class MarketMetricsCalculator {
                 && yearBars.stream().anyMatch(bar -> bar.high() == null || bar.low() == null);
         BigDecimal currentDrawdown = currentDrawdown(bars, latestAdjusted);
         BigDecimal maxDrawdown = maxDrawdown(yearBars);
+        boolean incompleteAdjusted = bars.stream().anyMatch(bar -> adjusted(bar) == null);
 
         boolean complete = latestAdjusted != null
                 && oneMonth != null && threeMonths != null && ytd != null && oneYear != null
                 && threeYear != null && !yearBars.isEmpty() && high52 != null && low52 != null
                 && currentDrawdown != null && maxDrawdown != null && !incompleteExtrema;
         FreshnessStatus status = complete ? FreshnessStatus.FRESH
-                : incompleteExtrema ? FreshnessStatus.PARTIAL : FreshnessStatus.INSUFFICIENT_HISTORY;
+                : incompleteExtrema || incompleteAdjusted ? FreshnessStatus.PARTIAL
+                : FreshnessStatus.INSUFFICIENT_HISTORY;
         if (complete && quoteStatus != null && quoteStatus != FreshnessStatus.FRESH) status = quoteStatus;
         return new Metrics(oneDay, oneMonth, threeMonths, ytd, oneYear, threeYear, high52, low52,
                 currentDrawdown, maxDrawdown, status);
@@ -81,10 +83,11 @@ public final class MarketMetricsCalculator {
         ProviderModels.PriceBar start = bars.stream()
                 .filter(Objects::nonNull)
                 .filter(bar -> bar.tradeDate() != null && !bar.tradeDate().isAfter(targetDate))
-                .filter(bar -> adjusted(bar) != null && adjusted(bar).signum() > 0)
                 .max(Comparator.comparing(ProviderModels.PriceBar::tradeDate)).orElse(null);
         if (start == null) return null;
-        BigDecimal ratio = ratio(end, adjusted(start));
+        BigDecimal startAdjusted = adjusted(start);
+        if (startAdjusted == null || startAdjusted.signum() <= 0) return null;
+        BigDecimal ratio = ratio(end, startAdjusted);
         return ratio == null ? null : ratio.subtract(BigDecimal.ONE, MC);
     }
 
@@ -94,12 +97,13 @@ public final class MarketMetricsCalculator {
         ProviderModels.PriceBar start = bars.stream()
                 .filter(Objects::nonNull)
                 .filter(bar -> bar.tradeDate() != null && !bar.tradeDate().isAfter(targetDate))
-                .filter(bar -> adjusted(bar) != null && adjusted(bar).signum() > 0)
                 .max(Comparator.comparing(ProviderModels.PriceBar::tradeDate)).orElse(null);
         if (start == null) return null;
+        BigDecimal startAdjusted = adjusted(start);
+        if (startAdjusted == null || startAdjusted.signum() <= 0) return null;
         long days = ChronoUnit.DAYS.between(start.tradeDate(), endDate);
         if (days <= 0) return null;
-        BigDecimal priceRatio = ratio(end, adjusted(start));
+        BigDecimal priceRatio = ratio(end, startAdjusted);
         if (priceRatio == null || priceRatio.signum() <= 0) return null;
         BigDecimal exponent = DAYS_PER_YEAR.divide(BigDecimal.valueOf(days), MC);
         BigDecimal result = DecimalMath.pow(priceRatio, exponent);
@@ -108,8 +112,13 @@ public final class MarketMetricsCalculator {
 
     public static BigDecimal currentDrawdown(List<ProviderModels.PriceBar> bars, BigDecimal latest) {
         if (bars == null || latest == null || latest.signum() <= 0) return null;
-        BigDecimal peak = bars.stream().map(MarketMetricsCalculator::adjusted).filter(Objects::nonNull)
-                .filter(value -> value.signum() > 0).max(Comparator.naturalOrder()).orElse(null);
+        BigDecimal peak = null;
+        for (ProviderModels.PriceBar bar : bars) {
+            if (bar == null) return null;
+            BigDecimal value = adjusted(bar);
+            if (value == null || value.signum() <= 0) return null;
+            if (peak == null || value.compareTo(peak) > 0) peak = value;
+        }
         BigDecimal ratio = ratio(latest, peak);
         return ratio == null ? null : ratio.subtract(BigDecimal.ONE, MC);
     }
@@ -120,9 +129,9 @@ public final class MarketMetricsCalculator {
         BigDecimal minimum = BigDecimal.ZERO;
         boolean found = false;
         for (ProviderModels.PriceBar bar : bars) {
-            if (bar == null) continue;
+            if (bar == null) return null;
             BigDecimal price = adjusted(bar);
-            if (price == null || price.signum() <= 0) continue;
+            if (price == null || price.signum() <= 0) return null;
             found = true;
             peak = peak == null || price.compareTo(peak) > 0 ? price : peak;
             BigDecimal ratio = ratio(price, peak);
@@ -143,7 +152,7 @@ public final class MarketMetricsCalculator {
     }
 
     public static BigDecimal adjusted(ProviderModels.PriceBar bar) {
-        return bar == null ? null : bar.adjustedClose() == null ? bar.close() : bar.adjustedClose();
+        return bar == null ? null : bar.adjustedClose();
     }
 
     private static BigDecimal ratio(BigDecimal numerator, BigDecimal denominator) {

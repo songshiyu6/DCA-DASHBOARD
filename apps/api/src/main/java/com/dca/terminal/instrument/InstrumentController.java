@@ -74,6 +74,11 @@ public class InstrumentController {
         return marketDataService.sync(marketDataService.getInstrument(symbol));
     }
 
+    @PostMapping("/{symbol}/sync/full")
+    public SyncResponse fullResync(@PathVariable String symbol) {
+        return marketDataService.fullResync(marketDataService.getInstrument(symbol));
+    }
+
     @GetMapping("/providers")
     public MarketDataDtos.ProvidersResponse providers() {
         return new MarketDataDtos.ProvidersResponse(marketDataService.providerStatuses(),

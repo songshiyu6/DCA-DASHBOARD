@@ -26,6 +26,7 @@ import org.springframework.web.util.UriComponentsBuilder;
 import static com.dca.terminal.marketdata.ProviderModels.PriceBar;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -137,6 +138,31 @@ class YahooFinanceProviderTest {
 
         assertThrows(ProviderException.class, () -> provider.getHistoricalPrices(instrument,
                 LocalDate.of(2026, 8, 26), LocalDate.of(2026, 8, 27)));
+    }
+
+    @Test
+    void preservesNullWhenYahooAdjustedSeriesHasNoEndpoint() {
+        server.when("/v8/finance/chart/VOO", uri -> new Response(200, """
+                {
+                  "chart": {"result": [{
+                    "meta": {"symbol":"VOO"},
+                    "timestamp": [%d],
+                    "indicators": {"quote": [{
+                      "open": [519], "high": [525], "low": [515],
+                      "close": [520], "volume": [300]
+                    }]}
+                  }], "error": null}
+                }
+                """.formatted(epoch("2026-08-27T13:30:00Z"))));
+        InstrumentEntity instrument = new InstrumentEntity();
+        instrument.setSymbol("VOO");
+
+        List<PriceBar> bars = provider.getHistoricalPrices(instrument,
+                LocalDate.of(2026, 8, 27), LocalDate.of(2026, 8, 27));
+
+        assertEquals(1, bars.size());
+        assertEquals(new java.math.BigDecimal("520"), bars.getFirst().close());
+        assertNull(bars.getFirst().adjustedClose());
     }
 
     @Test

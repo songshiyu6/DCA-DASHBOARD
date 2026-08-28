@@ -129,6 +129,63 @@ The job is idempotent and safe to retry. A partial instrument batch does not
 erase existing rows or mark unrelated instruments unavailable. The API remains
 usable while a synchronization job is running.
 
+### Explicit full-history resync
+
+`POST /api/v1/instruments/{symbol}/sync/full` is an operator-triggered repair
+operation for the bounded local history. It always requests `today.minusYears(5)`
+through `today`, using the application market-data timezone; callers cannot
+extend that range. It uses the same configured provider priority, bounded retry
+count, and fallback policy as the incremental sync.
+
+The operation fetches the complete bars response and split response before it
+writes anything. Each bar is upserted by `(instrument, trade_date, source)` and
+keeps raw OHLC separate from the provider's `adjusted_close`, including a
+provider `null`. Existing rows are never deleted or cleared first. A provider
+failure, an empty full-history response, or a split-fetch failure therefore
+retains the existing rows and reports `STALE`, `UNAVAILABLE`, or
+`INSUFFICIENT_HISTORY` as appropriate. Database write failures are handled by
+the surrounding transaction. Repeating the operation is idempotent.
+
+Before running a resync against a deployment with user data:
+
+1. Run `deploy/scripts/backup-postgres.sh` and verify the resulting archive with
+   `gzip -t`.
+2. Record the impact baseline without changing data:
+
+   ```sql
+   SELECT count(*) AS total_rows,
+          count(adjusted_close) AS adjusted_rows,
+          count(*) - count(adjusted_close) AS missing_adjusted_rows,
+          min(trade_date) AS first_trade_date,
+          max(trade_date) AS last_trade_date
+   FROM market_price_daily;
+   ```
+
+3. Call the full resync endpoint through the normal authenticated session and
+   CSRF flow. Record its response and the provider/source selected.
+4. Repeat the count query, inspect representative rows including `close`,
+   `adjusted_close`, and `source`, and request the instrument metrics endpoint.
+   A missing adjusted endpoint must remain `null` and make dependent metrics
+   degrade; equality between `close` and `adjusted_close` is not evidence of
+   contamination.
+5. If the post-resync checks fail, preserve the dump and old PostgreSQL volume.
+   Restore with `deploy/scripts/restore-postgres.sh --confirm
+   <verified-backup-file.sql.gz>` after the script's safety-backup step, and
+   verify Flyway, health, row counts, and metrics before serving traffic. Never
+   use `docker compose down -v` as part of this recovery.
+
+#### Verified acceptance deployment state
+
+On 2026-08-28, the coordinator's read-only acceptance check against
+`dca-terminal-acceptance-postgres-1` (PostgreSQL 18.6) found 1,255
+`market_price_daily` rows, 1,255 non-null `adjusted_close` values, zero missing
+adjusted values, and `trade_date` from 2021-08-27 through 2026-08-27. This is
+non-sensitive evidence that the verified acceptance data does not require an
+immediate data migration or resync. No destructive update is justified, and
+the source of a historical value must not be inferred from equality with raw
+`close`; the backup/full-resync procedure above remains the repair path for a
+future or unknown deployment state.
+
 ## Normalization rules
 
 - All provider timestamps are converted to UTC for storage; market date

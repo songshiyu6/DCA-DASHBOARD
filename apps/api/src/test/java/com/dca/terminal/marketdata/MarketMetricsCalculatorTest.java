@@ -67,6 +67,75 @@ class MarketMetricsCalculatorTest {
     }
 
     @Test
+    void returnsNullForAdjustedMetricsWhenLatestAdjustedCloseIsMissing() {
+        LocalDate asOf = LocalDate.of(2026, 8, 27);
+        List<ProviderModels.PriceBar> bars = List.of(
+                bar("2023-08-25", "70", "75", "65", "70"),
+                bar("2025-08-27", "100", "110", "90", "100"),
+                bar("2025-12-31", "120", "130", "115", "120"),
+                bar("2026-01-02", "121", "128", "118", "121"),
+                bar("2026-05-26", "135", "140", "125", "135"),
+                bar("2026-07-27", "160", "170", "155", "160"),
+                bar("2026-08-27", "140", "150", "130", null));
+
+        MarketMetricsCalculator.Metrics metrics = MarketMetricsCalculator.calculate(bars,
+                new ProviderModels.ProviderQuote(bd("141"), bd("140"), null, null, null, null), asOf);
+
+        assertEquals(FreshnessStatus.PARTIAL, metrics.status());
+        assertNotNull(metrics.oneDay());
+        assertNull(metrics.oneMonth());
+        assertNull(metrics.threeMonths());
+        assertNull(metrics.ytd());
+        assertNull(metrics.oneYear());
+        assertNull(metrics.threeYearCagr());
+        assertNull(metrics.currentDrawdown());
+        assertNull(metrics.maxDrawdown1Y());
+        assertDecimal("170", metrics.fiftyTwoWeekHigh(), "52W high remains raw");
+        assertDecimal("90", metrics.fiftyTwoWeekLow(), "52W low remains raw");
+    }
+
+    @Test
+    void doesNotUseRawCloseWhenAnAdjustedPeriodEndpointIsMissing() {
+        List<ProviderModels.PriceBar> bars = List.of(
+                bar("2026-07-27", "160", "170", "155", null),
+                bar("2026-08-27", "140", "150", "130", "140"));
+
+        assertNull(MarketMetricsCalculator.periodReturn(bars, LocalDate.of(2026, 7, 27), bd("140")));
+        assertNull(MarketMetricsCalculator.cagr(bars, LocalDate.of(2026, 7, 27), bd("140"),
+                LocalDate.of(2026, 8, 27)));
+    }
+
+    @Test
+    void returnsNullForYtdWhenPreviousYearAdjustedBaselineIsMissing() {
+        List<ProviderModels.PriceBar> bars = List.of(
+                bar("2025-12-31", "120", "130", "115", null),
+                bar("2026-08-27", "140", "150", "130", "140"));
+
+        MarketMetricsCalculator.Metrics metrics = MarketMetricsCalculator.calculate(bars,
+                new ProviderModels.ProviderQuote(bd("141"), bd("140"), null, null, null, null),
+                LocalDate.of(2026, 8, 27));
+
+        assertNull(metrics.ytd());
+        assertEquals(FreshnessStatus.PARTIAL, metrics.status());
+    }
+
+    @Test
+    void returnsNullForDrawdownWhenAdjustedHistoryHasAnInternalGap() {
+        List<ProviderModels.PriceBar> bars = List.of(
+                bar("2025-08-27", "100", "110", "90", "100"),
+                bar("2026-07-27", "80", "85", "75", null),
+                bar("2026-08-27", "110", "115", "105", "110"));
+
+        MarketMetricsCalculator.Metrics metrics = MarketMetricsCalculator.calculate(bars,
+                new ProviderModels.ProviderQuote(bd("111"), bd("110"), null, null, null, null),
+                LocalDate.of(2026, 8, 27));
+
+        assertNull(metrics.currentDrawdown());
+        assertNull(metrics.maxDrawdown1Y());
+        assertEquals(FreshnessStatus.PARTIAL, metrics.status());
+    }
+
+    @Test
     void doesNotUseAnOlderCalendarYearForYtdBaseline() {
         assertNull(MarketMetricsCalculator.previousYearLastTradingDay(
                 List.of(bar("2024-12-31", "100", "101", "99", "100")),

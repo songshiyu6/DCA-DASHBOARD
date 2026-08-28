@@ -264,7 +264,7 @@ public class MarketDataService {
                 entity.setHigh(bar.high());
                 entity.setLow(bar.low());
                 entity.setClose(bar.close());
-                entity.setAdjustedClose(bar.adjustedClose() == null ? bar.close() : bar.adjustedClose());
+                entity.setAdjustedClose(bar.adjustedClose());
                 entity.setVolume(bar.volume());
                 entity.setSource(result.provider().name());
                 priceRepository.save(entity);
@@ -290,6 +290,77 @@ public class MarketDataService {
                     status == FreshnessStatus.STALE
                             ? "Historical sync failed; existing data was retained"
                             : "Historical data is temporarily unavailable; retry when the provider recovers");
+        }
+    }
+
+    /**
+     * Re-fetches the bounded local history without deleting rows first. This is
+     * an explicit repair operation for provider-adjusted fields, not the daily
+     * incremental scheduler path.
+     */
+    @Transactional
+    public SyncResponse fullResync(InstrumentEntity instrument) {
+        LocalDate today = LocalDate.now(clock.withZone(currentZone()));
+        LocalDate fiveYearsAgo = today.minusYears(5);
+        Optional<PriceDailyEntity> latestStored = priceRepository.findTopByInstrumentIdOrderByTradeDateDesc(instrument.getId());
+        try {
+            ProviderCall<List<PriceBar>> result = callWithProvider(
+                    provider -> provider.getHistoricalPrices(instrument, fiveYearsAgo, today));
+            List<PriceBar> bars = result.value() == null ? List.of() : result.value().stream()
+                    .filter(bar -> bar != null && bar.tradeDate() != null
+                            && !bar.tradeDate().isBefore(fiveYearsAgo) && !bar.tradeDate().isAfter(today)
+                            && bar.close() != null)
+                    .toList();
+            if (bars.isEmpty()) {
+                FreshnessStatus status = latestStored.isPresent()
+                        ? FreshnessStatus.STALE : FreshnessStatus.INSUFFICIENT_HISTORY;
+                instrument.setDataStatus(status);
+                instrumentRepository.save(instrument);
+                return new SyncResponse(instrument.getSymbol(), 0, 0, status, clock.instant(), syncMessage(status));
+            }
+
+            MarketDataProvider provider = providers.get(result.provider());
+            List<SplitEvent> splitEvents = provider.getSplits(instrument, fiveYearsAgo, today);
+            if (splitEvents == null) {
+                throw new ProviderException(result.provider(), "Provider returned no split response", false);
+            }
+
+            int saved = 0;
+            LocalDate latestAvailable = null;
+            for (PriceBar bar : bars) {
+                PriceDailyEntity entity = priceRepository.findByInstrumentIdAndTradeDateAndSource(
+                        instrument.getId(), bar.tradeDate(), result.provider().name()).orElseGet(PriceDailyEntity::new);
+                entity.setInstrument(instrument);
+                entity.setTradeDate(bar.tradeDate());
+                entity.setOpen(bar.open());
+                entity.setHigh(bar.high());
+                entity.setLow(bar.low());
+                entity.setClose(bar.close());
+                entity.setAdjustedClose(bar.adjustedClose());
+                entity.setVolume(bar.volume());
+                entity.setSource(result.provider().name());
+                priceRepository.save(entity);
+                saved++;
+                if (latestAvailable == null || bar.tradeDate().isAfter(latestAvailable)) latestAvailable = bar.tradeDate();
+            }
+            int splits = saveSplits(instrument, result.provider(), splitEvents);
+            FreshnessStatus status = latestAvailable == null
+                    ? FreshnessStatus.INSUFFICIENT_HISTORY : dailyFreshnessStatus(latestAvailable, today);
+            instrument.setDataStatus(status);
+            instrumentRepository.save(instrument);
+            log.info("market full resync completed ticker={} source={} rows={} splits={} status={}",
+                    instrument.getSymbol(), result.provider(), saved, splits, status);
+            return new SyncResponse(instrument.getSymbol(), saved, splits, status, clock.instant(), syncMessage(status));
+        } catch (ProviderException exception) {
+            FreshnessStatus status = latestStored.isPresent() ? FreshnessStatus.STALE : FreshnessStatus.UNAVAILABLE;
+            instrument.setDataStatus(status);
+            instrumentRepository.save(instrument);
+            log.warn("market full resync unavailable ticker={} provider={} status={} reason={}",
+                    instrument.getSymbol(), exception.provider(), status, exception.getMessage());
+            return new SyncResponse(instrument.getSymbol(), 0, 0, status, clock.instant(),
+                    status == FreshnessStatus.STALE
+                            ? "Full historical sync failed; existing data was retained"
+                            : "Full historical data is temporarily unavailable; retry when the provider recovers");
         }
     }
 
@@ -390,21 +461,25 @@ public class MarketDataService {
     }
 
     private int syncSplits(InstrumentEntity instrument, MarketDataProvider provider, LocalDate from, LocalDate to) {
+        return saveSplits(instrument, provider.id(), provider.getSplits(instrument, from, to));
+    }
+
+    private int saveSplits(InstrumentEntity instrument, ProviderId providerId, List<SplitEvent> events) {
         int saved = 0;
         List<ProviderId> priority = providerPriority();
-        for (SplitEvent event : provider.getSplits(instrument, from, to)) {
+        for (SplitEvent event : events) {
             SplitEventEntity entity = splitRepository.findByInstrumentIdAndEffectiveDate(
                     instrument.getId(), event.effectiveDate()).orElseGet(SplitEventEntity::new);
             if (entity.getId() != null
                     && ProviderPriority.rank(entity.getSource(), priority)
-                    < ProviderPriority.rank(provider.id().name(), priority)) {
+                    < ProviderPriority.rank(providerId.name(), priority)) {
                 continue;
             }
             entity.setInstrument(instrument);
             entity.setEffectiveDate(event.effectiveDate());
             entity.setNumerator(event.numerator());
             entity.setDenominator(event.denominator());
-            entity.setSource(provider.id().name());
+            entity.setSource(providerId.name());
             splitRepository.save(entity);
             saved++;
         }

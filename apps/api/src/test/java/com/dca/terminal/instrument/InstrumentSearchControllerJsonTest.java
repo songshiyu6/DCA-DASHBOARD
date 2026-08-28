@@ -4,8 +4,10 @@ import com.dca.terminal.common.DomainException;
 import com.dca.terminal.common.FreshnessStatus;
 import com.dca.terminal.config.JacksonConfig;
 import com.dca.terminal.marketdata.MarketDataService;
+import com.dca.terminal.marketdata.MarketDataDtos.MetricsResponse;
 import com.dca.terminal.marketdata.MarketDataDtos.PriceHistoryResponse;
 import com.dca.terminal.marketdata.MarketDataDtos.PricePoint;
+import com.dca.terminal.marketdata.MarketDataDtos.SyncResponse;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
@@ -21,6 +23,7 @@ import org.springframework.context.annotation.Import;
 import static com.dca.terminal.instrument.InstrumentDtos.SearchResult;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -77,5 +80,39 @@ class InstrumentSearchControllerJsonTest {
                 .andExpect(jsonPath("$.dataStatus").value("FRESH"))
                 .andExpect(jsonPath("$.source").value("YAHOO"))
                 .andExpect(jsonPath("$.asOf").value("2026-08-27"));
+    }
+
+    @Test
+    void exposesFullHistorySyncWithTheExistingSyncResponseShape() throws Exception {
+        InstrumentEntity instrument = new InstrumentEntity();
+        instrument.setSymbol("VOO");
+        when(marketDataService.getInstrument("VOO")).thenReturn(instrument);
+        when(marketDataService.fullResync(instrument)).thenReturn(new SyncResponse(
+                "VOO", 1, 0, FreshnessStatus.FRESH, Instant.parse("2026-08-27T20:02:00Z"), null));
+
+        mockMvc.perform(post("/api/v1/instruments/VOO/sync/full"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.symbol").value("VOO"))
+                .andExpect(jsonPath("$.barsSaved").value(1))
+                .andExpect(jsonPath("$.splitsSaved").value(0))
+                .andExpect(jsonPath("$.status").value("FRESH"));
+    }
+
+    @Test
+    void omitsMissingAdjustedMetricsWithoutTurningThemIntoZeroWithPartialStatus() throws Exception {
+        InstrumentEntity instrument = new InstrumentEntity();
+        instrument.setSymbol("VOO");
+        when(marketDataService.getInstrument("VOO")).thenReturn(instrument);
+        when(marketDataService.metrics(instrument)).thenReturn(new MetricsResponse(
+                null, null, null, null, null, null, new java.math.BigDecimal("520"),
+                new java.math.BigDecimal("480"), null, null, FreshnessStatus.PARTIAL,
+                LocalDate.of(2026, 8, 27)));
+
+        mockMvc.perform(get("/api/v1/instruments/VOO/metrics"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.oneMonth").doesNotExist())
+                .andExpect(jsonPath("$.currentDrawdown").doesNotExist())
+                .andExpect(jsonPath("$.fiftyTwoWeekHigh").value("520"))
+                .andExpect(jsonPath("$.dataStatus").value("PARTIAL"));
     }
 }

@@ -127,6 +127,33 @@ class TwelveDataProviderTest {
     }
 
     @Test
+    void preservesNullWhenAdjustedSeriesOmitsARawTradingDate() {
+        server.when("/time_series", uri -> {
+            if ("all".equals(query(uri, "adjust"))) {
+                return new Response(200, """
+                        {"meta":{"symbol":"VOO","interval":"1day"},"values":[
+                          {"datetime":"2026-01-02","close":"100.50000"}
+                        ],"status":"ok"}
+                        """);
+            }
+            return new Response(200, """
+                    {"meta":{"symbol":"VOO","interval":"1day"},"values":[
+                      {"datetime":"2026-01-02","open":"99.00","high":"101.00","low":"98.00","close":"100.00","volume":"1000"},
+                      {"datetime":"2026-01-05","open":"100.00","high":"102.00","low":"99.00","close":"101.00","volume":"2000"}
+                    ],"status":"ok"}
+                    """);
+        });
+
+        List<ProviderModels.PriceBar> bars = provider.getHistoricalPrices(instrument("VOO"),
+                LocalDate.of(2026, 1, 1), LocalDate.of(2026, 1, 6));
+
+        assertEquals(2, bars.size());
+        assertEquals(new BigDecimal("100.50000"), bars.getFirst().adjustedClose());
+        assertNull(bars.getLast().adjustedClose());
+        assertEquals(new BigDecimal("101.00"), bars.getLast().close());
+    }
+
+    @Test
     void mapsIntradayBarsInExchangeTimezoneAndSortsThem() {
         server.when("/time_series", uri -> new Response(200, """
                 {

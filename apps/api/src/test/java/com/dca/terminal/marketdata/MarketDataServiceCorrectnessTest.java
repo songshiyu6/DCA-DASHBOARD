@@ -6,6 +6,7 @@ import com.dca.terminal.instrument.InstrumentEntity;
 import com.dca.terminal.instrument.InstrumentRepository;
 import com.dca.terminal.marketdata.MarketDataEntities.PriceDailyEntity;
 import com.dca.terminal.marketdata.MarketDataEntities.SplitEventEntity;
+import com.dca.terminal.marketdata.MarketDataDtos.SyncResponse;
 import com.dca.terminal.marketdata.FundNavDailyRepository;
 import com.dca.terminal.marketdata.PriceDailyRepository;
 import com.dca.terminal.marketdata.QuoteLatestRepository;
@@ -20,20 +21,25 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.Test;
 
 import static com.dca.terminal.instrument.InstrumentDtos.SearchResult;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -178,6 +184,117 @@ class MarketDataServiceCorrectnessTest {
 
         assertEquals(FreshnessStatus.FRESH, saved.getDataStatus());
         verify(prices).save(any(PriceDailyEntity.class));
+    }
+
+    @Test
+    void preservesNullAdjustedCloseWhenProviderOmitsAdjustedSeries() {
+        UUID instrumentId = UUID.randomUUID();
+        InstrumentEntity instrument = mock(InstrumentEntity.class);
+        when(instrument.getId()).thenReturn(instrumentId);
+        when(instrument.getSymbol()).thenReturn("VOO");
+        PriceDailyRepository prices = mock(PriceDailyRepository.class);
+        when(prices.findTopByInstrumentIdOrderByTradeDateDesc(instrumentId)).thenReturn(Optional.empty());
+        when(prices.findByInstrumentIdAndTradeDateAndSource(any(), any(), any())).thenReturn(Optional.empty());
+        when(prices.save(any(PriceDailyEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        MarketDataProvider yahoo = provider(ProviderId.YAHOO);
+        when(yahoo.getHistoricalPrices(any(), any(), any())).thenReturn(List.of(
+                new PriceBar(LocalDate.of(2026, 8, 27), bd("500"), bd("510"), bd("490"), bd("505"), null, 100L)));
+        when(yahoo.getSplits(any(), any(), any())).thenReturn(List.of());
+
+        service(mock(InstrumentRepository.class), prices, yahoo).sync(instrument);
+
+        ArgumentCaptor<PriceDailyEntity> saved = ArgumentCaptor.forClass(PriceDailyEntity.class);
+        verify(prices).save(saved.capture());
+        assertEquals(bd("505"), saved.getValue().getClose());
+        assertNull(saved.getValue().getAdjustedClose());
+    }
+
+    @Test
+    void fullResyncUpsertsWithinTheFiveYearWindowIdempotently() {
+        UUID instrumentId = UUID.randomUUID();
+        InstrumentEntity instrument = mock(InstrumentEntity.class);
+        when(instrument.getId()).thenReturn(instrumentId);
+        when(instrument.getSymbol()).thenReturn("VOO");
+        InstrumentRepository instruments = mock(InstrumentRepository.class);
+        when(instruments.save(any(InstrumentEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        PriceDailyRepository prices = mock(PriceDailyRepository.class);
+        when(prices.findTopByInstrumentIdOrderByTradeDateDesc(instrumentId)).thenReturn(Optional.empty());
+        Map<String, PriceDailyEntity> stored = new HashMap<>();
+        when(prices.findByInstrumentIdAndTradeDateAndSource(any(), any(), any())).thenAnswer(invocation ->
+                Optional.ofNullable(stored.get(invocation.getArgument(1) + "|" + invocation.getArgument(2))));
+        when(prices.save(any(PriceDailyEntity.class))).thenAnswer(invocation -> {
+            PriceDailyEntity entity = invocation.getArgument(0);
+            stored.put(entity.getTradeDate() + "|" + entity.getSource(), entity);
+            return entity;
+        });
+
+        MarketDataProvider yahoo = provider(ProviderId.YAHOO);
+        when(yahoo.getHistoricalPrices(any(), eq(LocalDate.of(2021, 8, 27)), eq(LocalDate.of(2026, 8, 27))))
+                .thenReturn(List.of(new PriceBar(LocalDate.of(2026, 8, 27), bd("500"), bd("510"), bd("490"),
+                        bd("505"), bd("504"), 100L)));
+        when(yahoo.getSplits(any(), eq(LocalDate.of(2021, 8, 27)), eq(LocalDate.of(2026, 8, 27))))
+                .thenReturn(List.of());
+
+        MarketDataService service = service(instruments, prices, yahoo);
+
+        SyncResponse first = service.fullResync(instrument);
+        SyncResponse second = service.fullResync(instrument);
+
+        assertEquals(FreshnessStatus.FRESH, first.status());
+        assertEquals(FreshnessStatus.FRESH, second.status());
+        assertEquals(1, stored.size());
+        assertEquals(bd("504"), stored.values().iterator().next().getAdjustedClose());
+        verify(prices, times(2)).save(any(PriceDailyEntity.class));
+    }
+
+    @Test
+    void fullResyncKeepsExistingRowsWhenSplitFetchFailsBeforePersistence() {
+        UUID instrumentId = UUID.randomUUID();
+        InstrumentEntity instrument = mock(InstrumentEntity.class);
+        when(instrument.getId()).thenReturn(instrumentId);
+        when(instrument.getSymbol()).thenReturn("VOO");
+        PriceDailyEntity existing = price(instrument, LocalDate.of(2026, 8, 26), "500", "YAHOO");
+        PriceDailyRepository prices = mock(PriceDailyRepository.class);
+        when(prices.findTopByInstrumentIdOrderByTradeDateDesc(instrumentId)).thenReturn(Optional.of(existing));
+        InstrumentRepository instruments = mock(InstrumentRepository.class);
+        when(instruments.save(any(InstrumentEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        MarketDataProvider yahoo = provider(ProviderId.YAHOO);
+        when(yahoo.getHistoricalPrices(any(), any(), any())).thenReturn(List.of(
+                new PriceBar(LocalDate.of(2026, 8, 27), bd("500"), bd("510"), bd("490"), bd("505"), bd("504"), 100L)));
+        when(yahoo.getSplits(any(), any(), any())).thenThrow(
+                new ProviderException(ProviderId.YAHOO, "split endpoint unavailable", true));
+
+        SyncResponse response = service(instruments, prices, yahoo).fullResync(instrument);
+
+        assertEquals(FreshnessStatus.STALE, response.status());
+        assertEquals("500", existing.getClose().toPlainString());
+        verify(prices, never()).save(any(PriceDailyEntity.class));
+    }
+
+    @Test
+    void fullResyncReportsStaleAndKeepsExistingRowsWhenProviderReturnsNoBars() {
+        UUID instrumentId = UUID.randomUUID();
+        InstrumentEntity instrument = mock(InstrumentEntity.class);
+        when(instrument.getId()).thenReturn(instrumentId);
+        when(instrument.getSymbol()).thenReturn("VOO");
+        PriceDailyEntity existing = price(instrument, LocalDate.of(2026, 8, 27), "500", "YAHOO");
+        PriceDailyRepository prices = mock(PriceDailyRepository.class);
+        when(prices.findTopByInstrumentIdOrderByTradeDateDesc(instrumentId)).thenReturn(Optional.of(existing));
+        InstrumentRepository instruments = mock(InstrumentRepository.class);
+        when(instruments.save(any(InstrumentEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        MarketDataProvider yahoo = provider(ProviderId.YAHOO);
+        when(yahoo.getHistoricalPrices(any(), eq(LocalDate.of(2021, 8, 27)), eq(LocalDate.of(2026, 8, 27))))
+                .thenReturn(List.of());
+
+        SyncResponse response = service(instruments, prices, yahoo).fullResync(instrument);
+
+        assertEquals(FreshnessStatus.STALE, response.status());
+        assertEquals("500", existing.getClose().toPlainString());
+        verify(prices, never()).save(any(PriceDailyEntity.class));
+        verify(yahoo, never()).getSplits(any(), any(), any());
     }
 
     @Test

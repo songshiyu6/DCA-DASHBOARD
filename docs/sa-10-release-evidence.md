@@ -3,7 +3,7 @@
 ```text
 工作包：SA-10
 分支：agent/10-release-integration
-提交：this commit
+提交：575902595947e3bc66d4675a994a1b74e3d65468
 
 已验证的旧行为：
 - 文档仍写 migration 到 V012、前端 9 files/27 tests、CI 仅 compose config

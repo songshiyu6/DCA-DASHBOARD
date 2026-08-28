@@ -14,7 +14,7 @@
 }
 
 .capital-summary-strip-compact {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .capital-summary-strip > span {
@@ -45,6 +45,35 @@
   color: var(--text-dim);
   font-size: 9px;
   font-style: normal;
+}
+
+.capital-cost-summary {
+  align-items: baseline;
+  display: grid !important;
+  gap: 4px 14px !important;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.capital-cost-summary small {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.capital-cost-summary strong {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.capital-cost-summary em {
+  align-self: end;
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.capital-cost-summary em b {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
 }
 
 .dashboard-holdings-first {
@@ -115,22 +144,19 @@
 
   .capital-summary-strip,
   .capital-summary-strip-compact {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .capital-summary-strip > span {
     padding: 11px 12px;
   }
 
-  .capital-summary-strip-compact > span:nth-child(2) {
-    border-left: 1px solid var(--line-subtle);
-    border-top: 0;
-    grid-column: auto;
+  .capital-cost-summary {
+    grid-template-columns: auto minmax(0, 1fr);
   }
 
-  .capital-summary-strip-compact > span:nth-child(2) strong,
-  .capital-summary-strip-compact > span:nth-child(2) em {
-    display: inline;
+  .capital-cost-summary em {
+    text-align: right;
   }
 
   .dashboard-holdings-first {

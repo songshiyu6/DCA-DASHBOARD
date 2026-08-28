@@ -39,6 +39,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import org.springframework.http.HttpStatus;
@@ -110,15 +111,30 @@ public class PortfolioService {
     public List<HistoryPoint> history(String range) {
         LocalDate end = today();
         LocalDate requestedStart = rangeStart(end, range);
-        List<PortfolioSnapshotEntity> snapshots = snapshotRepository.findAllBySnapshotDateBetweenOrderBySnapshotDateAsc(requestedStart, end);
-        if (!snapshots.isEmpty()) {
-            return snapshots.stream().map(snapshot -> new HistoryPoint(snapshot.getSnapshotDate(), snapshot.getMarketValue(),
-                    snapshot.getNetCashFlow(), snapshot.getCostBasis(), snapshot.getUnrealizedPnl(), snapshot.getDataStatus())).toList();
-        }
         List<TransactionEntity> allTransactions = transactionRepository.findAllByOrderByTradeDateAscLedgerOrderAscIdAsc();
         if (allTransactions.isEmpty()) return List.of();
-        LocalDate start = allTransactions.stream().map(TransactionEntity::getTradeDate).min(LocalDate::compareTo).orElse(requestedStart);
-        if (start.isBefore(requestedStart)) start = requestedStart;
+        LocalDate firstTransactionDate = allTransactions.stream().map(TransactionEntity::getTradeDate)
+                .min(LocalDate::compareTo).orElse(requestedStart);
+        LocalDate start = firstTransactionDate.isBefore(requestedStart) ? requestedStart : firstTransactionDate;
+
+        Map<LocalDate, HistoryPoint> merged = new TreeMap<>();
+        snapshotRepository.findAllBySnapshotDateBetweenOrderBySnapshotDateAsc(requestedStart, end).stream()
+                .filter(this::isUsableSnapshot)
+                .filter(snapshot -> !snapshot.getSnapshotDate().isBefore(start)
+                        && !snapshot.getSnapshotDate().isAfter(end))
+                .sorted(Comparator.comparing(PortfolioSnapshotEntity::getSnapshotDate)
+                        .thenComparing(snapshot -> snapshot.getId() == null ? "" : snapshot.getId().toString()))
+                .forEach(snapshot -> merged.putIfAbsent(snapshot.getSnapshotDate(), historyPoint(snapshot)));
+
+        boolean completeCoverage = true;
+        for (LocalDate date = start; !date.isAfter(end); date = date.plusDays(1)) {
+            if (!merged.containsKey(date)) {
+                completeCoverage = false;
+                break;
+            }
+        }
+        if (completeCoverage) return new ArrayList<>(merged.values());
+
         List<ProviderId> priority = marketDataService.providerPriority();
         Map<UUID, List<SplitEventEntity>> splits = splitMap(allTransactions, end, priority);
         Map<UUID, List<PriceDailyEntity>> prices = historicalPrices(allTransactions, end, priority);
@@ -127,26 +143,15 @@ public class PortfolioService {
                 .collect(Collectors.toMap(TransactionEntity::getTradeDate, this::netInvestedChange,
                         (first, second) -> first.add(second, MC)));
         BigDecimal cumulativeNetInvested = netInvested(allTransactions, start.minusDays(1));
-        List<HistoryPoint> result = new ArrayList<>();
         for (LocalDate date = start; !date.isAfter(end); date = date.plusDays(1)) {
             FifoCalculator.Calculation calculation = replay.calculateThrough(date);
             cumulativeNetInvested = cumulativeNetInvested.add(
                     dailyNetInvested.getOrDefault(date, BigDecimal.ZERO), MC);
-            BigDecimal marketValue = BigDecimal.ZERO;
-            FreshnessStatus status = FreshnessStatus.FRESH;
-            boolean complete = true;
-            for (FifoCalculator.Position position : calculation.positions()) {
-                PriceAtDate price = priceAt(position.instrumentId(), date, prices.getOrDefault(position.instrumentId(), List.of()));
-                if (price.price() == null) { status = FreshnessStatus.PARTIAL; complete = false; continue; }
-                marketValue = marketValue.add(position.shares().multiply(price.price(), MC), MC);
-                if (price.status() != FreshnessStatus.FRESH) status = FreshnessStatus.PARTIAL;
+            if (!merged.containsKey(date)) {
+                merged.put(date, replayHistoryPoint(date, calculation, cumulativeNetInvested, prices));
             }
-            BigDecimal costBasis = calculation.positions().stream().map(FifoCalculator.Position::costBasis)
-                    .reduce(BigDecimal.ZERO, (a, b) -> a.add(b, MC));
-            result.add(new HistoryPoint(date, marketValue, cumulativeNetInvested, costBasis,
-                    complete ? marketValue.subtract(costBasis, MC) : null, status));
         }
-        return result;
+        return new ArrayList<>(merged.values());
     }
 
     @Transactional(readOnly = true)
@@ -348,6 +353,38 @@ public class PortfolioService {
         return price == null || price.getClose() == null || price.getClose().signum() <= 0
                 ? new PriceAtDate(null, FreshnessStatus.UNAVAILABLE, null)
                 : new PriceAtDate(price.getClose(), price.getTradeDate().equals(date) ? FreshnessStatus.FRESH : FreshnessStatus.STALE, null);
+    }
+
+    private HistoryPoint replayHistoryPoint(LocalDate date, FifoCalculator.Calculation calculation,
+                                            BigDecimal netInvested, Map<UUID, List<PriceDailyEntity>> prices) {
+        BigDecimal marketValue = BigDecimal.ZERO;
+        FreshnessStatus status = FreshnessStatus.FRESH;
+        boolean complete = true;
+        for (FifoCalculator.Position position : calculation.positions()) {
+            PriceAtDate price = priceAt(position.instrumentId(), date, prices.getOrDefault(position.instrumentId(), List.of()));
+            if (price.price() == null) {
+                status = FreshnessStatus.PARTIAL;
+                complete = false;
+                continue;
+            }
+            marketValue = marketValue.add(position.shares().multiply(price.price(), MC), MC);
+            if (price.status() != FreshnessStatus.FRESH) status = FreshnessStatus.PARTIAL;
+        }
+        BigDecimal costBasis = calculation.positions().stream().map(FifoCalculator.Position::costBasis)
+                .reduce(BigDecimal.ZERO, (a, b) -> a.add(b, MC));
+        return new HistoryPoint(date, marketValue, netInvested, costBasis,
+                complete ? marketValue.subtract(costBasis, MC) : null, status);
+    }
+
+    private boolean isUsableSnapshot(PortfolioSnapshotEntity snapshot) {
+        return snapshot != null && snapshot.getSnapshotDate() != null
+                && snapshot.getMarketValue() != null && snapshot.getNetCashFlow() != null
+                && snapshot.getCostBasis() != null && snapshot.getDataStatus() != null;
+    }
+
+    private HistoryPoint historyPoint(PortfolioSnapshotEntity snapshot) {
+        return new HistoryPoint(snapshot.getSnapshotDate(), snapshot.getMarketValue(), snapshot.getNetCashFlow(),
+                snapshot.getCostBasis(), snapshot.getUnrealizedPnl(), snapshot.getDataStatus());
     }
 
     private Map<UUID, List<PriceDailyEntity>> historicalPrices(Collection<UUID> instrumentIds, LocalDate asOf,

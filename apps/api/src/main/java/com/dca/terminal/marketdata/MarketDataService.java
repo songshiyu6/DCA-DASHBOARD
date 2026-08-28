@@ -12,6 +12,7 @@ import com.dca.terminal.marketdata.MarketDataEntities.SplitEventEntity;
 import com.dca.terminal.marketdata.MarketDataEntities.FundNavDailyEntity;
 import com.dca.terminal.settings.AppSettingEntity;
 import com.dca.terminal.settings.AppSettingRepository;
+import com.dca.terminal.portfolio.PortfolioSnapshotInvalidator;
 import com.dca.terminal.marketdata.ProviderModels.EtfProfile;
 import com.dca.terminal.marketdata.ProviderModels.IntradayBar;
 import com.dca.terminal.marketdata.ProviderModels.PriceBar;
@@ -71,6 +72,7 @@ public class MarketDataService {
     private final ZoneId zone;
     private final Duration quoteTtl;
     private final int providerAttempts;
+    private final PortfolioSnapshotInvalidator snapshotInvalidator;
 
     public MarketDataService(InstrumentRepository instrumentRepository,
                              PriceDailyRepository priceRepository,
@@ -84,7 +86,8 @@ public class MarketDataService {
                              @Value("${dca.market-data.primary:YAHOO}") String primary,
                              @Value("${dca.market-data.fallback:TWELVE_DATA}") String fallback,
                              @Value("${dca.market-data.quote-ttl-seconds:60}") long quoteTtlSeconds,
-                             @Value("${dca.market-data.provider-attempts:2}") int providerAttempts) {
+                             @Value("${dca.market-data.provider-attempts:2}") int providerAttempts,
+                             PortfolioSnapshotInvalidator snapshotInvalidator) {
         this.instrumentRepository = instrumentRepository;
         this.priceRepository = priceRepository;
         this.quoteRepository = quoteRepository;
@@ -98,6 +101,7 @@ public class MarketDataService {
         this.zone = applicationZone;
         this.quoteTtl = Duration.ofSeconds(quoteTtlSeconds);
         this.providerAttempts = Math.max(1, providerAttempts);
+        this.snapshotInvalidator = snapshotInvalidator;
     }
 
     @Transactional(readOnly = true)
@@ -254,6 +258,7 @@ public class MarketDataService {
         try {
             ProviderCall<List<PriceBar>> result = callWithProvider(provider -> provider.getHistoricalPrices(instrument, from, today));
             LocalDate latestAvailable = latestStored.map(PriceDailyEntity::getTradeDate).orElse(null);
+            LocalDate earliestChangedDate = null;
             int saved = 0;
             for (PriceBar bar : result.value()) {
                 PriceDailyEntity entity = priceRepository.findByInstrumentIdAndTradeDateAndSource(
@@ -269,16 +274,19 @@ public class MarketDataService {
                 entity.setSource(result.provider().name());
                 priceRepository.save(entity);
                 saved++;
+                earliestChangedDate = earliest(earliestChangedDate, bar.tradeDate());
                 if (latestAvailable == null || bar.tradeDate().isAfter(latestAvailable)) latestAvailable = bar.tradeDate();
             }
-            int splits = syncSplits(instrument, providers.get(result.provider()), from, today);
+            SplitSaveResult splitResult = syncSplits(instrument, providers.get(result.provider()), from, today);
+            earliestChangedDate = earliest(earliestChangedDate, splitResult.earliestChangedDate());
             FreshnessStatus status = latestAvailable == null
                     ? FreshnessStatus.INSUFFICIENT_HISTORY : dailyFreshnessStatus(latestAvailable, today);
             instrument.setDataStatus(status);
             instrumentRepository.save(instrument);
+            if (earliestChangedDate != null) snapshotInvalidator.invalidateFrom(earliestChangedDate);
             log.info("market sync completed ticker={} source={} rows={} splits={} status={}",
-                    instrument.getSymbol(), result.provider(), saved, splits, status);
-            return new SyncResponse(instrument.getSymbol(), saved, splits, status, clock.instant(),
+                    instrument.getSymbol(), result.provider(), saved, splitResult.saved(), status);
+            return new SyncResponse(instrument.getSymbol(), saved, splitResult.saved(), status, clock.instant(),
                     syncMessage(status));
         } catch (ProviderException exception) {
             FreshnessStatus status = latestStored.isPresent() ? FreshnessStatus.STALE : FreshnessStatus.UNAVAILABLE;
@@ -327,6 +335,7 @@ public class MarketDataService {
 
             int saved = 0;
             LocalDate latestAvailable = null;
+            LocalDate earliestChangedDate = null;
             for (PriceBar bar : bars) {
                 PriceDailyEntity entity = priceRepository.findByInstrumentIdAndTradeDateAndSource(
                         instrument.getId(), bar.tradeDate(), result.provider().name()).orElseGet(PriceDailyEntity::new);
@@ -341,16 +350,19 @@ public class MarketDataService {
                 entity.setSource(result.provider().name());
                 priceRepository.save(entity);
                 saved++;
+                earliestChangedDate = earliest(earliestChangedDate, bar.tradeDate());
                 if (latestAvailable == null || bar.tradeDate().isAfter(latestAvailable)) latestAvailable = bar.tradeDate();
             }
-            int splits = saveSplits(instrument, result.provider(), splitEvents);
+            SplitSaveResult splitResult = saveSplits(instrument, result.provider(), splitEvents);
+            earliestChangedDate = earliest(earliestChangedDate, splitResult.earliestChangedDate());
             FreshnessStatus status = latestAvailable == null
                     ? FreshnessStatus.INSUFFICIENT_HISTORY : dailyFreshnessStatus(latestAvailable, today);
             instrument.setDataStatus(status);
             instrumentRepository.save(instrument);
+            if (earliestChangedDate != null) snapshotInvalidator.invalidateFrom(earliestChangedDate);
             log.info("market full resync completed ticker={} source={} rows={} splits={} status={}",
-                    instrument.getSymbol(), result.provider(), saved, splits, status);
-            return new SyncResponse(instrument.getSymbol(), saved, splits, status, clock.instant(), syncMessage(status));
+                    instrument.getSymbol(), result.provider(), saved, splitResult.saved(), status);
+            return new SyncResponse(instrument.getSymbol(), saved, splitResult.saved(), status, clock.instant(), syncMessage(status));
         } catch (ProviderException exception) {
             FreshnessStatus status = latestStored.isPresent() ? FreshnessStatus.STALE : FreshnessStatus.UNAVAILABLE;
             instrument.setDataStatus(status);
@@ -460,12 +472,13 @@ public class MarketDataService {
         return ProviderPriority.ordered(selection.primary(), selection.fallback());
     }
 
-    private int syncSplits(InstrumentEntity instrument, MarketDataProvider provider, LocalDate from, LocalDate to) {
+    private SplitSaveResult syncSplits(InstrumentEntity instrument, MarketDataProvider provider, LocalDate from, LocalDate to) {
         return saveSplits(instrument, provider.id(), provider.getSplits(instrument, from, to));
     }
 
-    private int saveSplits(InstrumentEntity instrument, ProviderId providerId, List<SplitEvent> events) {
+    private SplitSaveResult saveSplits(InstrumentEntity instrument, ProviderId providerId, List<SplitEvent> events) {
         int saved = 0;
+        LocalDate earliestChangedDate = null;
         List<ProviderId> priority = providerPriority();
         for (SplitEvent event : events) {
             SplitEventEntity entity = splitRepository.findByInstrumentIdAndEffectiveDate(
@@ -482,8 +495,13 @@ public class MarketDataService {
             entity.setSource(providerId.name());
             splitRepository.save(entity);
             saved++;
+            earliestChangedDate = earliest(earliestChangedDate, event.effectiveDate());
         }
-        return saved;
+        return new SplitSaveResult(saved, earliestChangedDate);
+    }
+
+    private LocalDate earliest(LocalDate current, LocalDate candidate) {
+        return current == null || (candidate != null && candidate.isBefore(current)) ? candidate : current;
     }
 
     private QuoteResponse toQuoteResponse(InstrumentEntity instrument, QuoteLatestEntity entity) {
@@ -642,4 +660,6 @@ public class MarketDataService {
     private record ProviderSelection(ProviderId primary, ProviderId fallback) { }
 
     private record ProviderCall<T>(T value, ProviderId provider) { }
+
+    private record SplitSaveResult(int saved, LocalDate earliestChangedDate) { }
 }

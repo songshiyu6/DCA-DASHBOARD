@@ -88,6 +88,157 @@ class PortfolioServiceCorrectnessTest {
     }
 
     @Test
+    void rebuildsFullHistoryWhenOnlyTodaySnapshotExists() {
+        UUID instrumentId = UUID.randomUUID();
+        InstrumentEntity instrument = mock(InstrumentEntity.class);
+        when(instrument.getId()).thenReturn(instrumentId);
+        when(instrument.getSymbol()).thenReturn("VOO");
+        when(instrument.getName()).thenReturn("Vanguard S&P 500 ETF");
+
+        LocalDate firstTradeDate = LocalDate.of(2026, 8, 1);
+        LocalDate today = LocalDate.of(2026, 8, 27);
+        TransactionEntity buy = new TransactionEntity();
+        buy.setInstrument(instrument);
+        buy.setTransactionType(TransactionType.BUY);
+        buy.setTradeDate(firstTradeDate);
+        buy.setQuantity(new BigDecimal("1"));
+        buy.setUnitPrice(new BigDecimal("100"));
+        buy.setFee(BigDecimal.ZERO);
+        buy.setLedgerOrder(1L);
+
+        PortfolioSnapshotEntity todaySnapshot = new PortfolioSnapshotEntity();
+        todaySnapshot.setSnapshotDate(today);
+        todaySnapshot.setMarketValue(new BigDecimal("210"));
+        todaySnapshot.setCostBasis(new BigDecimal("100"));
+        todaySnapshot.setNetCashFlow(new BigDecimal("100"));
+        todaySnapshot.setUnrealizedPnl(new BigDecimal("110"));
+        todaySnapshot.setDataStatus(FreshnessStatus.FRESH);
+
+        TransactionRepository transactions = mock(TransactionRepository.class);
+        when(transactions.findAllByOrderByTradeDateAscLedgerOrderAscIdAsc()).thenReturn(List.of(buy));
+        PortfolioSnapshotRepository snapshots = mock(PortfolioSnapshotRepository.class);
+        when(snapshots.findAllBySnapshotDateBetweenOrderBySnapshotDateAsc(any(), any()))
+                .thenReturn(List.of(todaySnapshot));
+        SplitEventRepository splits = mock(SplitEventRepository.class);
+        when(splits.findAllByInstrumentIdInAndEffectiveDateLessThanEqualOrderByInstrumentIdAscEffectiveDateAsc(
+                anyCollection(), any(LocalDate.class))).thenReturn(List.of());
+        PriceDailyRepository prices = mock(PriceDailyRepository.class);
+        when(prices.findAllByInstrumentIdInAndTradeDateLessThanEqualOrderByInstrumentIdAscTradeDateDesc(
+                anyCollection(), any(LocalDate.class))).thenReturn(List.of(
+                dailyPrice(instrument, "2026-08-01", "100"),
+                dailyPrice(instrument, "2026-08-27", "210")));
+        MarketDataService marketData = mock(MarketDataService.class);
+        when(marketData.providerPriority()).thenReturn(List.of(ProviderId.YAHOO, ProviderId.TWELVE_DATA));
+
+        PortfolioService service = new PortfolioService(transactions, mock(InstrumentRepository.class), prices,
+                mock(QuoteLatestRepository.class), splits, snapshots, mock(PlanRepository.class), mock(AssetRepository.class),
+                marketData, Clock.fixed(Instant.parse("2026-08-27T12:00:00Z"), ZoneOffset.UTC), ZoneOffset.UTC);
+
+        List<PortfolioDtos.HistoryPoint> history = service.history("1M");
+
+        assertEquals(27, history.size());
+        assertEquals(firstTradeDate, history.getFirst().date());
+        assertEquals(today, history.getLast().date());
+        assertEquals(history.size(), history.stream().map(point -> point.date()).distinct().count());
+    }
+
+    @Test
+    void mergesSnapshotsWithReplayForMissingDatesInSortedUniqueOrder() {
+        UUID instrumentId = UUID.randomUUID();
+        InstrumentEntity instrument = mock(InstrumentEntity.class);
+        when(instrument.getId()).thenReturn(instrumentId);
+        when(instrument.getSymbol()).thenReturn("VOO");
+        when(instrument.getName()).thenReturn("Vanguard S&P 500 ETF");
+
+        TransactionEntity buy = new TransactionEntity();
+        buy.setInstrument(instrument);
+        buy.setTransactionType(TransactionType.BUY);
+        buy.setTradeDate(LocalDate.of(2026, 8, 1));
+        buy.setQuantity(new BigDecimal("1"));
+        buy.setUnitPrice(new BigDecimal("100"));
+        buy.setFee(BigDecimal.ZERO);
+        buy.setLedgerOrder(1L);
+
+        PortfolioSnapshotEntity augustFirst = snapshot("2026-08-01", "100", "100", "100", "0", FreshnessStatus.FRESH);
+        PortfolioSnapshotEntity augustThird = snapshot("2026-08-03", "110", "100", "100", "10", FreshnessStatus.FRESH);
+        PortfolioSnapshotEntity duplicateAugustThird = snapshot("2026-08-03", "999", "999", "999", "999", FreshnessStatus.FRESH);
+
+        TransactionRepository transactions = mock(TransactionRepository.class);
+        when(transactions.findAllByOrderByTradeDateAscLedgerOrderAscIdAsc()).thenReturn(List.of(buy));
+        PortfolioSnapshotRepository snapshots = mock(PortfolioSnapshotRepository.class);
+        when(snapshots.findAllBySnapshotDateBetweenOrderBySnapshotDateAsc(any(), any()))
+                .thenReturn(List.of(augustThird, duplicateAugustThird, augustFirst));
+        SplitEventRepository splits = mock(SplitEventRepository.class);
+        when(splits.findAllByInstrumentIdInAndEffectiveDateLessThanEqualOrderByInstrumentIdAscEffectiveDateAsc(
+                anyCollection(), any(LocalDate.class))).thenReturn(List.of());
+        PriceDailyRepository prices = mock(PriceDailyRepository.class);
+        when(prices.findAllByInstrumentIdInAndTradeDateLessThanEqualOrderByInstrumentIdAscTradeDateDesc(
+                anyCollection(), any(LocalDate.class))).thenReturn(List.of(
+                dailyPrice(instrument, "2026-08-01", "100"),
+                dailyPrice(instrument, "2026-08-03", "110"),
+                dailyPrice(instrument, "2026-08-27", "120")));
+        MarketDataService marketData = mock(MarketDataService.class);
+        when(marketData.providerPriority()).thenReturn(List.of(ProviderId.YAHOO, ProviderId.TWELVE_DATA));
+
+        PortfolioService service = new PortfolioService(transactions, mock(InstrumentRepository.class), prices,
+                mock(QuoteLatestRepository.class), splits, snapshots, mock(PlanRepository.class), mock(AssetRepository.class),
+                marketData, Clock.fixed(Instant.parse("2026-08-27T12:00:00Z"), ZoneOffset.UTC), ZoneOffset.UTC);
+
+        List<PortfolioDtos.HistoryPoint> history = service.history("1M");
+
+        assertEquals(27, history.size());
+        assertEquals(history.size(), history.stream().map(PortfolioDtos.HistoryPoint::date).distinct().count());
+        assertEquals(history.stream().map(PortfolioDtos.HistoryPoint::date).sorted().toList(),
+                history.stream().map(PortfolioDtos.HistoryPoint::date).toList());
+        assertDecimal("100", history.stream().filter(point -> point.date().equals(LocalDate.of(2026, 8, 2)))
+                .findFirst().orElseThrow().marketValue());
+        assertDecimal("110", history.stream().filter(point -> point.date().equals(LocalDate.of(2026, 8, 3)))
+                .findFirst().orElseThrow().marketValue());
+    }
+
+    @Test
+    void keepsMissingHistoricalPricePartialWithNullUnrealizedPnl() {
+        UUID instrumentId = UUID.randomUUID();
+        InstrumentEntity instrument = mock(InstrumentEntity.class);
+        when(instrument.getId()).thenReturn(instrumentId);
+        when(instrument.getSymbol()).thenReturn("VOO");
+        when(instrument.getName()).thenReturn("Vanguard S&P 500 ETF");
+
+        TransactionEntity buy = new TransactionEntity();
+        buy.setInstrument(instrument);
+        buy.setTransactionType(TransactionType.BUY);
+        buy.setTradeDate(LocalDate.of(2026, 8, 1));
+        buy.setQuantity(new BigDecimal("1"));
+        buy.setUnitPrice(new BigDecimal("100"));
+        buy.setFee(BigDecimal.ZERO);
+        buy.setLedgerOrder(1L);
+
+        TransactionRepository transactions = mock(TransactionRepository.class);
+        when(transactions.findAllByOrderByTradeDateAscLedgerOrderAscIdAsc()).thenReturn(List.of(buy));
+        PortfolioSnapshotRepository snapshots = mock(PortfolioSnapshotRepository.class);
+        when(snapshots.findAllBySnapshotDateBetweenOrderBySnapshotDateAsc(any(), any())).thenReturn(List.of());
+        SplitEventRepository splits = mock(SplitEventRepository.class);
+        when(splits.findAllByInstrumentIdInAndEffectiveDateLessThanEqualOrderByInstrumentIdAscEffectiveDateAsc(
+                anyCollection(), any(LocalDate.class))).thenReturn(List.of());
+        PriceDailyRepository prices = mock(PriceDailyRepository.class);
+        when(prices.findAllByInstrumentIdInAndTradeDateLessThanEqualOrderByInstrumentIdAscTradeDateDesc(
+                anyCollection(), any(LocalDate.class))).thenReturn(List.of(dailyPrice(instrument, "2026-08-27", "210")));
+        MarketDataService marketData = mock(MarketDataService.class);
+        when(marketData.providerPriority()).thenReturn(List.of(ProviderId.YAHOO, ProviderId.TWELVE_DATA));
+
+        PortfolioService service = new PortfolioService(transactions, mock(InstrumentRepository.class), prices,
+                mock(QuoteLatestRepository.class), splits, snapshots, mock(PlanRepository.class), mock(AssetRepository.class),
+                marketData, Clock.fixed(Instant.parse("2026-08-27T12:00:00Z"), ZoneOffset.UTC), ZoneOffset.UTC);
+
+        PortfolioDtos.HistoryPoint first = service.history("1M").getFirst();
+
+        assertEquals(FreshnessStatus.PARTIAL, first.status());
+        assertEquals(0, first.marketValue().signum());
+        assertDecimal("100", first.costBasis());
+        assertNull(first.unrealizedPnl());
+    }
+
+    @Test
     void replaysHistoryIncrementallyWithoutUsingAStarterTransactionOrFuturePrice() {
         UUID instrumentId = UUID.randomUUID();
         InstrumentEntity instrument = mock(InstrumentEntity.class);
@@ -156,6 +307,18 @@ class PortfolioServiceCorrectnessTest {
         price.setAdjustedClose(new BigDecimal(close));
         price.setSource("YAHOO");
         return price;
+    }
+
+    private static PortfolioSnapshotEntity snapshot(String date, String marketValue, String netCashFlow,
+                                                    String costBasis, String unrealizedPnl, FreshnessStatus status) {
+        PortfolioSnapshotEntity snapshot = new PortfolioSnapshotEntity();
+        snapshot.setSnapshotDate(LocalDate.parse(date));
+        snapshot.setMarketValue(new BigDecimal(marketValue));
+        snapshot.setNetCashFlow(new BigDecimal(netCashFlow));
+        snapshot.setCostBasis(new BigDecimal(costBasis));
+        snapshot.setUnrealizedPnl(new BigDecimal(unrealizedPnl));
+        snapshot.setDataStatus(status);
+        return snapshot;
     }
 
     private static void assertDecimal(String expected, BigDecimal actual) {

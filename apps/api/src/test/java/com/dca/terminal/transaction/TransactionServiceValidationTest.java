@@ -6,6 +6,7 @@ import com.dca.terminal.instrument.InstrumentRepository;
 import com.dca.terminal.marketdata.MarketDataService;
 import com.dca.terminal.marketdata.SplitEventRepository;
 import com.dca.terminal.plan.PlanService;
+import com.dca.terminal.portfolio.PortfolioSnapshotInvalidator;
 import com.dca.terminal.portfolio.PortfolioService;
 import java.io.IOException;
 import java.util.List;
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockMultipartFile;
 
 import static com.dca.terminal.transaction.TransactionDtos.CsvCommitRequest;
+import static com.dca.terminal.transaction.TransactionDtos.CsvRowRequest;
 import static com.dca.terminal.transaction.TransactionDtos.TransactionRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -23,6 +25,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -102,10 +105,124 @@ class TransactionServiceValidationTest {
                 java.time.LocalDate.of(2026, 8, 5));
     }
 
+    @Test
+    void invalidatesFromCreatedTradeDateAfterLedgerValidation() {
+        InstrumentEntity instrument = instrument("VOO");
+        InstrumentRepository instruments = mock(InstrumentRepository.class);
+        when(instruments.findBySymbolIgnoreCase("VOO")).thenReturn(Optional.of(instrument));
+        TransactionRepository transactions = mock(TransactionRepository.class);
+        when(transactions.saveAndFlush(any(TransactionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(transactions.findAllByOrderByTradeDateAscLedgerOrderAscIdAsc()).thenReturn(List.of());
+        PortfolioSnapshotInvalidator invalidator = mock(PortfolioSnapshotInvalidator.class);
+        PortfolioService portfolio = mock(PortfolioService.class);
+        TransactionService service = service(instruments, transactions, mock(PlanService.class), portfolio, invalidator);
+        java.time.LocalDate tradeDate = java.time.LocalDate.of(2026, 8, 1);
+
+        service.create(new TransactionRequest("VOO", TransactionType.BUY, tradeDate,
+                new java.math.BigDecimal("1"), new java.math.BigDecimal("100"), null,
+                java.math.BigDecimal.ZERO, null, null));
+
+        verify(invalidator).invalidateFrom(tradeDate);
+        verify(portfolio).rebuildTodaySnapshot();
+    }
+
+    @Test
+    void updateInvalidatesFromTheEarlierOfTheOldAndNewTradeDates() {
+        InstrumentEntity instrument = instrument("VOO");
+        InstrumentRepository instruments = mock(InstrumentRepository.class);
+        when(instruments.findBySymbolIgnoreCase("VOO")).thenReturn(Optional.of(instrument));
+        TransactionEntity existing = new TransactionEntity();
+        existing.setInstrument(instrument);
+        existing.setTransactionType(TransactionType.BUY);
+        existing.setTradeDate(java.time.LocalDate.of(2026, 8, 20));
+        existing.setQuantity(new java.math.BigDecimal("1"));
+        existing.setUnitPrice(new java.math.BigDecimal("100"));
+        existing.setFee(java.math.BigDecimal.ZERO);
+        TransactionRepository transactions = mock(TransactionRepository.class);
+        when(transactions.findById(any())).thenReturn(Optional.of(existing));
+        when(transactions.saveAndFlush(any(TransactionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(transactions.findAllByOrderByTradeDateAscLedgerOrderAscIdAsc()).thenReturn(List.of());
+        PortfolioSnapshotInvalidator invalidator = mock(PortfolioSnapshotInvalidator.class);
+        TransactionService service = service(instruments, transactions, mock(PlanService.class),
+                mock(PortfolioService.class), invalidator);
+        java.time.LocalDate newDate = java.time.LocalDate.of(2026, 8, 5);
+
+        service.update(UUID.randomUUID(), new TransactionRequest("VOO", TransactionType.BUY, newDate,
+                new java.math.BigDecimal("1"), new java.math.BigDecimal("100"), null,
+                java.math.BigDecimal.ZERO, null, null));
+
+        verify(invalidator).invalidateFrom(newDate);
+    }
+
+    @Test
+    void deleteInvalidatesFromTheDeletedTradeDate() {
+        InstrumentEntity instrument = instrument("VOO");
+        TransactionEntity existing = new TransactionEntity();
+        existing.setInstrument(instrument);
+        existing.setTransactionType(TransactionType.BUY);
+        java.time.LocalDate tradeDate = java.time.LocalDate.of(2026, 8, 10);
+        existing.setTradeDate(tradeDate);
+        TransactionRepository transactions = mock(TransactionRepository.class);
+        when(transactions.findById(any())).thenReturn(Optional.of(existing));
+        when(transactions.findAllByOrderByTradeDateAscLedgerOrderAscIdAsc()).thenReturn(List.of());
+        PortfolioSnapshotInvalidator invalidator = mock(PortfolioSnapshotInvalidator.class);
+        TransactionService service = service(mock(InstrumentRepository.class), transactions, mock(PlanService.class),
+                mock(PortfolioService.class), invalidator);
+
+        service.delete(UUID.randomUUID());
+
+        verify(transactions).delete(existing);
+        verify(invalidator).invalidateFrom(tradeDate);
+    }
+
+    @Test
+    void csvCommitInvalidatesFromTheEarliestImportedTradeDate() {
+        InstrumentEntity instrument = instrument("VOO");
+        InstrumentRepository instruments = mock(InstrumentRepository.class);
+        when(instruments.findBySymbolIgnoreCase("VOO")).thenReturn(Optional.of(instrument));
+        TransactionRepository transactions = mock(TransactionRepository.class);
+        when(transactions.save(any(TransactionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(transactions.findAllByOrderByTradeDateAscLedgerOrderAscIdAsc()).thenReturn(List.of());
+        PortfolioSnapshotInvalidator invalidator = mock(PortfolioSnapshotInvalidator.class);
+        TransactionService service = service(instruments, transactions, mock(PlanService.class),
+                mock(PortfolioService.class), invalidator);
+        UUID batchId = UUID.randomUUID();
+
+        service.commit(new CsvCommitRequest(batchId, List.of(
+                new CsvRowRequest("2026-08-20", "BUY", "VOO", "1", "100", "0", null, null, null),
+                new CsvRowRequest("2026-08-05", "BUY", "VOO", "1", "100", "0", null, null, null))));
+
+        verify(invalidator).invalidateFrom(java.time.LocalDate.of(2026, 8, 5));
+    }
+
+    @Test
+    void invalidCsvBatchDoesNotPersistOrInvalidate() {
+        InstrumentEntity instrument = instrument("VOO");
+        InstrumentRepository instruments = mock(InstrumentRepository.class);
+        when(instruments.findBySymbolIgnoreCase("VOO")).thenReturn(Optional.of(instrument));
+        TransactionRepository transactions = mock(TransactionRepository.class);
+        PortfolioSnapshotInvalidator invalidator = mock(PortfolioSnapshotInvalidator.class);
+        TransactionService service = service(instruments, transactions, mock(PlanService.class),
+                mock(PortfolioService.class), invalidator);
+
+        assertThrows(DomainException.class, () -> service.commit(new CsvCommitRequest(UUID.randomUUID(), List.of(
+                new CsvRowRequest("2026-08-05", "BUY", "VOO", "1", "100", "0", null, null, null),
+                new CsvRowRequest("2026-08-06", "INVALID", "VOO", "1", "100", "0", null, null, null)))));
+
+        verify(transactions, never()).save(any(TransactionEntity.class));
+        verify(invalidator, never()).invalidateFrom(any());
+    }
+
     private static TransactionService service(InstrumentRepository instruments, TransactionRepository transactions,
                                                PlanService plans, PortfolioService portfolio) {
+        return service(instruments, transactions, plans, portfolio, mock(PortfolioSnapshotInvalidator.class));
+    }
+
+    private static TransactionService service(InstrumentRepository instruments, TransactionRepository transactions,
+                                               PlanService plans, PortfolioService portfolio,
+                                               PortfolioSnapshotInvalidator invalidator) {
         return new TransactionService(transactions, instruments, mock(SplitEventRepository.class),
-                mock(MarketDataService.class), plans, portfolio);
+                mock(MarketDataService.class), plans, portfolio, invalidator);
     }
 
     private static InstrumentEntity instrument(String symbol) {

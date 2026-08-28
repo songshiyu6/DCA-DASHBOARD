@@ -4,6 +4,7 @@ import com.dca.terminal.common.DomainException;
 import com.dca.terminal.common.FreshnessStatus;
 import com.dca.terminal.instrument.InstrumentEntity;
 import com.dca.terminal.instrument.InstrumentRepository;
+import com.dca.terminal.portfolio.PortfolioSnapshotInvalidator;
 import com.dca.terminal.marketdata.MarketDataEntities.PriceDailyEntity;
 import com.dca.terminal.marketdata.MarketDataEntities.SplitEventEntity;
 import com.dca.terminal.marketdata.MarketDataDtos.SyncResponse;
@@ -130,7 +131,8 @@ class MarketDataServiceCorrectnessTest {
 
         MarketDataService marketData = new MarketDataService(mock(InstrumentRepository.class),
                 mock(PriceDailyRepository.class), quotes, mock(SplitEventRepository.class), nav, settings(),
-                List.of(yahoo), CLOCK, ZoneOffset.UTC, "YAHOO", "TWELVE_DATA", 60, 1);
+                List.of(yahoo), CLOCK, ZoneOffset.UTC, "YAHOO", "TWELVE_DATA", 60, 1,
+                mock(PortfolioSnapshotInvalidator.class));
 
         var response = marketData.latestQuote(instrument);
 
@@ -207,6 +209,30 @@ class MarketDataServiceCorrectnessTest {
         verify(prices).save(saved.capture());
         assertEquals(bd("505"), saved.getValue().getClose());
         assertNull(saved.getValue().getAdjustedClose());
+    }
+
+    @Test
+    void invalidatesSnapshotsFromTheEarliestSuccessfulHistoricalUpsert() {
+        UUID instrumentId = UUID.randomUUID();
+        InstrumentEntity instrument = mock(InstrumentEntity.class);
+        when(instrument.getId()).thenReturn(instrumentId);
+        when(instrument.getSymbol()).thenReturn("VOO");
+        InstrumentRepository instruments = mock(InstrumentRepository.class);
+        when(instruments.save(any(InstrumentEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        PriceDailyRepository prices = mock(PriceDailyRepository.class);
+        when(prices.findTopByInstrumentIdOrderByTradeDateDesc(instrumentId)).thenReturn(Optional.empty());
+        when(prices.findByInstrumentIdAndTradeDateAndSource(any(), any(), any())).thenReturn(Optional.empty());
+        when(prices.save(any(PriceDailyEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        MarketDataProvider yahoo = provider(ProviderId.YAHOO);
+        when(yahoo.getHistoricalPrices(any(), any(), any())).thenReturn(List.of(
+                new PriceBar(LocalDate.of(2026, 8, 27), bd("210"), bd("211"), bd("209"), bd("210"), bd("210"), 1L),
+                new PriceBar(LocalDate.of(2026, 8, 1), bd("100"), bd("101"), bd("99"), bd("100"), bd("100"), 1L)));
+        when(yahoo.getSplits(any(), any(), any())).thenReturn(List.of());
+        PortfolioSnapshotInvalidator invalidator = mock(PortfolioSnapshotInvalidator.class);
+
+        service(instruments, prices, yahoo, CLOCK, invalidator).sync(instrument);
+
+        verify(invalidator).invalidateFrom(LocalDate.of(2026, 8, 1));
     }
 
     @Test
@@ -386,7 +412,7 @@ class MarketDataServiceCorrectnessTest {
 
         MarketDataService service = new MarketDataService(instruments, prices, mock(QuoteLatestRepository.class),
                 splits, mock(FundNavDailyRepository.class), settings(), List.of(fallback), CLOCK,
-                ZoneOffset.UTC, "YAHOO", "TWELVE_DATA", 60, 1);
+                ZoneOffset.UTC, "YAHOO", "TWELVE_DATA", 60, 1, mock(PortfolioSnapshotInvalidator.class));
         service.sync(instrument);
 
         verify(splits, never()).save(any(SplitEventEntity.class));
@@ -399,7 +425,7 @@ class MarketDataServiceCorrectnessTest {
         MarketDataService service = new MarketDataService(mock(InstrumentRepository.class), mock(PriceDailyRepository.class),
                 mock(QuoteLatestRepository.class), mock(SplitEventRepository.class), mock(FundNavDailyRepository.class),
                 settings, List.of(provider(ProviderId.YAHOO), provider(ProviderId.TWELVE_DATA)), CLOCK, ZoneOffset.UTC,
-                "YAHOO", "TWELVE_DATA", 60, 1);
+                "YAHOO", "TWELVE_DATA", 60, 1, mock(PortfolioSnapshotInvalidator.class));
 
         assertEquals("NONE", service.fallbackProvider());
         assertEquals(ProviderId.YAHOO, service.providerPriority().getFirst());
@@ -456,9 +482,15 @@ class MarketDataServiceCorrectnessTest {
 
     private static MarketDataService service(InstrumentRepository instruments, PriceDailyRepository prices,
                                              MarketDataProvider provider, Clock clock) {
+        return service(instruments, prices, provider, clock, mock(PortfolioSnapshotInvalidator.class));
+    }
+
+    private static MarketDataService service(InstrumentRepository instruments, PriceDailyRepository prices,
+                                             MarketDataProvider provider, Clock clock,
+                                             PortfolioSnapshotInvalidator invalidator) {
         return new MarketDataService(instruments, prices, mock(QuoteLatestRepository.class),
                 mock(SplitEventRepository.class), mock(FundNavDailyRepository.class), settings(), List.of(provider),
-                clock, ZoneOffset.UTC, "YAHOO", "TWELVE_DATA", 60, 1);
+                clock, ZoneOffset.UTC, "YAHOO", "TWELVE_DATA", 60, 1, invalidator);
     }
 
     private static AppSettingRepository settings(AppSettingEntity... values) {

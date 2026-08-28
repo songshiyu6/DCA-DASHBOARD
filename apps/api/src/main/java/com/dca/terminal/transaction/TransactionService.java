@@ -6,6 +6,7 @@ import com.dca.terminal.instrument.InstrumentRepository;
 import com.dca.terminal.marketdata.MarketDataEntities.SplitEventEntity;
 import com.dca.terminal.marketdata.SplitEventRepository;
 import com.dca.terminal.marketdata.MarketDataService;
+import com.dca.terminal.portfolio.PortfolioSnapshotInvalidator;
 import com.dca.terminal.portfolio.PortfolioService;
 import com.dca.terminal.plan.PlanService;
 import jakarta.validation.Valid;
@@ -46,16 +47,19 @@ public class TransactionService {
     private final MarketDataService marketDataService;
     private final PlanService planService;
     private final PortfolioService portfolioService;
+    private final PortfolioSnapshotInvalidator snapshotInvalidator;
 
     public TransactionService(TransactionRepository transactionRepository, InstrumentRepository instrumentRepository,
                               SplitEventRepository splitEventRepository, MarketDataService marketDataService,
-                              PlanService planService, PortfolioService portfolioService) {
+                              PlanService planService, PortfolioService portfolioService,
+                              PortfolioSnapshotInvalidator snapshotInvalidator) {
         this.transactionRepository = transactionRepository;
         this.instrumentRepository = instrumentRepository;
         this.splitEventRepository = splitEventRepository;
         this.marketDataService = marketDataService;
         this.planService = planService;
         this.portfolioService = portfolioService;
+        this.snapshotInvalidator = snapshotInvalidator;
     }
 
     @Transactional(readOnly = true)
@@ -77,6 +81,7 @@ public class TransactionService {
     public TransactionEntity create(@Valid TransactionRequest request) {
         TransactionEntity entity = transactionRepository.saveAndFlush(toEntity(request, null));
         validateLedger();
+        snapshotInvalidator.invalidateFrom(entity.getTradeDate());
         portfolioService.rebuildTodaySnapshot();
         return entity;
     }
@@ -84,9 +89,11 @@ public class TransactionService {
     @Transactional
     public TransactionEntity update(UUID id, @Valid TransactionRequest request) {
         TransactionEntity entity = get(id);
+        LocalDate oldTradeDate = entity.getTradeDate();
         apply(entity, request);
         TransactionEntity saved = transactionRepository.saveAndFlush(entity);
         validateLedger();
+        snapshotInvalidator.invalidateFrom(oldTradeDate.isBefore(saved.getTradeDate()) ? oldTradeDate : saved.getTradeDate());
         portfolioService.rebuildTodaySnapshot();
         return saved;
     }
@@ -94,9 +101,11 @@ public class TransactionService {
     @Transactional
     public void delete(UUID id) {
         TransactionEntity entity = get(id);
+        LocalDate oldTradeDate = entity.getTradeDate();
         transactionRepository.delete(entity);
         transactionRepository.flush();
         validateLedger();
+        snapshotInvalidator.invalidateFrom(oldTradeDate);
         portfolioService.rebuildTodaySnapshot();
     }
 
@@ -157,6 +166,7 @@ public class TransactionService {
         }
         if (!errors.isEmpty()) throw invalidCsv("CSV row invalid: " + String.join("; ", errors));
 
+        LocalDate batchStart = parsed.stream().map(TransactionRequest::tradeDate).min(LocalDate::compareTo).orElseThrow();
         List<UUID> ids = new ArrayList<>();
         for (int index = 0; index < request.rows().size(); index++) {
             CsvRowRequest row = request.rows().get(index);
@@ -167,6 +177,7 @@ public class TransactionService {
         }
         transactionRepository.flush();
         validateLedger();
+        snapshotInvalidator.invalidateFrom(batchStart);
         portfolioService.rebuildTodaySnapshot();
         return new CsvCommitResponse(request.batchId(), ids.size(), ids);
     }

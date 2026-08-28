@@ -40,6 +40,7 @@ export function PortfolioChart({ data }: { data: PortfolioHistoryPoint[] }) {
     const grid = styles.getPropertyValue('--line-subtle').trim() || '#27303d'
     const accent = styles.getPropertyValue('--accent').trim() || '#7ab8ff'
     const positive = styles.getPropertyValue('--positive').trim() || '#73d3a1'
+    const liveIndex = points[points.length - 1]?.date.includes('T') ? points.length - 1 : -1
     chart.setOption({
       animationDuration: 450,
       grid: { left: 8, right: 10, top: 22, bottom: 8, containLabel: true },
@@ -48,7 +49,7 @@ export function PortfolioChart({ data }: { data: PortfolioHistoryPoint[] }) {
       xAxis: { type: 'category', boundaryGap: false, data: points.map((point) => point.date.includes('T') ? point.date.slice(0, 10) : point.date), axisLine: { lineStyle: { color: grid } }, axisLabel: { color: text, fontSize: 10, hideOverlap: true }, axisTick: { show: false } },
       yAxis: { type: 'value', scale: true, splitNumber: 3, axisLabel: { color: text, fontSize: 10, formatter: (value: number) => formatMoney(String(value), 'USD', 0) }, splitLine: { lineStyle: { color: grid, type: 'dashed' } }, axisLine: { show: false } },
       series: [
-        { name: 'Market value', type: 'line', smooth: 0.25, showSymbol: false, connectNulls: false, data: points.map((point) => point.marketValue), lineStyle: { width: 2, color: accent }, itemStyle: { color: accent }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(122,184,255,.16)' }, { offset: 1, color: 'rgba(122,184,255,0)' }]) } },
+        { name: 'Market value', type: 'line', smooth: 0.25, showSymbol: true, symbol: 'circle', connectNulls: false, data: points.map((point, index) => ({ value: point.marketValue, symbolSize: index === liveIndex ? 7 : 0 })), lineStyle: { width: 2, color: accent }, itemStyle: { color: accent, borderColor: '#ffffff', borderWidth: 1 }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(122,184,255,.16)' }, { offset: 1, color: 'rgba(122,184,255,0)' }]) } },
         { name: 'Net investment', type: 'line', smooth: 0.2, showSymbol: false, data: points.map((point) => point.netInvested), lineStyle: { width: 1.5, type: 'dashed', color: positive }, itemStyle: { color: positive } },
       ],
     })

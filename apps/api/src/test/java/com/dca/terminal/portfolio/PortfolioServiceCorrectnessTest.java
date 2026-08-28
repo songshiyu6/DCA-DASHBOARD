@@ -140,6 +140,18 @@ class PortfolioServiceCorrectnessTest {
         assertEquals(firstTradeDate, history.getFirst().date());
         assertEquals(today, history.getLast().date());
         assertEquals(history.size(), history.stream().map(point -> point.date()).distinct().count());
+
+        PortfolioSnapshotRepository emptySnapshots = mock(PortfolioSnapshotRepository.class);
+        when(emptySnapshots.findAllBySnapshotDateBetweenOrderBySnapshotDateAsc(any(), any())).thenReturn(List.of());
+        PortfolioService liveReplayService = new PortfolioService(transactions, mock(InstrumentRepository.class), prices,
+                mock(QuoteLatestRepository.class), splits, emptySnapshots, mock(PlanRepository.class), mock(AssetRepository.class),
+                marketData, Clock.fixed(Instant.parse("2026-08-27T12:00:00Z"), ZoneOffset.UTC), ZoneOffset.UTC);
+        PortfolioDtos.HistoryPoint snapshotPoint = history.getLast();
+        PortfolioDtos.HistoryPoint livePoint = liveReplayService.history("1M").getLast();
+        assertSameDecimal(snapshotPoint.marketValue(), livePoint.marketValue());
+        assertSameDecimal(snapshotPoint.costBasis(), livePoint.costBasis());
+        assertSameDecimal(snapshotPoint.netInvested(), livePoint.netInvested());
+        assertEquals(snapshotPoint.status(), livePoint.status());
     }
 
     @Test
@@ -233,7 +245,7 @@ class PortfolioServiceCorrectnessTest {
         PortfolioDtos.HistoryPoint first = service.history("1M").getFirst();
 
         assertEquals(FreshnessStatus.PARTIAL, first.status());
-        assertEquals(0, first.marketValue().signum());
+        assertNull(first.marketValue());
         assertDecimal("100", first.costBasis());
         assertNull(first.unrealizedPnl());
     }
@@ -323,5 +335,9 @@ class PortfolioServiceCorrectnessTest {
 
     private static void assertDecimal(String expected, BigDecimal actual) {
         assertEquals(0, new BigDecimal(expected).compareTo(actual));
+    }
+
+    private static void assertSameDecimal(BigDecimal expected, BigDecimal actual) {
+        assertEquals(0, expected.compareTo(actual));
     }
 }

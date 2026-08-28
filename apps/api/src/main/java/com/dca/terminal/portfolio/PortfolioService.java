@@ -372,7 +372,7 @@ public class PortfolioService {
         }
         BigDecimal costBasis = calculation.positions().stream().map(FifoCalculator.Position::costBasis)
                 .reduce(BigDecimal.ZERO, (a, b) -> a.add(b, MC));
-        return new HistoryPoint(date, marketValue, netInvested, costBasis,
+        return new HistoryPoint(date, complete ? marketValue : null, netInvested, costBasis,
                 complete ? marketValue.subtract(costBasis, MC) : null, status);
     }
 

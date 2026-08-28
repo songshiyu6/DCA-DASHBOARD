@@ -27,9 +27,12 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.unit.DataSize;
 import org.springframework.web.multipart.MultipartFile;
 
 import static com.dca.terminal.transaction.TransactionDtos.CsvCommitRequest;
@@ -42,7 +45,11 @@ import static com.dca.terminal.transaction.TransactionDtos.TransactionResponse;
 
 @Service
 public class TransactionService {
-    private static final Object LEDGER_ORDER_LOCK = new Object();
+    private static final long DEFAULT_MAX_CSV_BYTES = 1_048_576L;
+    private static final int DEFAULT_MAX_CSV_ROWS = 10_000;
+    private static final int DEFAULT_MAX_CSV_FIELD_LENGTH = 1_000;
+    private static final Set<String> KNOWN_CSV_FIELDS = Set.of(
+            "date", "type", "symbol", "quantity", "price", "fee", "amount", "plancycleid", "plan_cycle_id", "notes");
     private final TransactionRepository transactionRepository;
     private final InstrumentRepository instrumentRepository;
     private final SplitEventRepository splitEventRepository;
@@ -52,11 +59,37 @@ public class TransactionService {
     private final PortfolioSnapshotInvalidator snapshotInvalidator;
     private final Clock clock;
     private final ZoneId zone;
+    private final long maxCsvBytes;
+    private final int maxCsvRows;
+    private final int maxCsvFieldLength;
 
     public TransactionService(TransactionRepository transactionRepository, InstrumentRepository instrumentRepository,
                               SplitEventRepository splitEventRepository, MarketDataService marketDataService,
                               PlanService planService, PortfolioService portfolioService,
                               PortfolioSnapshotInvalidator snapshotInvalidator, Clock clock, ZoneId zone) {
+        this(transactionRepository, instrumentRepository, splitEventRepository, marketDataService, planService,
+                portfolioService, snapshotInvalidator, clock, zone, DEFAULT_MAX_CSV_BYTES, DEFAULT_MAX_CSV_ROWS,
+                DEFAULT_MAX_CSV_FIELD_LENGTH);
+    }
+
+    @Autowired
+    public TransactionService(TransactionRepository transactionRepository, InstrumentRepository instrumentRepository,
+                              SplitEventRepository splitEventRepository, MarketDataService marketDataService,
+                              PlanService planService, PortfolioService portfolioService,
+                              PortfolioSnapshotInvalidator snapshotInvalidator, Clock clock, ZoneId zone,
+                              @Value("${spring.servlet.multipart.max-file-size:1MB}") String maxCsvSize,
+                              @Value("${dca.transaction.max-csv-rows:10000}") int maxCsvRows,
+                              @Value("${dca.transaction.max-csv-field-length:1000}") int maxCsvFieldLength) {
+        this(transactionRepository, instrumentRepository, splitEventRepository, marketDataService, planService,
+                portfolioService, snapshotInvalidator, clock, zone, DataSize.parse(maxCsvSize).toBytes(), maxCsvRows,
+                maxCsvFieldLength);
+    }
+
+    TransactionService(TransactionRepository transactionRepository, InstrumentRepository instrumentRepository,
+                       SplitEventRepository splitEventRepository, MarketDataService marketDataService,
+                       PlanService planService, PortfolioService portfolioService,
+                       PortfolioSnapshotInvalidator snapshotInvalidator, Clock clock, ZoneId zone,
+                       long maxCsvBytes, int maxCsvRows, int maxCsvFieldLength) {
         this.transactionRepository = transactionRepository;
         this.instrumentRepository = instrumentRepository;
         this.splitEventRepository = splitEventRepository;
@@ -66,14 +99,17 @@ public class TransactionService {
         this.snapshotInvalidator = snapshotInvalidator;
         this.clock = clock;
         this.zone = zone;
+        if (maxCsvBytes <= 0 || maxCsvRows <= 0 || maxCsvFieldLength <= 0) {
+            throw new IllegalArgumentException("CSV limits must be positive");
+        }
+        this.maxCsvBytes = maxCsvBytes;
+        this.maxCsvRows = maxCsvRows;
+        this.maxCsvFieldLength = maxCsvFieldLength;
     }
 
     @Transactional(readOnly = true)
     public List<TransactionResponse> list(String symbol, LocalDate from, LocalDate to) {
-        return transactionRepository.findAllByOrderByTradeDateAscLedgerOrderAscIdAsc().stream()
-                .filter(transaction -> symbol == null || transaction.getInstrument().getSymbol().equalsIgnoreCase(symbol))
-                .filter(transaction -> from == null || !transaction.getTradeDate().isBefore(from))
-                .filter(transaction -> to == null || !transaction.getTradeDate().isAfter(to))
+        return transactionRepository.findForList(symbol, from, to).stream()
                 .map(this::toResponse).toList();
     }
 
@@ -117,12 +153,16 @@ public class TransactionService {
 
     @Transactional(readOnly = true)
     public CsvPreviewResponse preview(MultipartFile file) {
+        ensureCsvFileSize(file);
         UUID batchId = UUID.randomUUID();
         List<CsvRowPreview> rows = new ArrayList<>();
+        Set<String> fingerprints = new HashSet<>();
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(file.getInputStream(), StandardCharsets.UTF_8))) {
             String header = reader.readLine();
             if (header == null) throw invalidCsv("CSV is empty");
             List<String> columns = parseLine(header);
+            List<String> headerErrors = csvFieldLengthErrors(columns, columns);
+            if (!headerErrors.isEmpty()) throw csvFieldTooLong(1, headerErrors);
             java.util.Set<String> normalizedColumns = columns.stream()
                     .map(value -> value.replace("\uFEFF", "").trim().toLowerCase(Locale.ROOT))
                     .collect(java.util.stream.Collectors.toSet());
@@ -134,11 +174,14 @@ public class TransactionService {
             while ((line = reader.readLine()) != null) {
                 rowNumber++;
                 if (line.isBlank()) continue;
+                if (rows.size() >= maxCsvRows) throw csvTooManyRows();
                 List<String> values = parseLine(line);
+                List<String> errors = csvFieldLengthErrors(columns, values);
                 CsvRowRequest row = rowFromColumns(columns, values);
-                List<String> errors = validateRow(row);
+                errors = validateRow(row);
+                errors = mergeErrors(csvFieldLengthErrors(columns, values), errors);
                 String fingerprint = fingerprint(row);
-                if (rows.stream().anyMatch(previous -> previous.fingerprint().equals(fingerprint))
+                if (!fingerprints.add(fingerprint)
                         || transactionRepository.existsByImportFingerprint(fingerprint)) {
                     errors = new ArrayList<>(errors);
                     errors.add("Duplicate row");
@@ -157,17 +200,20 @@ public class TransactionService {
         if (request == null || request.rows() == null || request.rows().isEmpty()) {
             throw invalidCsv("CSV contains no rows");
         }
+        if (request.rows().size() > maxCsvRows) throw csvTooManyRows();
         Set<String> fingerprints = new HashSet<>();
         List<TransactionRequest> parsed = new ArrayList<>();
         List<String> errors = new ArrayList<>();
-        for (CsvRowRequest row : request.rows()) {
-            List<String> rowErrors = validateRow(row);
+        for (int index = 0; index < request.rows().size(); index++) {
+            CsvRowRequest row = request.rows().get(index);
+            List<String> rowErrors = csvFieldLengthErrors(row);
+            rowErrors.addAll(validateRow(row));
             String fingerprint = fingerprint(row);
             if (!fingerprints.add(fingerprint)) rowErrors = append(rowErrors, "Duplicate row");
             if (transactionRepository.existsByImportFingerprint(fingerprint)) {
                 rowErrors = append(rowErrors, "Row was already imported");
             }
-            if (!rowErrors.isEmpty()) errors.add(String.join(", ", rowErrors));
+            if (!rowErrors.isEmpty()) errors.add("row " + (index + 2) + ": " + String.join(", ", rowErrors));
             else parsed.add(requestToTransaction(row));
         }
         if (!errors.isEmpty()) throw invalidCsv("CSV row invalid: " + String.join("; ", errors));
@@ -191,7 +237,7 @@ public class TransactionService {
     private TransactionEntity toEntity(TransactionRequest request, UUID batchId) {
         validateRequest(request);
         TransactionEntity entity = new TransactionEntity();
-        entity.setLedgerOrder(nextLedgerOrder());
+        entity.setLedgerOrder(transactionRepository.nextLedgerOrder());
         apply(entity, request);
         entity.setImportBatchId(batchId);
         return entity;
@@ -367,11 +413,70 @@ public class TransactionService {
         return parsed == null ? value.trim() : parsed.stripTrailingZeros().toPlainString();
     }
 
-    private long nextLedgerOrder() {
-        synchronized (LEDGER_ORDER_LOCK) {
-            return transactionRepository.findTopByOrderByLedgerOrderDesc()
-                    .map(TransactionEntity::getLedgerOrder).orElse(0L) + 1L;
+    private void ensureCsvFileSize(MultipartFile file) {
+        if (file == null) throw invalidCsv("CSV file is required");
+        if (file.getSize() > maxCsvBytes) {
+            throw new DomainException(HttpStatus.PAYLOAD_TOO_LARGE, "CSV_FILE_TOO_LARGE",
+                    "CSV file exceeds the maximum upload size of " + maxCsvBytes + " bytes");
         }
+    }
+
+    private List<String> csvFieldLengthErrors(List<String> headers, List<String> values) {
+        List<String> errors = new ArrayList<>();
+        for (int index = 0; index < values.size(); index++) {
+            String value = values.get(index);
+            if (value != null && value.length() > maxCsvFieldLength) {
+                errors.add(csvFieldLengthMessage(csvFieldName(headers, index)));
+            }
+        }
+        return errors;
+    }
+
+    private List<String> csvFieldLengthErrors(CsvRowRequest row) {
+        List<String> errors = new ArrayList<>();
+        if (row == null) return errors;
+        addCsvFieldLengthError(errors, "date", row.date());
+        addCsvFieldLengthError(errors, "type", row.type());
+        addCsvFieldLengthError(errors, "symbol", row.symbol());
+        addCsvFieldLengthError(errors, "quantity", row.quantity());
+        addCsvFieldLengthError(errors, "price", row.price());
+        addCsvFieldLengthError(errors, "fee", row.fee());
+        addCsvFieldLengthError(errors, "amount", row.amount());
+        addCsvFieldLengthError(errors, "planCycleId", row.planCycleId());
+        addCsvFieldLengthError(errors, "notes", row.notes());
+        return errors;
+    }
+
+    private void addCsvFieldLengthError(List<String> errors, String field, String value) {
+        if (value != null && value.length() > maxCsvFieldLength) errors.add(csvFieldLengthMessage(field));
+    }
+
+    private String csvFieldName(List<String> headers, int index) {
+        if (index >= headers.size()) return "column " + (index + 1);
+        String normalized = headers.get(index).replace("\uFEFF", "").trim().toLowerCase(Locale.ROOT);
+        return KNOWN_CSV_FIELDS.contains(normalized) ? normalized : "column " + (index + 1);
+    }
+
+    private DomainException csvTooManyRows() {
+        return new DomainException(HttpStatus.PAYLOAD_TOO_LARGE, "CSV_TOO_MANY_ROWS",
+                "CSV exceeds the maximum of " + maxCsvRows + " data rows");
+    }
+
+    private DomainException csvFieldTooLong(int rowNumber, List<String> errors) {
+        return new DomainException(HttpStatus.BAD_REQUEST, "CSV_FIELD_TOO_LONG",
+                "CSV row " + rowNumber + " has an oversized field: " + String.join(", ", errors));
+    }
+
+    private List<String> mergeErrors(List<String> first, List<String> second) {
+        if (first.isEmpty()) return second;
+        if (second.isEmpty()) return first;
+        List<String> merged = new ArrayList<>(first);
+        merged.addAll(second);
+        return merged;
+    }
+
+    private String csvFieldLengthMessage(String field) {
+        return "CSV field " + field + " exceeds maximum field length of " + maxCsvFieldLength;
     }
 
     private List<String> parseLine(String line) {

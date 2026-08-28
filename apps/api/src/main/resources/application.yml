@@ -25,6 +25,10 @@ spring:
   jackson:
     time-zone: UTC
     default-property-inclusion: non_null
+  servlet:
+    multipart:
+      max-file-size: ${TRANSACTION_MAX_CSV_SIZE:1MB}
+      max-request-size: ${TRANSACTION_MAX_CSV_REQUEST_SIZE:2MB}
   cache:
     type: caffeine
 
@@ -55,6 +59,9 @@ dca:
   timezone: ${APP_TIMEZONE:America/New_York}
   ui:
     theme: ${APP_THEME:System}
+  transaction:
+    max-csv-rows: ${TRANSACTION_MAX_CSV_ROWS:10000}
+    max-csv-field-length: ${TRANSACTION_MAX_CSV_FIELD_LENGTH:1000}
   scheduler:
     enabled: ${MARKET_SYNC_ENABLED:true}
     cron: '${MARKET_SYNC_CRON:0 30 18 * * MON-FRI}'

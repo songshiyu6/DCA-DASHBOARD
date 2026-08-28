@@ -11,6 +11,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.server.ResponseStatusException;
 import java.net.URI;
 
@@ -54,6 +55,12 @@ public class ApiExceptionHandler {
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ProblemDetail integrity(DataIntegrityViolationException exception, HttpServletRequest request) {
         return problem(HttpStatus.CONFLICT, "CONSTRAINT_VIOLATION", "Request conflicts with existing data", request);
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ProblemDetail maxUpload(MaxUploadSizeExceededException exception, HttpServletRequest request) {
+        return problem(HttpStatus.PAYLOAD_TOO_LARGE, "CSV_FILE_TOO_LARGE",
+                "CSV file exceeds the maximum upload size", request);
     }
 
     @ExceptionHandler(Exception.class)

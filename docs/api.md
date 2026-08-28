@@ -233,7 +233,10 @@ The supported filters are inclusive `from`/`to` ISO dates and a
 case-insensitive `symbol` filter. Results are ordered by trade date and the
 server-assigned `ledgerOrder` field, then ID. `ledgerOrder` is returned in each
 transaction response and is the deterministic tie-breaker for same-day FIFO
-replay; JSON and CSV imports assign it in submission order.
+replay. The order is allocated by a PostgreSQL sequence, so concurrent API
+instances cannot select the same next order; sequence gaps after a rolled-back
+request are expected and do not change the order of existing rows. JSON and CSV
+rows receive orders in the order they are inserted.
 
 The JSON request fields are:
 
@@ -329,7 +332,20 @@ Preview returns
 The response contains `batchId`, `importedRows`, and `transactionIds`. A
 duplicate or invalid row causes the commit to fail as a whole. When
 `planCycleId` is provided, the server validates the UUID and confirms that the
-cycle contains the transaction's instrument.
+cycle contains the transaction's instrument. Commit validation errors identify
+the 1-based CSV line number (the header is line 1), so a duplicate row is
+reported with its exact input row. Preview and commit use the same canonical
+row fingerprint; the database also enforces the global fingerprint uniqueness
+constraint.
+
+CSV uploads are bounded before import: the default multipart file and request
+limit is 1 MiB, the default maximum is 10,000 data rows, and each field is
+limited to 1,000 characters. These limits can be changed with
+`TRANSACTION_MAX_CSV_SIZE`, `TRANSACTION_MAX_CSV_ROWS`, and
+`TRANSACTION_MAX_CSV_FIELD_LENGTH`. Exceeding the file or row limit returns
+HTTP 413 with `CSV_FILE_TOO_LARGE` or `CSV_TOO_MANY_ROWS`; an overlong field is
+reported as a preview row validation error and causes the whole commit to fail.
+The service never logs a complete CSV row or the contents of `notes`.
 
 ## Portfolio and dashboard
 

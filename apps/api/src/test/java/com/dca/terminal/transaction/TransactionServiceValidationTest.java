@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.mock.web.MockMultipartFile;
 
 import static com.dca.terminal.transaction.TransactionDtos.CsvCommitRequest;
@@ -27,12 +28,157 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class TransactionServiceValidationTest {
+    @Test
+    void assignsTheDatabaseAllocatedLedgerOrderToTheInsertedEntity() {
+        InstrumentEntity instrument = instrument("VOO");
+        InstrumentRepository instruments = mock(InstrumentRepository.class);
+        when(instruments.findBySymbolIgnoreCase("VOO")).thenReturn(Optional.of(instrument));
+        TransactionRepository transactions = mock(TransactionRepository.class);
+        when(transactions.nextLedgerOrder()).thenReturn(41L);
+        when(transactions.saveAndFlush(any(TransactionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(transactions.findAllByOrderByTradeDateAscLedgerOrderAscIdAsc()).thenReturn(List.of());
+        TransactionService service = service(instruments, transactions, mock(PlanService.class), mock(PortfolioService.class));
+
+        TransactionEntity saved = service.create(new TransactionRequest("VOO", TransactionType.BUY,
+                java.time.LocalDate.of(2026, 8, 1), new java.math.BigDecimal("1"), new java.math.BigDecimal("100"),
+                null, java.math.BigDecimal.ZERO, null, null));
+
+        assertEquals(41L, saved.getLedgerOrder());
+        verify(transactions).nextLedgerOrder();
+    }
+
+    @Test
+    void usesTheRepositoryFilteringQueryForTransactionLists() {
+        TransactionRepository transactions = mock(TransactionRepository.class);
+        when(transactions.findForList("voo", java.time.LocalDate.of(2026, 8, 1), java.time.LocalDate.of(2026, 8, 31)))
+                .thenReturn(List.of());
+        TransactionService service = service(mock(InstrumentRepository.class), transactions,
+                mock(PlanService.class), mock(PortfolioService.class));
+
+        assertTrue(service.list("voo", java.time.LocalDate.of(2026, 8, 1), java.time.LocalDate.of(2026, 8, 31)).isEmpty());
+
+        verify(transactions).findForList("voo", java.time.LocalDate.of(2026, 8, 1), java.time.LocalDate.of(2026, 8, 31));
+        verify(transactions, never()).findAllByOrderByTradeDateAscLedgerOrderAscIdAsc();
+    }
+
+    @Test
+    void rejectsCsvFilesAboveTheConfiguredMultipartLimit() throws IOException {
+        TransactionService service = service(mock(InstrumentRepository.class), mock(TransactionRepository.class),
+                mock(PlanService.class), mock(PortfolioService.class), mock(PortfolioSnapshotInvalidator.class),
+                16L, 100, 1_000);
+
+        DomainException exception = assertThrows(DomainException.class, () -> service.preview(new MockMultipartFile(
+                "file", "transactions.csv", "text/csv", "date,type,symbol,quantity,price,fee".getBytes())));
+
+        assertEquals("CSV_FILE_TOO_LARGE", exception.code());
+        assertEquals(org.springframework.http.HttpStatus.PAYLOAD_TOO_LARGE, exception.status());
+    }
+
+    @Test
+    void rejectsCsvFilesAboveTheConfiguredRowLimit() throws IOException {
+        InstrumentEntity instrument = instrument("VOO");
+        InstrumentRepository instruments = mock(InstrumentRepository.class);
+        when(instruments.findBySymbolIgnoreCase("VOO")).thenReturn(Optional.of(instrument));
+        TransactionService service = service(instruments, mock(TransactionRepository.class), mock(PlanService.class),
+                mock(PortfolioService.class), mock(PortfolioSnapshotInvalidator.class), 1_000_000L, 2, 1_000);
+        String csv = "date,type,symbol,quantity,price,fee\n"
+                + "2026-08-01,BUY,VOO,1,100,0\n"
+                + "2026-08-02,BUY,VOO,1,100,0\n"
+                + "2026-08-03,BUY,VOO,1,100,0\n";
+
+        DomainException exception = assertThrows(DomainException.class, () -> service.preview(new MockMultipartFile(
+                "file", "transactions.csv", "text/csv", csv.getBytes())));
+
+        assertEquals("CSV_TOO_MANY_ROWS", exception.code());
+        assertEquals(org.springframework.http.HttpStatus.PAYLOAD_TOO_LARGE, exception.status());
+    }
+
+    @Test
+    void rejectsCsvRowsWithAnOverlongFieldWithoutEchoingTheValue() throws IOException {
+        InstrumentEntity instrument = instrument("VOO");
+        InstrumentRepository instruments = mock(InstrumentRepository.class);
+        when(instruments.findBySymbolIgnoreCase("VOO")).thenReturn(Optional.of(instrument));
+        TransactionService service = service(instruments, mock(TransactionRepository.class),
+                mock(PlanService.class), mock(PortfolioService.class), mock(PortfolioSnapshotInvalidator.class),
+                1_000_000L, 100, 10);
+        String csv = "date,type,symbol,quantity,price,fee,notes\n"
+                + "2026-08-01,BUY,VOO,1,100,0,secret-long-note\n";
+
+        var preview = service.preview(new MockMultipartFile("file", "transactions.csv", "text/csv", csv.getBytes()));
+
+        assertEquals(0, preview.validRows());
+        assertTrue(preview.rows().getFirst().errors().stream()
+                .anyMatch(error -> error.contains("maximum field length")));
+        assertTrue(preview.rows().getFirst().errors().stream()
+                .noneMatch(error -> error.contains("secret-long-note")));
+    }
+
+    @Test
+    void includesTheRowNumberWhenCsvCommitRejectsADuplicate() {
+        InstrumentEntity instrument = instrument("VOO");
+        InstrumentRepository instruments = mock(InstrumentRepository.class);
+        when(instruments.findBySymbolIgnoreCase("VOO")).thenReturn(Optional.of(instrument));
+        TransactionRepository transactions = mock(TransactionRepository.class);
+        when(transactions.existsByImportFingerprint(anyString())).thenReturn(false);
+        TransactionService service = service(instruments, transactions, mock(PlanService.class), mock(PortfolioService.class));
+        CsvRowRequest row = new CsvRowRequest("2026-08-01", "BUY", "VOO", "1", "100", "0", null, null, null);
+
+        DomainException exception = assertThrows(DomainException.class,
+                () -> service.commit(new CsvCommitRequest(UUID.randomUUID(), List.of(row, row))));
+
+        assertTrue(exception.getMessage().contains("row 3"));
+        assertTrue(exception.getMessage().contains("Duplicate row"));
+    }
+
+    @Test
+    void keepsPreviewFingerprintWhenCommitPersistsTheCanonicalRow() throws IOException {
+        InstrumentEntity instrument = instrument("VOO");
+        InstrumentRepository instruments = mock(InstrumentRepository.class);
+        when(instruments.findBySymbolIgnoreCase("VOO")).thenReturn(Optional.of(instrument));
+        TransactionRepository transactions = mock(TransactionRepository.class);
+        when(transactions.existsByImportFingerprint(anyString())).thenReturn(false);
+        when(transactions.save(any(TransactionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(transactions.findAllByOrderByTradeDateAscLedgerOrderAscIdAsc()).thenReturn(List.of());
+        TransactionService service = service(instruments, transactions, mock(PlanService.class), mock(PortfolioService.class));
+        MockMultipartFile file = new MockMultipartFile("file", "transactions.csv", "text/csv",
+                "date,type,symbol,quantity,price,fee\n2026-08-01,BUY,VOO,1.0,100.00,0.0\n".getBytes());
+
+        var preview = service.preview(file);
+        service.commit(new CsvCommitRequest(preview.batchId(), List.of(preview.rows().getFirst().row())));
+
+        org.mockito.ArgumentCaptor<TransactionEntity> captured = org.mockito.ArgumentCaptor.forClass(TransactionEntity.class);
+        verify(transactions).save(captured.capture());
+        assertEquals(preview.rows().getFirst().fingerprint(), captured.getValue().getImportFingerprint());
+    }
+
+    @Test
+    void doesNotInvalidateOrRebuildWhenCsvFlushFailsAfterRowsAreStaged() {
+        InstrumentEntity instrument = instrument("VOO");
+        InstrumentRepository instruments = mock(InstrumentRepository.class);
+        when(instruments.findBySymbolIgnoreCase("VOO")).thenReturn(Optional.of(instrument));
+        TransactionRepository transactions = mock(TransactionRepository.class);
+        when(transactions.existsByImportFingerprint(anyString())).thenReturn(false);
+        when(transactions.save(any(TransactionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        doThrow(new DataIntegrityViolationException("constraint")).when(transactions).flush();
+        PortfolioSnapshotInvalidator invalidator = mock(PortfolioSnapshotInvalidator.class);
+        PortfolioService portfolio = mock(PortfolioService.class);
+        TransactionService service = service(instruments, transactions, mock(PlanService.class), portfolio, invalidator);
+
+        assertThrows(DataIntegrityViolationException.class, () -> service.commit(new CsvCommitRequest(UUID.randomUUID(), List.of(
+                new CsvRowRequest("2026-08-01", "BUY", "VOO", "1", "100", "0", null, null, null),
+                new CsvRowRequest("2026-08-02", "BUY", "VOO", "1", "100", "0", null, null, null)))));
+
+        verify(invalidator, never()).invalidateFrom(any());
+        verify(portfolio, never()).rebuildTodaySnapshot();
+    }
+
     @Test
     void rejectsFeeFieldOnDividendBeforeItCanDisappearFromCalculations() {
         TransactionService service = service(mock(InstrumentRepository.class), mock(TransactionRepository.class),
@@ -263,6 +409,16 @@ class TransactionServiceValidationTest {
         return new TransactionService(transactions, instruments, mock(SplitEventRepository.class),
                 mock(MarketDataService.class), plans, portfolio, invalidator,
                 Clock.fixed(Instant.parse("2026-08-27T12:00:00Z"), ZoneId.of("UTC")), ZoneId.of("UTC"));
+    }
+
+    private static TransactionService service(InstrumentRepository instruments, TransactionRepository transactions,
+                                               PlanService plans, PortfolioService portfolio,
+                                               PortfolioSnapshotInvalidator invalidator, long maxCsvBytes,
+                                               int maxCsvRows, int maxCsvFieldLength) {
+        return new TransactionService(transactions, instruments, mock(SplitEventRepository.class),
+                mock(MarketDataService.class), plans, portfolio, invalidator,
+                Clock.fixed(Instant.parse("2026-08-27T12:00:00Z"), ZoneId.of("UTC")), ZoneId.of("UTC"),
+                maxCsvBytes, maxCsvRows, maxCsvFieldLength);
     }
 
     private static InstrumentEntity instrument(String symbol) {

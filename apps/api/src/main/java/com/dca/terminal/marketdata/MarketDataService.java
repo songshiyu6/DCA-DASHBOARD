@@ -255,10 +255,10 @@ public class MarketDataService {
             instrumentRepository.save(instrument);
             return new SyncResponse(instrument.getSymbol(), 0, 0, FreshnessStatus.FRESH, clock.instant(), null);
         }
+        LocalDate earliestChangedDate = null;
         try {
             ProviderCall<List<PriceBar>> result = callWithProvider(provider -> provider.getHistoricalPrices(instrument, from, today));
             LocalDate latestAvailable = latestStored.map(PriceDailyEntity::getTradeDate).orElse(null);
-            LocalDate earliestChangedDate = null;
             int saved = 0;
             for (PriceBar bar : result.value()) {
                 PriceDailyEntity entity = priceRepository.findByInstrumentIdAndTradeDateAndSource(
@@ -292,6 +292,7 @@ public class MarketDataService {
             FreshnessStatus status = latestStored.isPresent() ? FreshnessStatus.STALE : FreshnessStatus.UNAVAILABLE;
             instrument.setDataStatus(status);
             instrumentRepository.save(instrument);
+            if (earliestChangedDate != null) snapshotInvalidator.invalidateFrom(earliestChangedDate);
             log.warn("market sync unavailable ticker={} provider={} status={} reason={}",
                     instrument.getSymbol(), exception.provider(), status, exception.getMessage());
             return new SyncResponse(instrument.getSymbol(), 0, 0, status, clock.instant(),

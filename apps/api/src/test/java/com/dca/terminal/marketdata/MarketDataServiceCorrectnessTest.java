@@ -28,6 +28,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.junit.jupiter.api.Test;
 
 import static com.dca.terminal.instrument.InstrumentDtos.SearchResult;
@@ -43,6 +44,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.inOrder;
 
 class MarketDataServiceCorrectnessTest {
     private static final Instant NOW = Instant.parse("2026-08-27T20:00:00Z");
@@ -233,6 +235,36 @@ class MarketDataServiceCorrectnessTest {
         service(instruments, prices, yahoo, CLOCK, invalidator).sync(instrument);
 
         verify(invalidator).invalidateFrom(LocalDate.of(2026, 8, 1));
+    }
+
+    @Test
+    void invalidatesSnapshotsWhenSplitFetchFailsAfterIncrementalPricesAreSaved() {
+        UUID instrumentId = UUID.randomUUID();
+        InstrumentEntity instrument = mock(InstrumentEntity.class);
+        when(instrument.getId()).thenReturn(instrumentId);
+        when(instrument.getSymbol()).thenReturn("VOO");
+        InstrumentRepository instruments = mock(InstrumentRepository.class);
+        when(instruments.save(any(InstrumentEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        PriceDailyRepository prices = mock(PriceDailyRepository.class);
+        when(prices.findTopByInstrumentIdOrderByTradeDateDesc(instrumentId))
+                .thenReturn(Optional.of(price(instrument, LocalDate.of(2026, 8, 26), "100", "YAHOO")));
+        when(prices.findByInstrumentIdAndTradeDateAndSource(any(), any(), any())).thenReturn(Optional.empty());
+        when(prices.save(any(PriceDailyEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        MarketDataProvider yahoo = provider(ProviderId.YAHOO);
+        when(yahoo.getHistoricalPrices(any(), eq(LocalDate.of(2026, 8, 27)), eq(LocalDate.of(2026, 8, 27))))
+                .thenReturn(List.of(new PriceBar(LocalDate.of(2026, 8, 27), bd("101"), bd("102"), bd("100"),
+                        bd("101"), bd("101"), 1L)));
+        when(yahoo.getSplits(any(), eq(LocalDate.of(2026, 8, 27)), eq(LocalDate.of(2026, 8, 27))))
+                .thenThrow(new ProviderException(ProviderId.YAHOO, "split endpoint unavailable", true));
+        PortfolioSnapshotInvalidator invalidator = mock(PortfolioSnapshotInvalidator.class);
+
+        SyncResponse response = service(instruments, prices, yahoo, CLOCK, invalidator).sync(instrument);
+
+        assertEquals(FreshnessStatus.STALE, response.status());
+        InOrder order = inOrder(prices, instruments, invalidator);
+        order.verify(prices).save(any(PriceDailyEntity.class));
+        order.verify(instruments).save(any(InstrumentEntity.class));
+        order.verify(invalidator).invalidateFrom(LocalDate.of(2026, 8, 27));
     }
 
     @Test

@@ -363,8 +363,27 @@ Holding rows contain `symbol`, `name`, `price`, `todayPercent`, `shares`,
 `avgCost`, `costBasis`, `marketValue`, `unrealizedPnl`, `returnPercent`,
 `allocation`, and `dataStatus`.
 History rows contain `date`, `marketValue`, `netInvested`, `costBasis`,
-`unrealizedPnl`, and `status`. Allocation rows contain `symbol`,
-`targetWeight`, `actualWeight`, `drift`, and `marketValue`.
+`unrealizedPnl`, and `status`. `marketValue` and `unrealizedPnl` are `null`
+when `status` is `PARTIAL` because one or more held instruments have no usable
+price for that date; `costBasis` and `netInvested` remain populated. Missing
+market value is never encoded as zero. A history response is a bare array with
+this shape:
+
+```json
+[
+  {
+    "date": "2026-08-26",
+    "marketValue": null,
+    "netInvested": 25180.39,
+    "costBasis": 25180.39,
+    "unrealizedPnl": null,
+    "status": "PARTIAL"
+  }
+]
+```
+
+Allocation rows contain `symbol`, `targetWeight`, `actualWeight`, `drift`, and
+`marketValue`.
 
 The dashboard response shape is:
 

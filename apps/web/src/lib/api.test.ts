@@ -41,6 +41,21 @@ describe('API contract adapter', () => {
     expect(result.meta).toMatchObject({ status: 'STALE', asOf: '2026-08-27', source: 'YAHOO' })
   })
 
+  it('preserves a partial history point market value as null', async () => {
+    const { normalizeDashboardData } = await loadApi()
+    const result = normalizeDashboardData({
+      portfolioHistory: [
+        { date: '2026-08-26', marketValue: null, netInvested: '100.00', status: 'PARTIAL' },
+        { date: '2026-08-27', marketValue: '101.00', netInvested: '100.00', status: 'FRESH' },
+      ],
+    })
+
+    expect(result.portfolioHistory).toEqual([
+      { date: '2026-08-26', marketValue: null, netInvested: '100.00', dataStatus: 'PARTIAL' },
+      { date: '2026-08-27', marketValue: '101.00', netInvested: '100.00', dataStatus: 'FRESH' },
+    ])
+  })
+
   it('sends canonical transaction fields with a session CSRF token', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ data: { token: 'csrf-test-token', headerName: 'X-XSRF-TOKEN' } }))

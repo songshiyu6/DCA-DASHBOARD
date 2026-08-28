@@ -192,7 +192,7 @@ export interface DashboardSummary {
 
 export interface PortfolioHistoryPoint {
   date: string
-  marketValue: string
+  marketValue: string | null
   netInvested: string
   dataStatus?: DataStatus
 }

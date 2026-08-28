@@ -178,7 +178,7 @@ export function normalizeDashboardData(value: unknown): DashboardData {
     } satisfies NextDca : null,
     portfolioHistory: rawHistory.filter(isRecord).map((point) => ({
       date: typeof point.date === 'string' ? point.date : '',
-      marketValue: stringValue(point.marketValue),
+      marketValue: nullableString(point.marketValue),
       netInvested: stringValue(point.netInvested),
       dataStatus: dataStatus(point.dataStatus) ?? dataStatus(point.status),
     })),

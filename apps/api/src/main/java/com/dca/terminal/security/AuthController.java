@@ -15,6 +15,7 @@ import org.springframework.security.web.authentication.logout.SecurityContextLog
 import org.springframework.security.web.authentication.session.SessionAuthenticationStrategy;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.csrf.CsrfToken;
+import org.springframework.security.web.csrf.CsrfTokenRepository;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -33,15 +34,21 @@ public class AuthController {
     private final AuthenticationManager authenticationManager;
     private final SecurityContextRepository contextRepository;
     private final SessionAuthenticationStrategy sessionAuthenticationStrategy;
+    private final CsrfTokenRepository csrfTokenRepository;
+    private final LoginThrottle loginThrottle;
     private final boolean securityEnabled;
 
     public AuthController(AuthenticationManager authenticationManager,
                           SecurityContextRepository contextRepository,
                           SessionAuthenticationStrategy sessionAuthenticationStrategy,
+                          CsrfTokenRepository csrfTokenRepository,
+                          LoginThrottle loginThrottle,
                           @Value("${dca.security.enabled:true}") boolean securityEnabled) {
         this.authenticationManager = authenticationManager;
         this.contextRepository = contextRepository;
         this.sessionAuthenticationStrategy = sessionAuthenticationStrategy;
+        this.csrfTokenRepository = csrfTokenRepository;
+        this.loginThrottle = loginThrottle;
         this.securityEnabled = securityEnabled;
     }
 
@@ -64,6 +71,10 @@ public class AuthController {
     public SessionResponse login(@Valid @RequestBody LoginRequest request,
                                  HttpServletRequest httpRequest, HttpServletResponse httpResponse) {
         if (!securityEnabled) return new SessionResponse(true, request.username());
+        String remoteAddress = httpRequest.getRemoteAddr();
+        if (!loginThrottle.allowAttempt(request.username(), remoteAddress)) {
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Too many login attempts");
+        }
         try {
             Authentication authentication = authenticationManager.authenticate(
                     UsernamePasswordAuthenticationToken.unauthenticated(request.username(), request.password()));
@@ -72,6 +83,7 @@ public class AuthController {
             SecurityContextHolder.setContext(context);
             sessionAuthenticationStrategy.onAuthentication(authentication, httpRequest, httpResponse);
             contextRepository.saveContext(context, httpRequest, httpResponse);
+            loginThrottle.successfulLogin(request.username(), remoteAddress);
             return new SessionResponse(true, authentication.getName());
         } catch (BadCredentialsException exception) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid username or password");
@@ -81,6 +93,7 @@ public class AuthController {
     @PostMapping("/logout")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void logout(Authentication authentication, HttpServletRequest request, HttpServletResponse response) {
+        csrfTokenRepository.saveToken(null, request, response);
         new SecurityContextLogoutHandler().logout(request, response, authentication);
     }
 }

@@ -5,9 +5,17 @@
 {$APP_DOMAIN} {
     encode zstd gzip
 
+    @https protocol https
+
     header {
         -Server
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+        Content-Security-Policy-Report-Only "default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'self';"
     }
+
+    header @https Strict-Transport-Security "max-age=31536000; includeSubDomains"
 
     @api path /api/*
     handle @api {

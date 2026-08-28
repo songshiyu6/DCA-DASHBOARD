@@ -1,0 +1,47 @@
+services:
+  mock-yahoo:
+    image: node:22-alpine
+    restart: unless-stopped
+    command: ["node", "/e2e/mock-yahoo.mjs"]
+    volumes:
+      - ../e2e/mock-yahoo.mjs:/e2e/mock-yahoo.mjs:ro
+    ports:
+      - "127.0.0.1:38081:8080"
+    networks:
+      - edge
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8080/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  api:
+    environment:
+      YAHOO_BASE_URL: http://mock-yahoo:8080
+      MARKET_DATA_PRIMARY_PROVIDER: YAHOO
+      MARKET_DATA_FALLBACK_PROVIDER: YAHOO
+      MARKET_SYNC_ENABLED: "false"
+      MARKET_QUOTE_TTL_SECONDS: "0"
+      APP_COOKIE_SECURE: "false"
+      TWELVE_DATA_API_KEY: ""
+      ALPHA_VANTAGE_API_KEY: ""
+    networks:
+      - backend
+      - edge
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mock-yahoo:
+        condition: service_healthy
+
+  caddy:
+    command: ["caddy", "run", "--config", "/e2e/Caddyfile", "--adapter", "caddyfile"]
+    ports: !override
+      - "127.0.0.1:38080:80"
+    volumes:
+      - ./Caddyfile.e2e:/e2e/Caddyfile:ro

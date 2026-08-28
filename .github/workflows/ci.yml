@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      e2e_suite:
+        description: E2E suite to run
+        type: choice
+        options: [smoke, full]
+        default: full
 
 permissions:
   contents: read
@@ -126,6 +132,9 @@ jobs:
           test -f deploy/scripts/restore-postgres.sh
           test -f deploy/scripts/backup-restore-smoke.sh
           test -f deploy/scripts/smoke-deployment.sh
+          test -f deploy/docker-compose.e2e.yml
+          test -f deploy/Caddyfile.e2e
+          test -f e2e/run.sh
           test -f deploy/systemd/dca-terminal-backup.service
           test -f deploy/systemd/dca-terminal-backup.timer
 
@@ -141,6 +150,7 @@ jobs:
           bash -n deploy/scripts/restore-postgres.sh
           bash -n deploy/scripts/backup-restore-smoke.sh
           bash -n deploy/scripts/smoke-deployment.sh
+          bash -n e2e/run.sh
 
   backup-restore:
     name: PostgreSQL backup and restore smoke
@@ -223,6 +233,35 @@ jobs:
           done
 
           DCA_SMOKE_BASE_URL=https://localhost bash deploy/scripts/smoke-deployment.sh
+
+  e2e:
+    name: End-to-end acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      DCA_E2E_SUITE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.e2e_suite || 'smoke' }}
+      PLAYWRIGHT_OUTPUT_DIR: /tmp/dca-e2e-results
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Run isolated e2e stack and Playwright
+        run: bash e2e/run.sh
+
+      - name: Upload Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artifacts
+          path: /tmp/dca-e2e-results
+          if-no-files-found: ignore
 
   repository:
     name: Repository hygiene

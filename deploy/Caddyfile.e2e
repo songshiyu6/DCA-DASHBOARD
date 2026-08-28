@@ -1,0 +1,26 @@
+{
+	auto_https off
+}
+
+:80 {
+	encode zstd gzip
+
+	header {
+		-Server
+		X-Content-Type-Options "nosniff"
+	}
+
+	@api path /api/*
+	handle @api {
+		reverse_proxy api:8080
+	}
+
+	handle {
+		reverse_proxy web:80
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

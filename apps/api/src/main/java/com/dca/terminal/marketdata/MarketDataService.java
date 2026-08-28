@@ -41,6 +41,10 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.dca.terminal.observability.ObservabilityMetrics;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.http.HttpStatus;
@@ -73,6 +77,7 @@ public class MarketDataService {
     private final Duration quoteTtl;
     private final int providerAttempts;
     private final PortfolioSnapshotInvalidator snapshotInvalidator;
+    private final MeterRegistry meterRegistry;
 
     public MarketDataService(InstrumentRepository instrumentRepository,
                              PriceDailyRepository priceRepository,
@@ -88,6 +93,27 @@ public class MarketDataService {
                              @Value("${dca.market-data.quote-ttl-seconds:60}") long quoteTtlSeconds,
                              @Value("${dca.market-data.provider-attempts:2}") int providerAttempts,
                              PortfolioSnapshotInvalidator snapshotInvalidator) {
+        this(instrumentRepository, priceRepository, quoteRepository, splitRepository, navRepository, settingRepository,
+                providerList, clock, applicationZone, primary, fallback, quoteTtlSeconds, providerAttempts,
+                snapshotInvalidator, ObservabilityMetrics.noop());
+    }
+
+    @Autowired
+    public MarketDataService(InstrumentRepository instrumentRepository,
+                             PriceDailyRepository priceRepository,
+                             QuoteLatestRepository quoteRepository,
+                             SplitEventRepository splitRepository,
+                             FundNavDailyRepository navRepository,
+                             AppSettingRepository settingRepository,
+                             List<MarketDataProvider> providerList,
+                             Clock clock,
+                             ZoneId applicationZone,
+                             @Value("${dca.market-data.primary:YAHOO}") String primary,
+                             @Value("${dca.market-data.fallback:TWELVE_DATA}") String fallback,
+                             @Value("${dca.market-data.quote-ttl-seconds:60}") long quoteTtlSeconds,
+                             @Value("${dca.market-data.provider-attempts:2}") int providerAttempts,
+                             PortfolioSnapshotInvalidator snapshotInvalidator,
+                             MeterRegistry meterRegistry) {
         this.instrumentRepository = instrumentRepository;
         this.priceRepository = priceRepository;
         this.quoteRepository = quoteRepository;
@@ -102,6 +128,7 @@ public class MarketDataService {
         this.quoteTtl = Duration.ofSeconds(quoteTtlSeconds);
         this.providerAttempts = Math.max(1, providerAttempts);
         this.snapshotInvalidator = snapshotInvalidator;
+        this.meterRegistry = meterRegistry == null ? ObservabilityMetrics.noop() : meterRegistry;
     }
 
     @Transactional(readOnly = true)
@@ -115,7 +142,7 @@ public class MarketDataService {
         if (normalized.length() < 1 || normalized.length() > 32) return List.of();
         List<ProviderSearchResult> canonicalMatches = canonicalEtfCatalog.search(normalized);
         try {
-            List<ProviderSearchResult> results = callWithProvider(provider -> provider.search(normalized)).value();
+            List<ProviderSearchResult> results = callWithProvider("search", provider -> provider.search(normalized)).value();
             return toSearchResults(mergeSearchResults(results, canonicalMatches));
         } catch (ProviderException exception) {
             if (!canonicalMatches.isEmpty()) {
@@ -149,7 +176,7 @@ public class MarketDataService {
         List<ProviderSearchResult> found;
         ProviderCall<List<ProviderSearchResult>> providerCall = null;
         try {
-            providerCall = callWithProvider(provider -> provider.search(symbol));
+            providerCall = callWithProvider("search", provider -> provider.search(symbol));
             found = mergeSearchResults(providerCall.value(), canonicalEtfCatalog.search(symbol));
         } catch (ProviderException exception) {
             Optional<ProviderSearchResult> canonical = canonicalEtfCatalog.findExact(symbol);
@@ -208,7 +235,7 @@ public class MarketDataService {
             return toQuoteResponse(instrument, cached.get());
         }
         try {
-            ProviderCall<ProviderQuote> result = callWithProvider(provider -> provider.getLatestQuote(instrument));
+            ProviderCall<ProviderQuote> result = callWithProvider("quote", provider -> provider.getLatestQuote(instrument));
             ProviderQuote quote = result.value();
             if (quote.price() == null || quote.price().signum() <= 0) {
                 throw new ProviderException(result.provider(), "Provider returned no valid quote", false);
@@ -253,11 +280,13 @@ public class MarketDataService {
         if (from.isAfter(today)) {
             instrument.setDataStatus(FreshnessStatus.FRESH);
             instrumentRepository.save(instrument);
+            recordSync(0, 0, FreshnessStatus.FRESH);
             return new SyncResponse(instrument.getSymbol(), 0, 0, FreshnessStatus.FRESH, clock.instant(), null);
         }
         LocalDate earliestChangedDate = null;
         try {
-            ProviderCall<List<PriceBar>> result = callWithProvider(provider -> provider.getHistoricalPrices(instrument, from, today));
+            ProviderCall<List<PriceBar>> result = callWithProvider("history",
+                    provider -> provider.getHistoricalPrices(instrument, from, today));
             LocalDate latestAvailable = latestStored.map(PriceDailyEntity::getTradeDate).orElse(null);
             int saved = 0;
             for (PriceBar bar : result.value()) {
@@ -284,6 +313,7 @@ public class MarketDataService {
             instrument.setDataStatus(status);
             instrumentRepository.save(instrument);
             if (earliestChangedDate != null) snapshotInvalidator.invalidateFrom(earliestChangedDate);
+            recordSync(saved, splitResult.saved(), status);
             log.info("market sync completed ticker={} source={} rows={} splits={} status={}",
                     instrument.getSymbol(), result.provider(), saved, splitResult.saved(), status);
             return new SyncResponse(instrument.getSymbol(), saved, splitResult.saved(), status, clock.instant(),
@@ -293,6 +323,7 @@ public class MarketDataService {
             instrument.setDataStatus(status);
             instrumentRepository.save(instrument);
             if (earliestChangedDate != null) snapshotInvalidator.invalidateFrom(earliestChangedDate);
+            recordSync(0, 0, status);
             log.warn("market sync unavailable ticker={} provider={} status={} reason={}",
                     instrument.getSymbol(), exception.provider(), status, exception.getMessage());
             return new SyncResponse(instrument.getSymbol(), 0, 0, status, clock.instant(),
@@ -313,7 +344,7 @@ public class MarketDataService {
         LocalDate fiveYearsAgo = today.minusYears(5);
         Optional<PriceDailyEntity> latestStored = priceRepository.findTopByInstrumentIdOrderByTradeDateDesc(instrument.getId());
         try {
-            ProviderCall<List<PriceBar>> result = callWithProvider(
+            ProviderCall<List<PriceBar>> result = callWithProvider("history",
                     provider -> provider.getHistoricalPrices(instrument, fiveYearsAgo, today));
             List<PriceBar> bars = result.value() == null ? List.of() : result.value().stream()
                     .filter(bar -> bar != null && bar.tradeDate() != null
@@ -325,11 +356,13 @@ public class MarketDataService {
                         ? FreshnessStatus.STALE : FreshnessStatus.INSUFFICIENT_HISTORY;
                 instrument.setDataStatus(status);
                 instrumentRepository.save(instrument);
+                recordSync(0, 0, status);
                 return new SyncResponse(instrument.getSymbol(), 0, 0, status, clock.instant(), syncMessage(status));
             }
 
             MarketDataProvider provider = providers.get(result.provider());
-            List<SplitEvent> splitEvents = provider.getSplits(instrument, fiveYearsAgo, today);
+            List<SplitEvent> splitEvents = timedProviderCall(result.provider(), "splits",
+                    () -> provider.getSplits(instrument, fiveYearsAgo, today));
             if (splitEvents == null) {
                 throw new ProviderException(result.provider(), "Provider returned no split response", false);
             }
@@ -361,6 +394,7 @@ public class MarketDataService {
             instrument.setDataStatus(status);
             instrumentRepository.save(instrument);
             if (earliestChangedDate != null) snapshotInvalidator.invalidateFrom(earliestChangedDate);
+            recordSync(saved, splitResult.saved(), status);
             log.info("market full resync completed ticker={} source={} rows={} splits={} status={}",
                     instrument.getSymbol(), result.provider(), saved, splitResult.saved(), status);
             return new SyncResponse(instrument.getSymbol(), saved, splitResult.saved(), status, clock.instant(), syncMessage(status));
@@ -368,6 +402,7 @@ public class MarketDataService {
             FreshnessStatus status = latestStored.isPresent() ? FreshnessStatus.STALE : FreshnessStatus.UNAVAILABLE;
             instrument.setDataStatus(status);
             instrumentRepository.save(instrument);
+            recordSync(0, 0, status);
             log.warn("market full resync unavailable ticker={} provider={} status={} reason={}",
                     instrument.getSymbol(), exception.provider(), status, exception.getMessage());
             return new SyncResponse(instrument.getSymbol(), 0, 0, status, clock.instant(),
@@ -391,7 +426,8 @@ public class MarketDataService {
         LocalDate today = LocalDate.now(clock.withZone(currentZone()));
         if ("1D".equalsIgnoreCase(range)) {
             try {
-                ProviderCall<List<IntradayBar>> result = callWithProvider(provider -> provider.getIntradayPrices(instrument, today, today));
+                ProviderCall<List<IntradayBar>> result = callWithProvider("intraday",
+                        provider -> provider.getIntradayPrices(instrument, today, today));
                 List<PricePoint> points = result.value().stream()
                         .map(bar -> new PricePoint(bar.timestamp().toString(), bar.close(), null)).toList();
                 return new PriceHistoryResponse(points, points.isEmpty() ? FreshnessStatus.UNAVAILABLE : FreshnessStatus.FRESH,
@@ -442,7 +478,7 @@ public class MarketDataService {
     @Transactional
     public void refreshProfile(InstrumentEntity instrument) {
         try {
-            Optional<EtfProfile> profile = this.<Optional<EtfProfile>>callWithProvider(
+            Optional<EtfProfile> profile = this.<Optional<EtfProfile>>callWithProvider("profile",
                     provider -> provider.getProfile(instrument)).value();
             profile.ifPresent(value -> {
                 if (value.name() != null && !value.name().isBlank()) instrument.setName(value.name());
@@ -474,7 +510,8 @@ public class MarketDataService {
     }
 
     private SplitSaveResult syncSplits(InstrumentEntity instrument, MarketDataProvider provider, LocalDate from, LocalDate to) {
-        return saveSplits(instrument, provider.id(), provider.getSplits(instrument, from, to));
+        List<SplitEvent> events = timedProviderCall(provider.id(), "splits", () -> provider.getSplits(instrument, from, to));
+        return saveSplits(instrument, provider.id(), events == null ? List.of() : events);
     }
 
     private SplitSaveResult saveSplits(InstrumentEntity instrument, ProviderId providerId, List<SplitEvent> events) {
@@ -550,11 +587,11 @@ public class MarketDataService {
         catch (Exception ignored) { return fallback; }
     }
 
-    private <T> T callWithFallback(Function<MarketDataProvider, T> operation, T defaultValue) {
+    private <T> T callWithFallback(String operationName, Function<MarketDataProvider, T> operation, T defaultValue) {
         try {
-            return callWithProvider(operation).value();
+            return callWithProvider(operationName, operation).value();
         } catch (ProviderException exception) {
-            log.warn("all market data providers failed operation={} provider={} reason={}", operation, exception.provider(), exception.getMessage());
+            log.warn("all market data providers failed operation={} provider={} reason={}", operationName, exception.provider(), exception.getMessage());
             return defaultValue;
         }
     }
@@ -587,7 +624,7 @@ public class MarketDataService {
                 && symbol.equalsIgnoreCase(item.symbol()));
     }
 
-    private <T> ProviderCall<T> callWithProvider(Function<MarketDataProvider, T> operation) {
+    private <T> ProviderCall<T> callWithProvider(String operationName, Function<MarketDataProvider, T> operation) {
         ProviderSelection selection = providerSelection();
         List<ProviderId> order = new ArrayList<>();
         order.add(selection.primary());
@@ -599,6 +636,8 @@ public class MarketDataService {
             MarketDataProvider provider = providers.get(providerId);
             if (provider == null || !provider.isConfigured()) continue;
             for (int attempt = 1; attempt <= providerAttempts; attempt++) {
+                String outcome = "error";
+                Timer.Sample sample = ObservabilityMetrics.start(meterRegistry);
                 try {
                     T value = operation.apply(provider);
                     if (value == null) {
@@ -607,23 +646,59 @@ public class MarketDataService {
                     if (value instanceof List<?> list && list.isEmpty()) {
                         emptyValue = value;
                         emptyProvider = providerId;
+                        outcome = "empty";
                         continue;
                     }
                     if (value instanceof Optional<?> optional && optional.isEmpty()) {
                         emptyValue = value;
                         emptyProvider = providerId;
+                        outcome = "empty";
                         continue;
                     }
+                    outcome = "success";
                     return new ProviderCall<>(value, providerId);
                 } catch (ProviderException exception) {
                     last = exception;
+                    outcome = "error";
                     if (!exception.retryable() || attempt == providerAttempts) break;
                     log.debug("retrying market provider={} attempt={} reason={}", providerId, attempt + 1, exception.getMessage());
+                } finally {
+                    recordProvider(providerId, operationName, outcome, sample);
                 }
             }
         }
         if (emptyProvider != null) return new ProviderCall<>(emptyValue, emptyProvider);
         throw last == null ? new ProviderException(selection.primary(), "No configured market data provider", false) : last;
+    }
+
+    private <T> T timedProviderCall(ProviderId providerId, String operationName, java.util.function.Supplier<T> supplier) {
+        String outcome = "error";
+        Timer.Sample sample = ObservabilityMetrics.start(meterRegistry);
+        try {
+            T value = supplier.get();
+            if (value == null) outcome = "error";
+            else if (value instanceof List<?> list && list.isEmpty()) outcome = "empty";
+            else outcome = "success";
+            return value;
+        } catch (RuntimeException exception) {
+            outcome = "error";
+            throw exception;
+        } finally {
+            recordProvider(providerId, operationName, outcome, sample);
+        }
+    }
+
+    private void recordProvider(ProviderId providerId, String operationName, String outcome, Timer.Sample sample) {
+        ObservabilityMetrics.stop(meterRegistry, sample, ObservabilityMetrics.PROVIDER_REQUEST,
+                "provider", providerId == null ? "NONE" : providerId.name(),
+                "operation", operationName,
+                "outcome", outcome);
+    }
+
+    private void recordSync(int rows, int splits, FreshnessStatus status) {
+        String statusName = status == null ? "UNKNOWN" : status.name();
+        ObservabilityMetrics.increment(meterRegistry, ObservabilityMetrics.MARKET_SYNC_ROWS, rows, "status", statusName);
+        ObservabilityMetrics.increment(meterRegistry, ObservabilityMetrics.MARKET_SYNC_SPLITS, splits, "status", statusName);
     }
 
     private ProviderSelection providerSelection() {

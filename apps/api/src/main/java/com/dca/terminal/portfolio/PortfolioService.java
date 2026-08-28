@@ -23,6 +23,9 @@ import com.dca.terminal.transaction.TransactionEntity;
 import com.dca.terminal.transaction.TransactionRepository;
 import com.dca.terminal.transaction.TransactionType;
 import com.dca.terminal.transaction.XirrCalculator;
+import com.dca.terminal.observability.ObservabilityMetrics;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.math.RoundingMode;
@@ -42,6 +45,7 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -64,6 +68,7 @@ public class PortfolioService {
     private final MarketDataService marketDataService;
     private final Clock clock;
     private final ZoneId zone;
+    private final MeterRegistry meterRegistry;
 
     public PortfolioService(TransactionRepository transactionRepository,
                             InstrumentRepository instrumentRepository,
@@ -76,6 +81,24 @@ public class PortfolioService {
                             MarketDataService marketDataService,
                             Clock clock,
                             ZoneId zone) {
+        this(transactionRepository, instrumentRepository, priceRepository, quoteRepository, splitRepository,
+                snapshotRepository, planRepository, planAssetRepository, marketDataService, clock, zone,
+                ObservabilityMetrics.noop());
+    }
+
+    @Autowired
+    public PortfolioService(TransactionRepository transactionRepository,
+                            InstrumentRepository instrumentRepository,
+                            PriceDailyRepository priceRepository,
+                            QuoteLatestRepository quoteRepository,
+                            SplitEventRepository splitRepository,
+                            PortfolioSnapshotRepository snapshotRepository,
+                            PlanRepository planRepository,
+                            AssetRepository planAssetRepository,
+                            MarketDataService marketDataService,
+                            Clock clock,
+                            ZoneId zone,
+                            MeterRegistry meterRegistry) {
         this.transactionRepository = transactionRepository;
         this.instrumentRepository = instrumentRepository;
         this.priceRepository = priceRepository;
@@ -87,6 +110,17 @@ public class PortfolioService {
         this.marketDataService = marketDataService;
         this.clock = clock;
         this.zone = zone;
+        this.meterRegistry = meterRegistry == null ? ObservabilityMetrics.noop() : meterRegistry;
+    }
+
+    public record CurrentViews(SummaryResponse summary, List<HoldingResponse> holdings,
+                               List<PortfolioDtos.AllocationResponse> allocation) { }
+
+    @Transactional(readOnly = true)
+    public CurrentViews currentViews() {
+        LocalDate today = today();
+        Ledger ledger = ledger(today);
+        return new CurrentViews(summary(ledger, today), holdings(ledger), allocation(ledger));
     }
 
     @Transactional(readOnly = true)
@@ -98,13 +132,7 @@ public class PortfolioService {
 
     @Transactional(readOnly = true)
     public List<HoldingResponse> holdings() {
-        LocalDate today = today();
-        Ledger ledger = ledger(today);
-        BigDecimal total = ledger.marketValue;
-        return ledger.calculation.positions().stream()
-                .filter(position -> position.shares().signum() != 0)
-                .sorted(Comparator.comparing(position -> ledger.instruments.get(position.instrumentId()).getSymbol()))
-                .map(position -> holding(position, ledger, total)).toList();
+        return holdings(ledger(today()));
     }
 
     @Transactional(readOnly = true)
@@ -135,23 +163,28 @@ public class PortfolioService {
         }
         if (completeCoverage) return new ArrayList<>(merged.values());
 
-        List<ProviderId> priority = marketDataService.providerPriority();
-        Map<UUID, List<SplitEventEntity>> splits = splitMap(allTransactions, end, priority);
-        Map<UUID, List<PriceDailyEntity>> prices = historicalPrices(allTransactions, end, priority);
-        FifoCalculator.Replay replay = FifoCalculator.replay(allTransactions, splits, priority);
-        Map<LocalDate, BigDecimal> dailyNetInvested = allTransactions.stream()
-                .collect(Collectors.toMap(TransactionEntity::getTradeDate, this::netInvestedChange,
-                        (first, second) -> first.add(second, MC)));
-        BigDecimal cumulativeNetInvested = netInvested(allTransactions, start.minusDays(1));
-        for (LocalDate date = start; !date.isAfter(end); date = date.plusDays(1)) {
-            FifoCalculator.Calculation calculation = replay.calculateThrough(date);
-            cumulativeNetInvested = cumulativeNetInvested.add(
-                    dailyNetInvested.getOrDefault(date, BigDecimal.ZERO), MC);
-            if (!merged.containsKey(date)) {
-                merged.put(date, replayHistoryPoint(date, calculation, cumulativeNetInvested, prices));
+        Timer.Sample sample = ObservabilityMetrics.start(meterRegistry);
+        try {
+            List<ProviderId> priority = marketDataService.providerPriority();
+            Map<UUID, List<SplitEventEntity>> splits = splitMap(allTransactions, end, priority);
+            Map<UUID, List<PriceDailyEntity>> prices = historicalPrices(allTransactions, end, priority);
+            FifoCalculator.Replay replay = FifoCalculator.replay(allTransactions, splits, priority);
+            Map<LocalDate, BigDecimal> dailyNetInvested = allTransactions.stream()
+                    .collect(Collectors.toMap(TransactionEntity::getTradeDate, this::netInvestedChange,
+                            (first, second) -> first.add(second, MC)));
+            BigDecimal cumulativeNetInvested = netInvested(allTransactions, start.minusDays(1));
+            for (LocalDate date = start; !date.isAfter(end); date = date.plusDays(1)) {
+                FifoCalculator.Calculation calculation = replay.calculateThrough(date);
+                cumulativeNetInvested = cumulativeNetInvested.add(
+                        dailyNetInvested.getOrDefault(date, BigDecimal.ZERO), MC);
+                if (!merged.containsKey(date)) {
+                    merged.put(date, replayHistoryPoint(date, calculation, cumulativeNetInvested, prices));
+                }
             }
+            return new ArrayList<>(merged.values());
+        } finally {
+            recordReplay("history", allTransactions.size(), sample);
         }
-        return new ArrayList<>(merged.values());
     }
 
     @Transactional(readOnly = true)
@@ -183,7 +216,41 @@ public class PortfolioService {
 
     @Transactional(readOnly = true)
     public List<PortfolioDtos.AllocationResponse> allocation() {
-        Ledger ledger = ledger(today());
+        return allocation(ledger(today()));
+    }
+
+    @Transactional
+    public void rebuildTodaySnapshot() {
+        Timer.Sample sample = ObservabilityMetrics.start(meterRegistry);
+        try {
+            LocalDate date = today();
+            Ledger ledger = ledger(date);
+            SummaryResponse summary = summary(ledger, date);
+            PortfolioSnapshotEntity entity = snapshotRepository.findBySnapshotDate(date).orElseGet(PortfolioSnapshotEntity::new);
+            entity.setSnapshotDate(date);
+            entity.setMarketValue(summary.marketValue());
+            entity.setCostBasis(summary.costBasis());
+            entity.setNetCashFlow(summary.netInvested());
+            entity.setRealizedPnl(summary.realizedPnl());
+            entity.setUnrealizedPnl(summary.unrealizedPnl());
+            entity.setDividendIncome(summary.dividendIncome());
+            entity.setTotalFees(summary.totalFees());
+            entity.setDataStatus(summary.status());
+            snapshotRepository.save(entity);
+        } finally {
+            ObservabilityMetrics.stop(meterRegistry, sample, ObservabilityMetrics.SNAPSHOT_REBUILD);
+        }
+    }
+
+    private List<HoldingResponse> holdings(Ledger ledger) {
+        BigDecimal total = ledger.marketValue;
+        return ledger.calculation.positions().stream()
+                .filter(position -> position.shares().signum() != 0)
+                .sorted(Comparator.comparing(position -> ledger.instruments.get(position.instrumentId()).getSymbol()))
+                .map(position -> holding(position, ledger, total)).toList();
+    }
+
+    private List<PortfolioDtos.AllocationResponse> allocation(Ledger ledger) {
         BigDecimal total = ledger.marketValue;
         Map<UUID, InvestmentPlanAssetEntity> planned = new LinkedHashMap<>();
         planRepository.findFirstByStatus(PlanStatus.ACTIVE)
@@ -214,53 +281,46 @@ public class PortfolioService {
         return result;
     }
 
-    @Transactional
-    public void rebuildTodaySnapshot() {
-        LocalDate date = today();
-        Ledger ledger = ledger(date);
-        SummaryResponse summary = summary(ledger, date);
-        PortfolioSnapshotEntity entity = snapshotRepository.findBySnapshotDate(date).orElseGet(PortfolioSnapshotEntity::new);
-        entity.setSnapshotDate(date);
-        entity.setMarketValue(summary.marketValue());
-        entity.setCostBasis(summary.costBasis());
-        entity.setNetCashFlow(summary.netInvested());
-        entity.setRealizedPnl(summary.realizedPnl());
-        entity.setUnrealizedPnl(summary.unrealizedPnl());
-        entity.setDividendIncome(summary.dividendIncome());
-        entity.setTotalFees(summary.totalFees());
-        entity.setDataStatus(summary.status());
-        snapshotRepository.save(entity);
+    private Ledger ledger(LocalDate asOf) {
+        Timer.Sample sample = ObservabilityMetrics.start(meterRegistry);
+        List<TransactionEntity> transactions = transactionRepository.findAllByTradeDateLessThanEqualOrderByTradeDateAscLedgerOrderAscIdAsc(asOf);
+        try {
+            List<ProviderId> priority = marketDataService.providerPriority();
+            Map<UUID, List<SplitEventEntity>> splits = splitMap(transactions, asOf, priority);
+            FifoCalculator.Calculation calculation = FifoCalculator.calculate(transactions, splits, asOf, priority);
+            Map<UUID, InstrumentEntity> instruments = transactions.stream()
+                    .collect(Collectors.toMap(transaction -> transaction.getInstrument().getId(), TransactionEntity::getInstrument, (a, b) -> a, LinkedHashMap::new));
+            Map<UUID, BigDecimal> values = new LinkedHashMap<>();
+            Map<UUID, PriceAtDate> prices = new HashMap<>();
+            Set<UUID> positionIds = calculation.positions().stream().map(FifoCalculator.Position::instrumentId).collect(Collectors.toSet());
+            Map<UUID, PriceAtDate> loadedPrices = loadCurrentPrices(positionIds, asOf, priority);
+            BigDecimal marketValue = BigDecimal.ZERO;
+            FreshnessStatus status = FreshnessStatus.FRESH;
+            boolean complete = true;
+            for (FifoCalculator.Position position : calculation.positions()) {
+                PriceAtDate price = loadedPrices.getOrDefault(position.instrumentId(),
+                        new PriceAtDate(null, FreshnessStatus.UNAVAILABLE, null));
+                prices.put(position.instrumentId(), price);
+                if (price.price() == null) {
+                    status = FreshnessStatus.PARTIAL;
+                    complete = false;
+                    continue;
+                }
+                BigDecimal value = position.shares().multiply(price.price(), MC);
+                values.put(position.instrumentId(), value);
+                marketValue = marketValue.add(value, MC);
+                if (price.status() != FreshnessStatus.FRESH) status = FreshnessStatus.PARTIAL;
+            }
+            return new Ledger(transactions, calculation, instruments, values, prices, marketValue, status, complete);
+        } finally {
+            recordReplay("current", transactions.size(), sample);
+        }
     }
 
-    private Ledger ledger(LocalDate asOf) {
-        List<TransactionEntity> transactions = transactionRepository.findAllByTradeDateLessThanEqualOrderByTradeDateAscLedgerOrderAscIdAsc(asOf);
-        List<ProviderId> priority = marketDataService.providerPriority();
-        Map<UUID, List<SplitEventEntity>> splits = splitMap(transactions, asOf, priority);
-        FifoCalculator.Calculation calculation = FifoCalculator.calculate(transactions, splits, asOf, priority);
-        Map<UUID, InstrumentEntity> instruments = transactions.stream()
-                .collect(Collectors.toMap(transaction -> transaction.getInstrument().getId(), TransactionEntity::getInstrument, (a, b) -> a, LinkedHashMap::new));
-        Map<UUID, BigDecimal> values = new LinkedHashMap<>();
-        Map<UUID, PriceAtDate> prices = new HashMap<>();
-        Set<UUID> positionIds = calculation.positions().stream().map(FifoCalculator.Position::instrumentId).collect(Collectors.toSet());
-        Map<UUID, PriceAtDate> loadedPrices = loadCurrentPrices(positionIds, asOf, priority);
-        BigDecimal marketValue = BigDecimal.ZERO;
-        FreshnessStatus status = FreshnessStatus.FRESH;
-        boolean complete = true;
-        for (FifoCalculator.Position position : calculation.positions()) {
-            PriceAtDate price = loadedPrices.getOrDefault(position.instrumentId(),
-                    new PriceAtDate(null, FreshnessStatus.UNAVAILABLE, null));
-            prices.put(position.instrumentId(), price);
-            if (price.price() == null) {
-                status = FreshnessStatus.PARTIAL;
-                complete = false;
-                continue;
-            }
-            BigDecimal value = position.shares().multiply(price.price(), MC);
-            values.put(position.instrumentId(), value);
-            marketValue = marketValue.add(value, MC);
-            if (price.status() != FreshnessStatus.FRESH) status = FreshnessStatus.PARTIAL;
-        }
-        return new Ledger(transactions, calculation, instruments, values, prices, marketValue, status, complete);
+    private void recordReplay(String mode, int transactionCount, Timer.Sample sample) {
+        ObservabilityMetrics.record(meterRegistry, ObservabilityMetrics.PORTFOLIO_REPLAY_TRANSACTIONS,
+                transactionCount, "mode", mode);
+        ObservabilityMetrics.stop(meterRegistry, sample, ObservabilityMetrics.PORTFOLIO_REPLAY, "mode", mode);
     }
 
     private SummaryResponse summary(Ledger ledger, LocalDate asOf) {

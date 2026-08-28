@@ -38,12 +38,12 @@ class DashboardControllerJsonTest {
     @Test
     void returnsStableDashboardJsonStructureWhenPortfolioIsEmpty() throws Exception {
         Instant asOf = Instant.parse("2026-08-27T20:00:00Z");
-        when(portfolioService.summary()).thenReturn(new PortfolioDtos.SummaryResponse(
+        PortfolioDtos.SummaryResponse summary = new PortfolioDtos.SummaryResponse(
                 bd("0.00"), bd("0.00"), bd("0.00"), bd("0.00"), bd("0.00"), bd("0.00"),
-                bd("0.00"), bd("0.00"), null, FreshnessStatus.FRESH, asOf));
+                bd("0.00"), bd("0.00"), null, FreshnessStatus.FRESH, asOf);
+        when(portfolioService.currentViews()).thenReturn(new PortfolioService.CurrentViews(
+                summary, List.of(), List.of()));
         when(portfolioService.history("1Y")).thenReturn(List.of());
-        when(portfolioService.holdings()).thenReturn(List.of());
-        when(portfolioService.allocation()).thenReturn(List.of());
         when(planService.list()).thenReturn(List.of());
 
         mockMvc.perform(get("/api/v1/dashboard").accept(MediaType.APPLICATION_JSON))

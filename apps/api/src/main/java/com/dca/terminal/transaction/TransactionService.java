@@ -9,6 +9,8 @@ import com.dca.terminal.marketdata.MarketDataService;
 import com.dca.terminal.portfolio.PortfolioSnapshotInvalidator;
 import com.dca.terminal.portfolio.PortfolioService;
 import com.dca.terminal.plan.PlanService;
+import com.dca.terminal.observability.ObservabilityMetrics;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.validation.Valid;
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -62,14 +64,24 @@ public class TransactionService {
     private final long maxCsvBytes;
     private final int maxCsvRows;
     private final int maxCsvFieldLength;
+    private final MeterRegistry meterRegistry;
 
     public TransactionService(TransactionRepository transactionRepository, InstrumentRepository instrumentRepository,
                               SplitEventRepository splitEventRepository, MarketDataService marketDataService,
                               PlanService planService, PortfolioService portfolioService,
                               PortfolioSnapshotInvalidator snapshotInvalidator, Clock clock, ZoneId zone) {
         this(transactionRepository, instrumentRepository, splitEventRepository, marketDataService, planService,
+                portfolioService, snapshotInvalidator, clock, zone, ObservabilityMetrics.noop());
+    }
+
+    public TransactionService(TransactionRepository transactionRepository, InstrumentRepository instrumentRepository,
+                              SplitEventRepository splitEventRepository, MarketDataService marketDataService,
+                              PlanService planService, PortfolioService portfolioService,
+                              PortfolioSnapshotInvalidator snapshotInvalidator, Clock clock, ZoneId zone,
+                              MeterRegistry meterRegistry) {
+        this(transactionRepository, instrumentRepository, splitEventRepository, marketDataService, planService,
                 portfolioService, snapshotInvalidator, clock, zone, DEFAULT_MAX_CSV_BYTES, DEFAULT_MAX_CSV_ROWS,
-                DEFAULT_MAX_CSV_FIELD_LENGTH);
+                DEFAULT_MAX_CSV_FIELD_LENGTH, meterRegistry);
     }
 
     @Autowired
@@ -79,10 +91,11 @@ public class TransactionService {
                               PortfolioSnapshotInvalidator snapshotInvalidator, Clock clock, ZoneId zone,
                               @Value("${spring.servlet.multipart.max-file-size:1MB}") String maxCsvSize,
                               @Value("${dca.transaction.max-csv-rows:10000}") int maxCsvRows,
-                              @Value("${dca.transaction.max-csv-field-length:1000}") int maxCsvFieldLength) {
+                              @Value("${dca.transaction.max-csv-field-length:1000}") int maxCsvFieldLength,
+                              MeterRegistry meterRegistry) {
         this(transactionRepository, instrumentRepository, splitEventRepository, marketDataService, planService,
                 portfolioService, snapshotInvalidator, clock, zone, DataSize.parse(maxCsvSize).toBytes(), maxCsvRows,
-                maxCsvFieldLength);
+                maxCsvFieldLength, meterRegistry);
     }
 
     TransactionService(TransactionRepository transactionRepository, InstrumentRepository instrumentRepository,
@@ -90,6 +103,16 @@ public class TransactionService {
                        PlanService planService, PortfolioService portfolioService,
                        PortfolioSnapshotInvalidator snapshotInvalidator, Clock clock, ZoneId zone,
                        long maxCsvBytes, int maxCsvRows, int maxCsvFieldLength) {
+        this(transactionRepository, instrumentRepository, splitEventRepository, marketDataService, planService,
+                portfolioService, snapshotInvalidator, clock, zone, maxCsvBytes, maxCsvRows, maxCsvFieldLength,
+                ObservabilityMetrics.noop());
+    }
+
+    TransactionService(TransactionRepository transactionRepository, InstrumentRepository instrumentRepository,
+                       SplitEventRepository splitEventRepository, MarketDataService marketDataService,
+                       PlanService planService, PortfolioService portfolioService,
+                       PortfolioSnapshotInvalidator snapshotInvalidator, Clock clock, ZoneId zone,
+                       long maxCsvBytes, int maxCsvRows, int maxCsvFieldLength, MeterRegistry meterRegistry) {
         this.transactionRepository = transactionRepository;
         this.instrumentRepository = instrumentRepository;
         this.splitEventRepository = splitEventRepository;
@@ -105,6 +128,7 @@ public class TransactionService {
         this.maxCsvBytes = maxCsvBytes;
         this.maxCsvRows = maxCsvRows;
         this.maxCsvFieldLength = maxCsvFieldLength;
+        this.meterRegistry = meterRegistry == null ? ObservabilityMetrics.noop() : meterRegistry;
     }
 
     @Transactional(readOnly = true)
@@ -192,7 +216,11 @@ public class TransactionService {
             throw invalidCsv("CSV could not be read");
         }
         int valid = (int) rows.stream().filter(CsvRowPreview::valid).count();
-        return new CsvPreviewResponse(batchId, rows.size(), valid, rows.size() - valid, rows);
+        int invalid = rows.size() - valid;
+        int duplicates = (int) rows.stream().filter(row -> row.errors().stream()
+                .anyMatch(error -> error.contains("Duplicate") || error.contains("already imported"))).count();
+        recordCsv(rows.size(), invalid, duplicates);
+        return new CsvPreviewResponse(batchId, rows.size(), valid, invalid, rows);
     }
 
     @Transactional
@@ -216,7 +244,13 @@ public class TransactionService {
             if (!rowErrors.isEmpty()) errors.add("row " + (index + 2) + ": " + String.join(", ", rowErrors));
             else parsed.add(requestToTransaction(row));
         }
-        if (!errors.isEmpty()) throw invalidCsv("CSV row invalid: " + String.join("; ", errors));
+        int duplicates = (int) errors.stream().filter(error -> error.contains("Duplicate")
+                || error.contains("already imported")).count();
+        if (!errors.isEmpty()) {
+            recordCsv(request.rows().size(), errors.size(), duplicates);
+            throw invalidCsv("CSV row invalid: " + String.join("; ", errors));
+        }
+        recordCsv(request.rows().size(), 0, 0);
 
         LocalDate batchStart = parsed.stream().map(TransactionRequest::tradeDate).min(LocalDate::compareTo).orElseThrow();
         List<UUID> ids = new ArrayList<>();
@@ -299,6 +333,12 @@ public class TransactionService {
         if (request.fee() != null && request.fee().signum() < 0) {
             throw new DomainException(HttpStatus.BAD_REQUEST, "INVALID_TRANSACTION", "Fee cannot be negative");
         }
+    }
+
+    private void recordCsv(int rows, int invalid, int duplicates) {
+        ObservabilityMetrics.increment(meterRegistry, ObservabilityMetrics.CSV_ROWS, rows);
+        ObservabilityMetrics.increment(meterRegistry, ObservabilityMetrics.CSV_INVALID, invalid);
+        ObservabilityMetrics.increment(meterRegistry, ObservabilityMetrics.CSV_DUPLICATE, duplicates);
     }
 
     private TransactionResponse toResponse(TransactionEntity entity) {

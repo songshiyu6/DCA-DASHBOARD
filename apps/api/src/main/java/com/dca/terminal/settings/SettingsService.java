@@ -4,6 +4,7 @@ import com.dca.terminal.common.DomainException;
 import com.dca.terminal.marketdata.MarketDataDtos.ProviderStatus;
 import com.dca.terminal.marketdata.MarketDataService;
 import com.dca.terminal.marketdata.ProviderId;
+import com.dca.terminal.portfolio.PortfolioSnapshotInvalidator;
 import java.time.ZoneId;
 import java.util.Locale;
 import java.util.Map;
@@ -26,11 +27,14 @@ public class SettingsService {
     private final AppSettingRepository repository;
     private final MarketDataService marketDataService;
     private final ZoneId defaultTimezone;
+    private final PortfolioSnapshotInvalidator snapshotInvalidator;
 
-    public SettingsService(AppSettingRepository repository, MarketDataService marketDataService, ZoneId defaultTimezone) {
+    public SettingsService(AppSettingRepository repository, MarketDataService marketDataService, ZoneId defaultTimezone,
+                           PortfolioSnapshotInvalidator snapshotInvalidator) {
         this.repository = repository;
         this.marketDataService = marketDataService;
         this.defaultTimezone = defaultTimezone;
+        this.snapshotInvalidator = snapshotInvalidator;
     }
 
     @Transactional(readOnly = true)
@@ -53,11 +57,17 @@ public class SettingsService {
     @CacheEvict(cacheNames = {"quotes", "search"}, allEntries = true)
     public SettingsResponse update(SettingsUpdateRequest request) {
         if (request == null) throw new DomainException(HttpStatus.BAD_REQUEST, "INVALID_SETTINGS", "Settings body is required");
+        SettingsResponse previous = request.primaryProvider() != null || request.fallbackProvider() != null ? get() : null;
         if (request.primaryProvider() != null) save(PRIMARY_PROVIDER, provider(request.primaryProvider(), null, false));
         if (request.fallbackProvider() != null) save(FALLBACK_PROVIDER, provider(request.fallbackProvider(), null, true));
         if (request.theme() != null) save(THEME, theme(request.theme()));
         if (request.timezone() != null) save(TIMEZONE, timezone(request.timezone()));
-        return get();
+        SettingsResponse updated = get();
+        if (previous != null && (!previous.primaryProvider().equals(updated.primaryProvider())
+                || !previous.fallbackProvider().equals(updated.fallbackProvider()))) {
+            snapshotInvalidator.invalidateAll();
+        }
+        return updated;
     }
 
     private void save(String key, String value) {

@@ -5,6 +5,9 @@ import com.dca.terminal.instrument.InstrumentRepository;
 import com.dca.terminal.transaction.TransactionEntity;
 import com.dca.terminal.transaction.TransactionRepository;
 import com.dca.terminal.transaction.TransactionType;
+import com.dca.terminal.transaction.TransactionDtos.CsvCommitRequest;
+import com.dca.terminal.transaction.TransactionDtos.CsvRowRequest;
+import com.dca.terminal.transaction.TransactionService;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -15,8 +18,10 @@ import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import org.springframework.boot.autoconfigure.web.servlet.MultipartProperties;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -29,6 +34,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @Tag("postgres")
 @Testcontainers
@@ -47,6 +53,12 @@ class PostgresSchemaIntegrationTest {
     @Autowired
     TransactionRepository transactionRepository;
 
+    @Autowired
+    TransactionService transactionService;
+
+    @Autowired
+    MultipartProperties multipartProperties;
+
     @DynamicPropertySource
     static void postgresProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
@@ -61,6 +73,12 @@ class PostgresSchemaIntegrationTest {
     @Test
     void startsWithFlywayMigrationsAndHibernateValidation() {
         assertTrue(POSTGRES.isRunning());
+    }
+
+    @Test
+    void configuresMultipartBoundsForCsvUploads() {
+        assertEquals(org.springframework.util.unit.DataSize.ofMegabytes(1), multipartProperties.getMaxFileSize());
+        assertEquals(org.springframework.util.unit.DataSize.ofMegabytes(2), multipartProperties.getMaxRequestSize());
     }
 
     @Test
@@ -115,6 +133,49 @@ class PostgresSchemaIntegrationTest {
             transactionRepository.deleteAllById(List.of(inRange.getId(), outsideRange.getId(), otherSymbolTransaction.getId()));
             transactionRepository.flush();
             instrumentRepository.deleteAllById(List.of(matchingInstrument.getId(), otherInstrument.getId()));
+            instrumentRepository.flush();
+        }
+    }
+
+    @Test
+    void preservesLedgerOrderForExistingSameDayTransactions() {
+        InstrumentEntity instrument = instrumentRepository.saveAndFlush(instrument("S" + UUID.randomUUID().toString().replace("-", "").substring(0, 10)));
+        TransactionEntity first = transaction(instrument, LocalDate.of(2026, 8, 5));
+        TransactionEntity second = transaction(instrument, LocalDate.of(2026, 8, 5));
+        long firstOrder = transactionRepository.nextLedgerOrder();
+        long secondOrder = transactionRepository.nextLedgerOrder();
+        first.setLedgerOrder(firstOrder);
+        second.setLedgerOrder(secondOrder);
+        transactionRepository.saveAll(List.of(first, second));
+        transactionRepository.flush();
+
+        try {
+            List<TransactionEntity> ordered = transactionRepository
+                    .findAllByInstrumentIdOrderByTradeDateAscLedgerOrderAscIdAsc(instrument.getId());
+            assertEquals(List.of(first.getId(), second.getId()), ordered.stream().map(TransactionEntity::getId).toList());
+            assertTrue(transactionRepository.nextLedgerOrder() > secondOrder);
+        } finally {
+            transactionRepository.deleteAllById(List.of(first.getId(), second.getId()));
+            transactionRepository.flush();
+            instrumentRepository.deleteById(instrument.getId());
+            instrumentRepository.flush();
+        }
+    }
+
+    @Test
+    void rollsBackEveryCsvRowWhenDatabaseFlushFails() {
+        InstrumentEntity instrument = instrumentRepository.saveAndFlush(instrument("S" + UUID.randomUUID().toString().replace("-", "").substring(0, 10)));
+        long before = transactionRepository.count();
+        CsvRowRequest valid = new CsvRowRequest("2026-08-01", "BUY", instrument.getSymbol(), "1", "100", "0", null, null, null);
+        CsvRowRequest tooPrecise = new CsvRowRequest("2026-08-02", "BUY", instrument.getSymbol(),
+                "10000000000000000000.123456789", "100", "0", null, null, null);
+
+        try {
+            assertThrows(DataIntegrityViolationException.class, () -> transactionService.commit(
+                    new CsvCommitRequest(UUID.randomUUID(), List.of(valid, tooPrecise))));
+            assertEquals(before, transactionRepository.count());
+        } finally {
+            instrumentRepository.deleteById(instrument.getId());
             instrumentRepository.flush();
         }
     }

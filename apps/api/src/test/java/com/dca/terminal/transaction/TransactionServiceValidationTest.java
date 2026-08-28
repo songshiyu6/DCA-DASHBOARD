@@ -27,7 +27,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -98,6 +97,25 @@ class TransactionServiceValidationTest {
 
         assertEquals("CSV_TOO_MANY_ROWS", exception.code());
         assertEquals(org.springframework.http.HttpStatus.PAYLOAD_TOO_LARGE, exception.status());
+    }
+
+    @Test
+    void rejectsCsvCommitsAboveTheConfiguredRowLimit() {
+        InstrumentEntity instrument = instrument("VOO");
+        InstrumentRepository instruments = mock(InstrumentRepository.class);
+        when(instruments.findBySymbolIgnoreCase("VOO")).thenReturn(Optional.of(instrument));
+        TransactionRepository transactions = mock(TransactionRepository.class);
+        TransactionService service = service(instruments, transactions, mock(PlanService.class), mock(PortfolioService.class),
+                mock(PortfolioSnapshotInvalidator.class), 1_000_000L, 1, 1_000);
+
+        DomainException exception = assertThrows(DomainException.class, () -> service.commit(new CsvCommitRequest(
+                UUID.randomUUID(), List.of(
+                        new CsvRowRequest("2026-08-01", "BUY", "VOO", "1", "100", "0", null, null, null),
+                        new CsvRowRequest("2026-08-02", "BUY", "VOO", "1", "100", "0", null, null, null)))));
+
+        assertEquals("CSV_TOO_MANY_ROWS", exception.code());
+        assertEquals(org.springframework.http.HttpStatus.PAYLOAD_TOO_LARGE, exception.status());
+        verify(transactions, never()).save(any(TransactionEntity.class));
     }
 
     @Test

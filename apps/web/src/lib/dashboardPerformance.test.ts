@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { filterPortfolioHistory, latestDayPerformance, timeWeightedReturn, withCurrentPortfolioPoint, ytdTimeWeightedReturn } from './dashboardPerformance'
+import { filterPortfolioHistory, latestDayPerformance, timeWeightedReturn, withCurrentPortfolioPoint, ytdPerformance, ytdTimeWeightedReturn } from './dashboardPerformance'
 import type { PortfolioHistoryPoint } from '../types'
 
 const point = (date: string, marketValue: string, netInvested: string): PortfolioHistoryPoint => ({ date, marketValue, netInvested, dataStatus: 'FRESH' })
@@ -24,6 +24,26 @@ describe('dashboard performance', () => {
 
     expect(Number(timeWeightedReturn(history))).toBeCloseTo(0.15, 8)
     expect(Number(ytdTimeWeightedReturn(history))).toBeCloseTo(0.15, 8)
+  })
+
+  it('shows YTD profit as money without treating contributions as profit', () => {
+    const result = ytdPerformance([
+      point('2025-12-31', '1000', '1000'),
+      point('2026-08-28T16:00:00Z', '1300', '1200'),
+    ])
+
+    expect(Number(result.pnl)).toBeCloseTo(100, 8)
+    expect(Number(result.returnRate)).toBeCloseTo(0.1, 8)
+  })
+
+  it('uses net capital as the YTD profit baseline when the portfolio starts this year', () => {
+    const result = ytdPerformance([
+      point('2026-08-07', '1000', '1000'),
+      point('2026-08-28T16:00:00Z', '1015', '1000'),
+    ])
+
+    expect(Number(result.pnl)).toBeCloseTo(15, 8)
+    expect(Number(result.returnRate)).toBeCloseTo(0.015, 8)
   })
 
   it('replaces the stored daily point with a transient current valuation', () => {

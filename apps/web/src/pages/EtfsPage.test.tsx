@@ -21,7 +21,12 @@ function renderPage() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  window.localStorage.clear()
   mockedApi.getInstruments.mockResolvedValue({ data: [], meta: { status: 'FRESH', source: 'API' } })
+  mockedApi.getQuote.mockImplementation(async (symbol: string) => ({
+    data: { symbol, price: '100', previousClose: '99', change: '1', changePercent: '0.01', marketTimestamp: '2026-08-28T20:00:00Z', retrievedAt: '2026-08-28T20:00:00Z', source: 'YAHOO', status: 'FRESH' },
+    meta: { status: 'FRESH', source: 'YAHOO' },
+  }))
   mockedApi.searchInstruments.mockResolvedValue({ data: [], meta: { status: 'FRESH', source: 'API' } })
 })
 
@@ -53,5 +58,21 @@ describe('ETF search', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('ETF search is temporarily unavailable')
     expect(screen.queryByText('没有匹配的 ETF。')).not.toBeInTheDocument()
+  })
+
+  it('moves tracked ETFs and persists the preferred order', async () => {
+    mockedApi.getInstruments.mockResolvedValue({
+      data: [
+        { id: 'qqqm', symbol: 'QQQM', name: 'Invesco NASDAQ 100 ETF', exchange: 'NASDAQ', currency: 'USD', instrumentType: 'ETF', issuer: 'Invesco', expenseRatio: null, aum: null, dividendYield: null, nav: null, tracked: true },
+        { id: 'voo', symbol: 'VOO', name: 'Vanguard S&P 500 ETF', exchange: 'NYSEArca', currency: 'USD', instrumentType: 'ETF', issuer: 'Vanguard', expenseRatio: null, aum: null, dividendYield: null, nav: null, tracked: true },
+      ],
+      meta: { status: 'FRESH', source: 'API' },
+    })
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Move VOO up' }))
+
+    expect(JSON.parse(window.localStorage.getItem('dca-terminal:tracked-etf-order') ?? '[]')).toEqual(['VOO', 'QQQM'])
+    expect(screen.getAllByRole('article')[0]).toHaveTextContent('VOO')
   })
 })

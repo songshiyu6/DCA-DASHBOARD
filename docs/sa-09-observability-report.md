@@ -2,7 +2,7 @@
 
 工作包：SA-09
 分支：agent/09-observability-performance
-提交：363c5a74c7a7c43aa65d6f2903df45fd92b5a909
+提交：576d7a61b1637f427ce97f3437c8c5e7c1136395
 
 ## 已验证的旧行为
 

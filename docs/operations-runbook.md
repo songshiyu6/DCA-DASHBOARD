@@ -195,6 +195,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
 ## 8. 何时不能回滚 schema
 
 - 不编辑、删除或重排已经发布的 Flyway migration，不执行“向下 migration”来配合旧应用。
+- 当前最新已发布 migration 是 `V013__add_transaction_ledger_order_sequence.sql`。它新增 sequence 并为 `investment_transaction.ledger_order` 设置 default，属于前进式变更。已经应用到 `V013` 的数据库不能靠检出更早的应用镜像“撤掉”该 sequence。
 - 新 migration 已改变列含义、约束、索引、关联关系或删除数据时，schema 不能靠旧镜像回滚。
 - 优先发布向前兼容的修复 migration；若数据已损坏或必须回到历史状态，使用已验证 dump/restore 到隔离 volume，再以匹配的应用版本验收。
 - 任何恢复或迁移都要记录 Flyway version、transaction/plan/price/snapshot 关联行和 portfolio 关键总计，避免只凭页面是否打开判断成功。

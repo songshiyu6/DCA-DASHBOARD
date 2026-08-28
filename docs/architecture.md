@@ -23,8 +23,10 @@ The repository is a monorepo with a modular monolith API:
 │   └── api/                 # Spring Boot 3 + Java 21
 ├── deploy/
 │   ├── docker-compose.yml
+│   ├── docker-compose.e2e.yml
 │   ├── Caddyfile
 │   └── scripts/
+├── e2e/                     # Playwright against mock Yahoo, isolated volumes
 ├── docs/
 ├── .github/workflows/ci.yml
 └── README.md
@@ -85,7 +87,11 @@ portfolio summary, history, allocation, P/L, XIRR
 There is no `POST /portfolio/update-holdings` or equivalent write API. A
 holding can only change after a valid transaction or a split event is applied.
 Daily snapshots are rebuildable read models used to make history and the
-dashboard fast; they must never become a second source of truth.
+dashboard fast; they must never become a second source of truth. The dashboard
+loads today's transactions, splits, and prices once for summary, holdings, and
+allocation. History keeps its own snapshot-coverage plus replay path and is
+not served from that current-ledger object. There is no cross-request
+in-memory portfolio cache.
 
 Plan cycles are also derived from a plan, calendar rules, and linked BUY
 transactions. A cycle stores a frozen asset allocation at creation time so a
@@ -105,6 +111,11 @@ boundaries:
   transaction-to-cycle suggestions.
 - `portfolio`: split-aware FIFO replay, holdings, P/L, XIRR, allocation, and
   snapshots.
+- `observability`: low-cardinality Micrometer meters for provider calls, sync,
+  snapshot invalidate/rebuild, portfolio replay, and CSV import. Allowed tag
+  keys are `provider`, `operation`, `outcome`, `status`, and `mode`. Symbol,
+  notes, credentials, and SQL must not be metric tags. Actuator still exposes
+  only `health` and `info`.
 - `plan`: plan assets, cycle lifecycle, progress, drift, and contribution
   recommendation.
 - `settings`: non-secret display and provider configuration status.
@@ -119,7 +130,11 @@ be called directly from controllers or portfolio calculations.
 
 Flyway owns every schema change. Production uses
 `spring.jpa.hibernate.ddl-auto=validate`; Hibernate must not create or alter
-tables.
+tables. The current published chain is `V001` through `V013`. `V013` adds
+`transaction_ledger_order_seq` and a default on `investment_transaction.ledger_order`.
+It is additive. Schema cannot be rolled back with an older application image;
+restore a matching dump if the sequence default is incompatible with a rollback
+candidate.
 
 The v1 schema contains the following logical tables:
 

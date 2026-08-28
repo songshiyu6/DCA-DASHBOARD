@@ -218,7 +218,7 @@ API keys 只能进入后端/部署环境，不能进入 React env、浏览器 me
 - Flyway 是生产 schema 的唯一变更来源。
 - 生产 Hibernate 使用 validate，不能使用 ddl-auto=update。
 
-当前 migration 已到 V012。V012 允许 portfolio_snapshot_daily.unrealized_pl 为空，以便价格不完整时诚实表示 PARTIAL，而不是伪造 -100% 或零值。
+当前 migration 已到 V013。V012 允许 portfolio_snapshot_daily.unrealized_pl 为空，以便价格不完整时诚实表示 PARTIAL，而不是伪造 -100% 或零值。V013 新增 `transaction_ledger_order_seq` 并为 `investment_transaction.ledger_order` 设置 default；这是前进式变更，不能靠旧应用镜像回滚 schema。
 
 ## 6. 行情 Provider
 
@@ -629,3 +629,26 @@ http://192.168.2.25:18080/
 10. 重新查看 CI 失败 job 后再决定是否需要新提交。
 
 不要从身份 catalog 推导价格，不要用当前 holdings 回推历史，不要把市场价当 NAV，不要把 provider API key 放到前端，不要通过删除测试来修 CI。
+
+## 16. v1.1 本地集成状态（2026-08-28）
+
+规划工作包 SA-00 至 SA-09 已在本地 `main` 串行合并。origin 未 push，未打 release tag。用户工作区 `/home/ssy/DCA-DASHBOARD` 仍可能停在 `agent/07-web-quality`，并带有未跟踪的 `AGENTS.md`；不要提交该文件。
+
+本地集成 HEAD 以 `git -C` 隔离 worktree 为准。纳入本次里程碑的工作包：
+
+| 工作包 | 分支 | 作用 |
+| --- | --- | --- |
+| SA-00 | `agent/00-ci-baseline` | 恢复 Web CI 真实检查 |
+| SA-01 | `agent/01-truthful-runtime-mode` | live/demo 边界，禁止故障 fixture 资产 |
+| SA-02 | `agent/02-adjusted-close-integrity` | adjusted close 保持 NULL |
+| SA-03 | `agent/03-rebuildable-portfolio-history` | snapshot 可失效缓存与历史补算 |
+| SA-04 | `agent/04-plan-cycle-invariants` | 执行窗口冻结 cycle intent |
+| SA-05 | `agent/05-transaction-hardening` | V013 ledger-order sequence、CSV 边界 |
+| SA-07 | `agent/07-web-quality` | live API 模块边界、ESLint、a11y |
+| SA-08 | `agent/08-operations-recovery` | dump/restore smoke、session/CSRF、runbook |
+| SA-06 | `agent/06-e2e-acceptance` | Playwright + mock Yahoo 独立 volume |
+| SA-09 | `agent/09-observability-performance` | dashboard currentViews、低基数 metrics |
+
+Web 验证面：13 个 test files、50 tests，另有 ESLint。API 使用 Java 21；宿主 `JAVA_HOME` 若指向 Java 8 会失败。e2e 使用 `127.0.0.1:38080/38081`，不得占用验收栈 80/443/18080。
+
+GitHub Actions 在未 push 前不能当作全绿证据。发布前仍需在 origin 上看到 CI、e2e、restore smoke 成功；在此之前不要 tag。

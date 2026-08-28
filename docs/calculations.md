@@ -169,6 +169,12 @@ the relevant cycle/plan period.
 
 ## Portfolio history
 
+Daily `portfolio_snapshot_daily` rows are a rebuildable cache, not a fact
+source. History for a requested range reuses valid snapshots that cover a date
+and replays missing dates in order. A non-empty snapshot list must not short-
+circuit the range. Backdated ledger mutations invalidate snapshots from the
+affected date forward; earlier dates stay.
+
 For every requested snapshot date, the service replays transactions known on
 that date and uses that date's market price. A transaction bought in 2026 must
 not affect a 2025 portfolio value. Current holdings multiplied by old prices

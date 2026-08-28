@@ -361,8 +361,13 @@ The service never logs a complete CSV row or the contents of `notes`.
 
 Portfolio state is calculated from transactions, split events, and prices.
 There is no holdings mutation endpoint and no `POST /portfolio/update-holdings`.
-Historical points include only transactions dated on or before the point's
-date; current holdings are not backfilled before their purchase date.
+`GET /api/v1/dashboard` builds current summary, holdings, and allocation from
+one request-local ledger projection; history still uses independent snapshot
+coverage plus dated replay. The JSON shape is unchanged. Individual
+`/portfolio/summary`, `/holdings`, and `/allocation` endpoints still compute
+independently. Historical points include only transactions dated on or before
+the point's date; current holdings are not backfilled before their purchase
+date.
 
 Summary response:
 

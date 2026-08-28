@@ -224,6 +224,12 @@ update 2026-08-26 16:00 ET". A provider outage is a degraded-data state, not a
 reason to fabricate a current price or return HTTP 500 for the entire
 dashboard.
 
+Offline acceptance uses `e2e/mock-yahoo.mjs` and `deploy/docker-compose.e2e.yml`.
+The API `YAHOO_BASE_URL` points at that mock. Canonical catalog may confirm a
+known ticker while the mock returns HTTP 429; it still must not invent prices,
+bars, or NAV. The e2e override sets `MARKET_QUOTE_TTL_SECONDS=0` so a failed
+quote fetch is observable without waiting for the production 60-second cache.
+
 ## Provider secrets and configuration
 
 `TWELVE_DATA_API_KEY` and `ALPHA_VANTAGE_API_KEY` are read by the API process

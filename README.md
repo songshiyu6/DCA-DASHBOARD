@@ -34,14 +34,17 @@ calculation.
 │   └── api/                 # Spring Boot 3 + Java 21 (app agent)
 ├── deploy/
 │   ├── docker-compose.yml   # web, api, postgres, caddy
+│   ├── docker-compose.e2e.yml
 │   ├── Caddyfile
 │   ├── .env.example
 │   └── scripts/             # PostgreSQL backup and restore
+├── e2e/                     # Playwright vs mock Yahoo, isolated volumes
 ├── docs/
 │   ├── architecture.md
 │   ├── api.md
 │   ├── market-data.md
-│   └── calculations.md
+│   ├── calculations.md
+│   └── operations-runbook.md
 ├── .github/workflows/ci.yml
 └── README.md
 ```
@@ -175,27 +178,41 @@ repeatable.
 The checked-in workflow at `.github/workflows/ci.yml` runs on pushes and pull
 requests. It performs:
 
-- web `npm ci`, lint when available, test, and production build;
+- web `npm ci`, lint, typecheck, test, and production build;
 - API Gradle test and build with Java 21;
+- Testcontainers PostgreSQL 18.6 Flyway + Hibernate `validate`;
 - `docker compose config --quiet` using generated CI-only placeholder values;
-- repository checks for the required application Dockerfiles and build files.
+- PostgreSQL dump → new volume → restore smoke;
+- Caddy/API deployment smoke;
+- Playwright e2e smoke (PR default) against a mock Yahoo stack on
+  `127.0.0.1:38080`; `workflow_dispatch` can run the full suite;
+- repository checks for Dockerfiles, backup scripts, and the e2e runner.
 
 The CI job does not use repository secrets and does not call live market-data
-providers. Provider tests must use mock HTTP responses. The API checks include
-a separate Docker-backed Testcontainers job that starts `postgres:18.6-alpine`
-and proves Flyway migrations plus Hibernate `validate` against PostgreSQL.
-The required financial
-unit-test surface is documented in `docs/calculations.md` and includes YTD,
-CAGR, drawdown, split, FIFO, P/L, XIRR, cycle status, allocation, and
-recommendation rounding.
+providers. Provider tests must use mock HTTP responses. Flyway is the only
+schema source; the current chain is `V001`–`V013`. `V013` adds a ledger-order
+sequence and cannot be undone by rolling back the application image.
+
+The required financial unit-test surface is documented in
+`docs/calculations.md` and includes YTD, CAGR, drawdown, split, FIFO, P/L,
+XIRR, cycle status, allocation, and recommendation rounding.
 
 Run the same checks locally once app files are present:
 
 ```bash
-cd apps/web && npm ci && npm audit --omit=dev && npm test -- --run && npm run build
-cd ../api && ./gradlew test build
+cd apps/web && npm ci && npm audit --omit=dev && npm run lint && npm run typecheck && npm test -- --run && npm run build
+cd ../api && ./gradlew test build postgresTest --no-daemon
 cd ../.. && docker compose --env-file deploy/.env -f deploy/docker-compose.yml config --quiet
+DCA_E2E_SUITE=smoke bash e2e/run.sh
 ```
+
+E2E uses isolated Compose volumes and never attaches to the acceptance stack
+on ports 80/443/18080. Install Playwright Chromium through
+`http://127.0.0.1:7890` when a proxy is required, then unset proxy variables
+before the tests so `127.0.0.1` is not proxied. Do not run `e2e/run.sh` from a
+worktree that contains `apps/api/build`; copy the local Gradle output into the
+API image context and the healthcheck can fail. A root `.dockerignore`
+excludes `build` and `node_modules`.
 
 The web project currently does not define a `lint` script; CI runs lint only if
 one is added later.

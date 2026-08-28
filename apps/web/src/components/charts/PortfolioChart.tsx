@@ -3,6 +3,7 @@ import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
+import { useTranslation } from 'react-i18next'
 import type { PortfolioHistoryPoint } from '../../types'
 import { formatMoney } from '../../lib/format'
 
@@ -27,6 +28,7 @@ export function toPortfolioChartPoints(data: PortfolioHistoryPoint[]): Portfolio
 }
 
 export function PortfolioChart({ data }: { data: PortfolioHistoryPoint[] }) {
+  const { t } = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!ref.current || data.length === 0) return
@@ -56,5 +58,5 @@ export function PortfolioChart({ data }: { data: PortfolioHistoryPoint[] }) {
     window.addEventListener('resize', resize)
     return () => { observer?.disconnect(); window.removeEventListener('resize', resize); chart.dispose() }
   }, [data])
-  return <div ref={ref} className="portfolio-chart" role="img" aria-label="Portfolio value versus net investment" />
+  return <div ref={ref} className="portfolio-chart" role="img" aria-label={t('charts.portfolioValue')} />
 }

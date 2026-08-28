@@ -45,6 +45,7 @@ describe('plan editor', () => {
     await user.tab()
 
     expect(await screen.findByText('Target weights must total 100.00%.')).toBeInTheDocument()
+    expect(weight).toHaveAttribute('aria-describedby', 'plan-asset-0-weight-error')
     expect(screen.getByRole('button', { name: /Save changes/ })).toBeDisabled()
   })
 

@@ -11,9 +11,12 @@ import { PlanPage } from './pages/PlanPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { TransactionsPage } from './pages/TransactionsPage'
 import { api } from './lib/api'
+import { queryKeys } from './lib/queryKeys'
+import { useTranslation } from 'react-i18next'
 
 function RouteLoading() {
-  return <main className="route-loading" aria-live="polite"><span className="loading-spinner" />Loading workspace...</main>
+  const { t } = useTranslation()
+  return <main className="route-loading" aria-live="polite"><span className="loading-spinner" />{t('common.loadingWorkspace')}</main>
 }
 
 function prefersLightTheme(): boolean {
@@ -22,7 +25,7 @@ function prefersLightTheme(): boolean {
 
 function RequireSession() {
   const location = useLocation()
-  const session = useQuery({ queryKey: ['session'], queryFn: api.getSession, staleTime: 300_000, retry: false })
+  const session = useQuery({ queryKey: queryKeys.session, queryFn: api.getSession, staleTime: 300_000, retry: false })
   if (session.isLoading) return <RouteLoading />
   if (session.isError || !session.data?.data.authenticated) return <Navigate to="/login" replace state={{ from: location.pathname }} />
   return <Outlet />

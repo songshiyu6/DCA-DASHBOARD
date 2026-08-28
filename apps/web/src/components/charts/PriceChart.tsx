@@ -1,8 +1,10 @@
 import { useEffect, useRef } from 'react'
 import { AreaSeries, ColorType, createChart, type UTCTimestamp } from 'lightweight-charts'
+import { useTranslation } from 'react-i18next'
 import type { PricePoint } from '../../types'
 
 export function PriceChart({ data }: { data: PricePoint[] }) {
+  const { t } = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!ref.current || data.length === 0) return
@@ -31,5 +33,5 @@ export function PriceChart({ data }: { data: PricePoint[] }) {
     if (!autoSize) window.addEventListener('resize', resize)
     return () => { if (!autoSize) window.removeEventListener('resize', resize); chart.remove() }
   }, [data])
-  return <div ref={ref} className="price-chart" role="img" aria-label="ETF historical price chart" />
+  return <div ref={ref} className="price-chart" role="img" aria-label={t('charts.etfHistory')} />
 }

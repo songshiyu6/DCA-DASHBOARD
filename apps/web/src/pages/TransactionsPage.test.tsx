@@ -35,6 +35,20 @@ beforeEach(() => {
 })
 
 describe('transaction form', () => {
+  it('closes the dialog with Escape and returns focus to its opener', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    const opener = await screen.findByRole('button', { name: 'Add transaction' })
+    await user.click(opener)
+    expect(screen.getByRole('dialog', { name: 'Add transaction' })).toBeInTheDocument()
+
+    await user.keyboard('{Escape}')
+
+    expect(screen.queryByRole('dialog', { name: 'Add transaction' })).not.toBeInTheDocument()
+    expect(opener).toHaveFocus()
+  })
+
   it('opens an existing ledger entry for editing and sends the canonical payload', async () => {
     const user = userEvent.setup()
     renderPage()

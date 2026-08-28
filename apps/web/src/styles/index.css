@@ -260,8 +260,9 @@ h1, h2, h3, strong { letter-spacing: 0; }
 .data-table { border-collapse: collapse; min-width: 700px; width: 100%; }
 .data-table th { color: var(--text-dim); font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 400; letter-spacing: .08em; padding: 12px 20px; text-align: left; text-transform: uppercase; }
 .data-table td { border-top: 1px solid var(--line-subtle); color: var(--text-soft); font-size: 12px; padding: 13px 20px; white-space: nowrap; }
-.data-table tbody tr { cursor: pointer; transition: background .18s ease; }
+.data-table tbody tr { transition: background .18s ease; }
 .data-table tbody tr:hover { background: var(--surface-hover); }
+.table-row-button { align-items: center; background: transparent; color: inherit; display: flex; padding: 0; text-align: left; width: 100%; }
 .data-table td strong { color: var(--text); font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 500; }
 .table-ticker .transaction-icon { margin-right: 1px; }
 .table-chevron { color: var(--text-dim); }
@@ -314,7 +315,7 @@ h1, h2, h3, strong { letter-spacing: 0; }
 .active-plan-chip { align-items: center; background: var(--positive-soft); border-radius: 20px; color: var(--positive); display: inline-flex; font-size: 10px; gap: 7px; padding: 7px 10px; }
 .form-stack { display: flex; flex-direction: column; gap: 16px; }
 .form-field { display: flex; flex-direction: column; gap: 6px; }
-.form-field label, .provider-field label { color: var(--text-muted); font-size: 11px; font-weight: 500; }
+.form-field label, .form-label, .provider-field label { color: var(--text-muted); font-size: 11px; font-weight: 500; }
 .form-field input, .form-field select, .form-field textarea, .provider-field select, .setting-row select { background: var(--surface-2); border: 1px solid var(--line); border-radius: 5px; color: var(--text); min-height: 37px; outline: 0; padding: 0 10px; transition: border .18s ease, box-shadow .18s ease; width: 100%; }
 .form-field textarea { padding: 9px 10px; resize: vertical; }
 .form-field input:focus, .form-field select:focus, .form-field textarea:focus, .provider-field select:focus, .setting-row select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
@@ -396,7 +397,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .chart-loading { animation: skeleton-pulse 1.4s ease-in-out infinite; background: var(--surface-2); border-radius: 4px; height: 244px; margin: 8px 0 -3px; width: 100%; }
 .data-banner { flex-wrap: wrap; }
 .data-banner small + small { margin-left: 0; }
-.data-table tbody tr:focus-visible { background: var(--surface-hover); outline: 2px solid var(--accent); outline-offset: -2px; }
+.table-row-button:focus-visible { background: var(--surface-hover); outline: 2px solid var(--accent); outline-offset: 2px; }
 .plan-summary { align-items: center; background: var(--surface-2); border: 1px solid var(--line-subtle); border-radius: 5px; display: flex; gap: 12px; justify-content: space-between; padding: 13px; }
 .plan-summary span { color: var(--text-soft); font-size: 12px; }
 .plan-summary strong { color: var(--accent-strong); font-family: 'DM Mono', monospace; font-size: 11px; font-weight: 500; white-space: nowrap; }

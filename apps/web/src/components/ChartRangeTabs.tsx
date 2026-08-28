@@ -1,3 +1,5 @@
+import { useTranslation } from 'react-i18next'
+
 interface ChartRangeTabsProps {
   ranges: string[]
   value: string
@@ -5,7 +7,8 @@ interface ChartRangeTabsProps {
 }
 
 export function ChartRangeTabs({ ranges, value, onChange }: ChartRangeTabsProps) {
-  return <div className="range-tabs" role="tablist" aria-label="Chart range">
+  const { t } = useTranslation()
+  return <div className="range-tabs" role="tablist" aria-label={t('charts.range')}>
     {ranges.map((range) => <button type="button" key={range} className={range === value ? 'range-tab range-tab-active' : 'range-tab'} role="tab" aria-selected={range === value} onClick={() => onChange(range)}>{range}</button>)}
   </div>
 }

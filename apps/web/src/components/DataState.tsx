@@ -6,7 +6,8 @@ import { formatDate, formatTime } from '../lib/format'
 import { StatusBadge } from './StatusBadge'
 
 export function LoadingBlock({ lines = 3 }: { lines?: number }) {
-  return <div className="loading-block" aria-label="Loading">
+  const { t } = useTranslation()
+  return <div className="loading-block" aria-label={t('common.loading')}>
     {Array.from({ length: lines }).map((_, index) => <span key={index} className="skeleton-line" style={{ width: `${88 - index * 12}%` }} />)}
   </div>
 }
@@ -16,7 +17,7 @@ export function ErrorState({ onRetry, message }: { onRetry?: () => void; message
   return <div className="state-panel state-error" role="alert">
     <span className="state-icon"><AlertTriangle size={20} /></span>
     <strong>{message ?? t('errors.generic')}</strong>
-    {onRetry ? <button className="button button-ghost" onClick={onRetry}><RefreshCw size={15} />{t('common.retry')}</button> : null}
+    {onRetry ? <button type="button" className="button button-ghost" onClick={onRetry}><RefreshCw size={15} />{t('common.retry')}</button> : null}
   </div>
 }
 

@@ -86,6 +86,15 @@ fallback keys. They are read only by the API container. They are never Vite
 variables, frontend metadata, API response fields, logs, or GitHub Actions
 secrets.
 
+The web runtime is `live` by default. In live mode every account, plan,
+transaction, holding, and market-data value must come from the API; an API
+network failure is shown as an error and is never replaced with demo data.
+Set `VITE_APP_MODE=demo` only for an explicitly non-account local preview.
+Demo mode reads deterministic fixture data, writes only to browser-local demo
+storage, and shows a persistent `Demo data` warning. Do not use a demo build
+for a real account. `apps/web/Dockerfile` rejects any mode other than `live`
+or `demo`.
+
 The default timezone and market schedule are `America/New_York`; database
 timestamps remain UTC. `APP_TIMEZONE` configures the application and is also
 used as the container `TZ`. `VITE_API_BASE_URL=/api/v1` keeps the production

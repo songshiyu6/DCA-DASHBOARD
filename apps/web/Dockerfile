@@ -3,6 +3,9 @@ FROM node:22-alpine AS build
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
 ARG NO_PROXY
+ARG VITE_APP_MODE=live
+
+RUN case "$VITE_APP_MODE" in live|demo) ;; *) echo "VITE_APP_MODE must be live or demo" >&2; exit 1 ;; esac
 
 WORKDIR /app
 
@@ -14,6 +17,7 @@ COPY apps/web/vite.config.ts apps/web/vitest.config.ts ./
 COPY apps/web/src ./src
 
 ARG VITE_API_BASE_URL=/api/v1
+ENV VITE_APP_MODE=${VITE_APP_MODE}
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 
 RUN npm run build

@@ -26,6 +26,10 @@ const resources = {
         viewAll: 'View all',
         noData: 'No data yet',
         demoData: 'Demo data',
+        demoModeNotice: 'Demo data only. This workspace is not connected to your account or API.',
+        demoModeShort: 'Explicit demo mode',
+        liveMode: 'Live API mode',
+        liveModeShort: 'Account data via API',
         updated: 'Updated',
         asOf: 'As of',
         today: 'Today',
@@ -45,7 +49,7 @@ const resources = {
         username: 'Username',
         password: 'Password',
         signIn: 'Sign in',
-        demoHint: 'Demo mode is available while the API is offline.',
+        demoHint: 'Demo mode is available only when explicitly enabled for a local preview.',
         signingIn: 'Signing in…',
       },
       dashboard: {
@@ -180,7 +184,7 @@ const resources = {
       },
       errors: {
         generic: 'Something went wrong while loading this view.',
-        apiOffline: 'API unavailable. Showing local demo data.',
+        apiOffline: 'API unavailable. Retry when the API is reachable.',
         validation: 'Please check the highlighted fields.',
       },
     },
@@ -188,15 +192,15 @@ const resources = {
   zh: {
     translation: {
       nav: { dashboard: '总览', plan: '定投计划', etfs: 'ETF', transactions: '交易流水', settings: '设置' },
-      common: { loading: '加载中', retry: '重试', refresh: '刷新', save: '保存更改', cancel: '取消', close: '关闭', add: '添加', edit: '编辑', delete: '删除', confirm: '确认', search: '搜索', viewAll: '查看全部', noData: '暂无数据', demoData: '演示数据', updated: '更新于', asOf: '截至', today: '今日', dollars: 'USD' },
+      common: { loading: '加载中', retry: '重试', refresh: '刷新', save: '保存更改', cancel: '取消', close: '关闭', add: '添加', edit: '编辑', delete: '删除', confirm: '确认', search: '搜索', viewAll: '查看全部', noData: '暂无数据', demoData: '演示数据', demoModeNotice: '仅为演示数据。此工作区未连接账户或 API。', demoModeShort: '已明确启用演示模式', liveMode: '实时 API 模式', liveModeShort: '账户数据来自 API', updated: '更新于', asOf: '截至', today: '今日', dollars: 'USD' },
       status: { FRESH: '数据新鲜', STALE: '数据延迟', PARTIAL: '部分数据', UNAVAILABLE: '不可用', INSUFFICIENT_HISTORY: '历史数据不足' },
-      auth: { eyebrow: '个人投资终端', title: '欢迎回来', subtitle: '登录后继续查看投资工作区。', username: '用户名', password: '密码', signIn: '登录', demoHint: 'API 离线时可使用演示模式。', signingIn: '登录中…' },
+      auth: { eyebrow: '个人投资终端', title: '欢迎回来', subtitle: '登录后继续查看投资工作区。', username: '用户名', password: '密码', signIn: '登录', demoHint: '演示模式仅在本地明确启用后可用。', signingIn: '登录中…' },
       dashboard: { eyebrow: '组合总览', title: '早上好', subtitle: '安静地查看市场敞口和你的投资节奏。', portfolio: '组合', totalPnl: '总盈亏', netInvested: '净投入', personalXirr: '个人 XIRR', portfolioGrowth: '组合增长', marketValue: '市场价值', contribution: '净投入', holdings: '持仓', allocation: '配置', target: '目标', actual: '实际', drift: '偏离', dcaProgress: '定投进度', contributionProgress: '{{year}} 年投入进度', nextDca: '下一次定投', daysRemaining: '剩余 {{count}} 天', planned: '计划', executed: '已执行', remaining: '剩余', executionRate: '执行率', shares: '股', avg: '均价', value: '价值', return: '收益' },
       plan: { eyebrow: '投资纪律', title: '定投计划', subtitle: '先建立节奏，让每次投入都更接近目标配置。', planSettings: '计划设置', name: '计划名称', frequency: '频率', monthlyBudget: '月度预算', executionWindow: '执行窗口', startDate: '开始日期', active: '启用', paused: '暂停', archive: '已归档', targetAllocation: '目标配置', addAsset: '添加 ETF', allocationHint: '权重合计必须为 100.00%。', total: '合计', cycles: '周期', recommendation: '下一笔投入', recommendationHint: '按新增资金再平衡，优先投入低配 ETF。', suggested: '建议', current: '当前', gap: '缺口', method: '方法', noPlan: '创建第一个月度计划，开始跟踪执行纪律。', createPlan: '创建计划', noAssets: '至少添加一个 ETF 才能定义目标配置。' },
       etfs: { eyebrow: '市场覆盖', title: 'ETF', subtitle: '聚焦真正影响你计划的基金。', tracked: '已跟踪 ETF', addEtf: '添加 ETF', addTitle: '添加 ETF', addHint: '搜索行情源目录并确认基金后开始跟踪。', ticker: '代码', issuer: '发行方', expenseRatio: '费率', aum: '规模', dividendYield: '股息率', nav: 'NAV', price: '价格', performance: '表现', latest: '最新行情', history: '历史表现', details: '基金信息', noTracked: '还没有跟踪 ETF。添加 VOO、QQQ 或其他基金开始。', untrack: '停止跟踪', searchResults: '搜索结果', noResults: '没有匹配的 ETF。', historyUnavailable: '历史日线暂不可用。行情源恢复后可以重试同步。' },
       transactions: { eyebrow: '事实来源', title: '交易流水', subtitle: '记录构建组合的每笔交易，持仓由流水自动计算。', addTransaction: '添加交易', editTransaction: '编辑交易', importCsv: '导入 CSV', transaction: '交易', date: '日期', type: '类型', quantity: '数量', unitPrice: '单价', amount: '金额', fee: '费用', total: '合计', notes: '备注', planCycle: '计划周期', saveTransaction: '保存交易', csvTitle: '预览 CSV 导入', csvHint: '使用 date,type,symbol,quantity,price,fee 格式，预览无误后才能导入。', csvPlaceholder: 'date,type,symbol,quantity,price,fee\n2026-09-01,BUY,VOO,1.2,620.00,0', preview: '预览', importRows: '导入 {{count}} 行', noTransactions: '交易流水为空。', sourceHint: '所有持仓、成本和收益都从这里开始。' },
       settings: { eyebrow: '工作区偏好', title: '设置', subtitle: '让终端与行情源和展示偏好保持一致。', preferences: '偏好设置', baseCurrency: '基础货币', timezone: '时区', theme: '主题', system: '跟随系统', light: '浅色', dark: '深色', providers: '行情数据源', primary: '主数据源', fallback: '备用数据源', apiKey: 'API Key', configured: '已配置', notConfigured: '未配置', secretHint: '密钥只保留在后端，不会发送到浏览器。', connection: '连接状态', connected: '就绪', offline: '备用模式' },
-      errors: { generic: '加载此页面时出现问题。', apiOffline: 'API 暂不可用，当前显示本地演示数据。', validation: '请检查标记的字段。' },
+      errors: { generic: '加载此页面时出现问题。', apiOffline: 'API 暂不可用，请在 API 恢复后重试。', validation: '请检查标记的字段。' },
     },
   },
 }

@@ -29,6 +29,7 @@ const transactionInput: TransactionInput = {
 afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
 })
 
 describe('API contract adapter', () => {
@@ -82,6 +83,48 @@ describe('API contract adapter', () => {
     expect(error).toMatchObject({ status: 400, message: 'Quantity is required', code: 'VALIDATION_ERROR' })
   })
 
+  it('rejects live dashboard requests on network failure instead of returning fixture assets', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('offline')))
+    const { api, ApiError } = await loadApi()
+
+    const result = await api.getDashboard().catch((reason: unknown) => reason)
+
+    expect(result).toBeInstanceOf(ApiError)
+    expect(result).toMatchObject({ status: 0, message: 'Network unavailable' })
+    expect(result).not.toHaveProperty('data.holdings')
+    expect(result).not.toHaveProperty('data.plan')
+    expect(result).not.toHaveProperty('data.transactions')
+  })
+
+  it('uses fixture data only when demo mode is explicitly enabled', async () => {
+    const fetchMock = vi.fn()
+    vi.stubEnv('VITE_APP_MODE', 'demo')
+    vi.stubGlobal('fetch', fetchMock)
+    const { api } = await loadApi()
+
+    const result = await api.getDashboard()
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(result.meta).toMatchObject({ status: 'STALE', source: 'FIXTURE' })
+    expect(result.data.holdings).toEqual(expect.arrayContaining([expect.objectContaining({ symbol: 'VOO' })]))
+  })
+
+  it('fails closed for an unsupported app mode instead of guessing from the environment', async () => {
+    vi.stubEnv('VITE_APP_MODE', 'staging')
+
+    await expect(loadApi()).rejects.toThrow('Invalid VITE_APP_MODE')
+  })
+
+  it.each([401, 403, 500])('preserves structured HTTP %i errors in live mode', async (status) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ detail: `Failure ${status}`, code: `HTTP_${status}` }, status)))
+    const { api, ApiError } = await loadApi()
+
+    const error = await api.getQuote('VOO').catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(ApiError)
+    expect(error).toMatchObject({ status, message: `Failure ${status}`, code: `HTTP_${status}` })
+  })
+
   it('sends CSV as multipart and commits the validated server rows', async () => {
     const previewBody = {
       batchId: '11111111-1111-1111-1111-111111111111',
@@ -130,6 +173,15 @@ describe('API contract adapter', () => {
     expect(getFixtureTransactions().data).toHaveLength(before)
   })
 
+  it('does not update a local transaction when a production mutation cannot reach the API', async () => {
+    const before = getFixtureTransactions().data.find((transaction) => transaction.id === 'txn-001')
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('offline')))
+    const { api, ApiError } = await loadApi()
+
+    await expect(api.updateTransaction('txn-001', transactionInput)).rejects.toBeInstanceOf(ApiError)
+    expect(getFixtureTransactions().data.find((transaction) => transaction.id === 'txn-001')).toEqual(before)
+  })
+
   it('does not commit a local CSV import when the production API cannot be reached', async () => {
     const before = getFixtureTransactions().data.length
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('offline')))
@@ -141,6 +193,28 @@ describe('API contract adapter', () => {
       errors: [],
     })).rejects.toBeInstanceOf(ApiError)
     expect(getFixtureTransactions().data).toHaveLength(before)
+  })
+
+  it('does not authenticate through a local session when live login cannot reach the API', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('offline')))
+    const { api, ApiError } = await loadApi()
+
+    await expect(api.login('admin', 'password')).rejects.toBeInstanceOf(ApiError)
+  })
+
+  it('does not report a local logout success and clears CSRF after live logout failure', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ token: 'csrf-test-token' }))
+      .mockRejectedValueOnce(new TypeError('offline'))
+      .mockResolvedValueOnce(jsonResponse({ token: 'fresh-csrf-token' }))
+      .mockRejectedValueOnce(new TypeError('offline'))
+    vi.stubGlobal('fetch', fetchMock)
+    const { api, ApiError } = await loadApi()
+
+    await expect(api.logout()).rejects.toBeInstanceOf(ApiError)
+    await expect(api.createTransaction(transactionInput)).rejects.toBeInstanceOf(ApiError)
+
+    expect(fetchMock.mock.calls[2]?.[0]).toBe('/api/v1/auth/csrf')
   })
 
   it('keeps recommendation metadata when the response contains an items field', async () => {

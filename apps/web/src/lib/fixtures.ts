@@ -22,6 +22,7 @@ import type {
 } from '../types'
 import { decimal, decimalFloor, decimalMax, decimalMin } from './format'
 
+// Deterministic demo adapter and test data; never use it as live API resilience.
 const TODAY = '2026-08-27'
 const STORAGE_KEY = 'dca-terminal-fixture-state'
 
@@ -167,7 +168,7 @@ export const fixtureDashboard: DashboardData = {
 
 export const fixtureSettings: AppSettings = { baseCurrency: 'USD', primaryProvider: 'YAHOO', fallbackProvider: 'TWELVE_DATA', twelveDataConfigured: false, alphaVantageConfigured: false, theme: 'SYSTEM', timezone: 'America/New_York' }
 
-const fixtureMeta: DataMeta = { status: 'STALE', source: 'FIXTURE', asOf: TODAY, retrievedAt: '2026-08-27T20:02:00Z', message: 'API unavailable. Showing local demo data.' }
+const fixtureMeta: DataMeta = { status: 'STALE', source: 'FIXTURE', asOf: TODAY, retrievedAt: '2026-08-27T20:02:00Z', message: 'Demo data only. This workspace is not connected to the API.' }
 
 interface FixtureState {
   instruments: Instrument[]

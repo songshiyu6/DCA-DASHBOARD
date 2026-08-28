@@ -50,8 +50,17 @@ import {
 } from './fixtures'
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '/api/v1').replace(/\/+$/, '')
-const FORCE_FIXTURES = import.meta.env.VITE_FORCE_FIXTURES === 'true'
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
+
+type AppMode = 'live' | 'demo'
+
+function resolveAppMode(value: string | undefined): AppMode {
+  if (!value || value === 'live') return 'live'
+  if (value === 'demo') return 'demo'
+  throw new Error(`Invalid VITE_APP_MODE "${value}". Expected "live" or "demo".`)
+}
+
+const APP_MODE = resolveAppMode(import.meta.env.VITE_APP_MODE)
 
 let csrfToken: string | null = null
 let csrfHeaderName = 'X-CSRF-TOKEN'
@@ -338,28 +347,13 @@ async function getCsrfToken(): Promise<string | null> {
   }
 }
 
-function fallbackMeta(error: unknown, local: DataMeta): DataMeta {
-  return {
-    ...local,
-    status: 'STALE',
-    source: 'FIXTURE',
-    message: error instanceof Error ? `${error.message}. Showing local demo data.` : local.message,
-  }
+async function read<T>(path: string, demoAdapter: () => ApiResult<T>): Promise<ApiResult<T>> {
+  if (APP_MODE === 'demo') return demoAdapter()
+  return normalizeApiResponse(await request<unknown>(path), { status: 'FRESH', source: 'API', retrievedAt: new Date().toISOString() })
 }
 
-async function read<T>(path: string, fallback: () => ApiResult<T>): Promise<ApiResult<T>> {
-  if (FORCE_FIXTURES) return fallback()
-  try {
-    return normalizeApiResponse(await request<unknown>(path), { status: 'FRESH', source: 'API', retrievedAt: new Date().toISOString() })
-  } catch (error) {
-    if (!(error instanceof ApiError) || error.status !== 0) throw error
-    const local = fallback()
-    return { ...local, meta: fallbackMeta(error, local.meta) }
-  }
-}
-
-async function mutate<T>(path: string, body: unknown, fallback: () => ApiResult<T>, method = 'POST'): Promise<ApiResult<T>> {
-  if (FORCE_FIXTURES) return fallback()
+async function mutate<T>(path: string, body: unknown, demoAdapter: () => ApiResult<T>, method = 'POST'): Promise<ApiResult<T>> {
+  if (APP_MODE === 'demo') return demoAdapter()
   return normalizeApiResponse(await request<unknown>(path, { method, body: body === undefined ? undefined : JSON.stringify(body) }), { status: 'FRESH', source: 'API', retrievedAt: new Date().toISOString() })
 }
 
@@ -367,7 +361,7 @@ function localImportPreview(csv: string): ApiResult<TransactionImportPreview> {
   const parsed = parseTransactionCsv(csv)
   return {
     data: { batchId: `local-import-${Date.now()}`, rows: parsed.rows, sourceRows: parsed.rows.map(transactionToCsvRow), errors: parsed.errors },
-    meta: { status: 'STALE', source: 'FIXTURE', message: 'API unavailable. CSV validated locally.' },
+    meta: { status: 'STALE', source: 'FIXTURE', message: 'Demo data only. CSV validated locally.' },
   }
 }
 
@@ -429,11 +423,13 @@ export const api = {
   getSession: (): Promise<ApiResult<Session>> => read('/auth/session', getFixtureSession),
   login: (username: string, password: string): Promise<ApiResult<Session>> => mutate('/auth/login', { username, password }, getFixtureSession),
   logout: async (): Promise<ApiResult<{ ok: boolean }>> => {
-    const result = await mutate('/auth/logout', undefined, () => ({ data: { ok: true }, meta: getFixtureSession().meta }))
-    csrfToken = null
-    csrfHeaderName = 'X-CSRF-TOKEN'
-    csrfRequest = null
-    return result
+    try {
+      return await mutate('/auth/logout', undefined, () => ({ data: { ok: true }, meta: getFixtureSession().meta }))
+    } finally {
+      csrfToken = null
+      csrfHeaderName = 'X-CSRF-TOKEN'
+      csrfRequest = null
+    }
   },
   getDashboard: async (): Promise<ApiResult<DashboardData>> => {
     const result = await read('/dashboard', getFixtureDashboard)
@@ -446,7 +442,7 @@ export const api = {
   untrackInstrument: (symbol: string): Promise<ApiResult<Instrument>> => mutate(`/instruments/${encodeURIComponent(symbol.toUpperCase())}`, undefined, () => untrackFixtureInstrument(symbol), 'DELETE'),
   syncInstrument: async (symbol: string): Promise<ApiResult<InstrumentSyncResult>> => {
     const result = await mutate(`/instruments/${encodeURIComponent(symbol.toUpperCase())}/sync`, undefined,
-      () => ({ data: { symbol: symbol.toUpperCase(), barsSaved: 0, splitsSaved: 0, status: 'STALE' as const, completedAt: new Date().toISOString(), message: 'API unavailable. Retry when the API is reachable.' }, meta: { status: 'STALE', source: 'FIXTURE' } }))
+      () => ({ data: { symbol: symbol.toUpperCase(), barsSaved: 0, splitsSaved: 0, status: 'STALE' as const, completedAt: new Date().toISOString(), message: 'Demo data only. History sync is not sent to the API.' }, meta: { status: 'STALE', source: 'FIXTURE' } }))
     const value: Record<string, unknown> = isRecord(result.data) ? result.data : {}
     return {
       ...result,
@@ -482,7 +478,7 @@ export const api = {
   createTransaction: (input: TransactionInput): Promise<ApiResult<Transaction>> => mutate('/transactions', input, () => createFixtureTransaction(input)),
   updateTransaction: (id: string, input: TransactionInput): Promise<ApiResult<Transaction>> => mutate(`/transactions/${encodeURIComponent(id)}`, input, () => updateFixtureTransaction(id, input), 'PUT'),
   previewTransactionImport: async (csv: string): Promise<ApiResult<TransactionImportPreview>> => {
-    if (FORCE_FIXTURES) return localImportPreview(csv)
+    if (APP_MODE === 'demo') return localImportPreview(csv)
     const form = new FormData()
     form.append('file', new Blob([csv], { type: 'text/csv' }), 'transactions.csv')
     const response = normalizeApiResponse<ServerCsvPreview>(await request<unknown>('/transactions/import/preview', { method: 'POST', body: form }), { status: 'FRESH', source: 'API', retrievedAt: new Date().toISOString() })

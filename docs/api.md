@@ -263,6 +263,12 @@ unplanned transactions are supported. The service validates the resulting
 ledger after create, update, and delete, including negative split-adjusted
 positions.
 
+`tradeDate` must be on or before the current date in the configured application
+timezone. JSON create/update requests with a future date return HTTP 400 with
+the stable Problem Details code `FUTURE_TRADE_DATE_NOT_ALLOWED`; no transaction
+is persisted. CSV rows with a future date are invalid and the whole CSV commit
+is rejected.
+
 Responses add the persisted fields `id`, `instrumentName`, `currency`,
 `createdAt`, and `updatedAt`:
 

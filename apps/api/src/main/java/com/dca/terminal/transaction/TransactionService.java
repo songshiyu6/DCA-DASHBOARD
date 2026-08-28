@@ -16,7 +16,9 @@ import java.io.InputStreamReader;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Clock;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.HexFormat;
@@ -48,11 +50,13 @@ public class TransactionService {
     private final PlanService planService;
     private final PortfolioService portfolioService;
     private final PortfolioSnapshotInvalidator snapshotInvalidator;
+    private final Clock clock;
+    private final ZoneId zone;
 
     public TransactionService(TransactionRepository transactionRepository, InstrumentRepository instrumentRepository,
                               SplitEventRepository splitEventRepository, MarketDataService marketDataService,
                               PlanService planService, PortfolioService portfolioService,
-                              PortfolioSnapshotInvalidator snapshotInvalidator) {
+                              PortfolioSnapshotInvalidator snapshotInvalidator, Clock clock, ZoneId zone) {
         this.transactionRepository = transactionRepository;
         this.instrumentRepository = instrumentRepository;
         this.splitEventRepository = splitEventRepository;
@@ -60,6 +64,8 @@ public class TransactionService {
         this.planService = planService;
         this.portfolioService = portfolioService;
         this.snapshotInvalidator = snapshotInvalidator;
+        this.clock = clock;
+        this.zone = zone;
     }
 
     @Transactional(readOnly = true)
@@ -225,6 +231,10 @@ public class TransactionService {
         if (request == null || request.type() == null || request.tradeDate() == null) {
             throw new DomainException(HttpStatus.BAD_REQUEST, "INVALID_TRANSACTION", "Type and trade date are required");
         }
+        if (request.tradeDate().isAfter(LocalDate.now(clock.withZone(zone)))) {
+            throw new DomainException(HttpStatus.BAD_REQUEST, "FUTURE_TRADE_DATE_NOT_ALLOWED",
+                    "Trade date cannot be in the future");
+        }
         if (request.type() == TransactionType.BUY || request.type() == TransactionType.SELL) {
             if (request.quantity() == null || request.quantity().signum() <= 0 || request.unitPrice() == null
                     || request.unitPrice().signum() < 0) {
@@ -268,7 +278,9 @@ public class TransactionService {
     private List<String> validateRow(CsvRowRequest row) {
         List<String> errors = new ArrayList<>();
         if (row == null) return List.of("row is required");
-        try { LocalDate.parse(row.date()); } catch (Exception ignored) { errors.add("date must be YYYY-MM-DD"); }
+        LocalDate tradeDate = parseDate(row.date());
+        if (tradeDate == null) errors.add("date must be YYYY-MM-DD");
+        else if (tradeDate.isAfter(LocalDate.now(clock.withZone(zone)))) errors.add("trade date cannot be in the future");
         try { TransactionType.valueOf(row.type().trim().toUpperCase(Locale.ROOT)); } catch (Exception ignored) { errors.add("type must be BUY, SELL, DIVIDEND or FEE"); }
         if (row.symbol() == null || row.symbol().isBlank()) errors.add("symbol is required");
         else if (instrumentRepository.findBySymbolIgnoreCase(row.symbol().trim()).isEmpty()) errors.add("symbol is not tracked");

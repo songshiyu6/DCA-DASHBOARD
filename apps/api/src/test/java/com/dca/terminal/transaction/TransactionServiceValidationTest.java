@@ -9,6 +9,9 @@ import com.dca.terminal.plan.PlanService;
 import com.dca.terminal.portfolio.PortfolioSnapshotInvalidator;
 import com.dca.terminal.portfolio.PortfolioService;
 import java.io.IOException;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -41,6 +44,42 @@ class TransactionServiceValidationTest {
         DomainException exception = assertThrows(DomainException.class, () -> service.create(request));
 
         assertEquals("INVALID_TRANSACTION", exception.code());
+    }
+
+    @Test
+    void rejectsFutureDatedTransactionWithStableErrorCode() {
+        InstrumentEntity instrument = instrument("VOO");
+        InstrumentRepository instruments = mock(InstrumentRepository.class);
+        when(instruments.findBySymbolIgnoreCase("VOO")).thenReturn(Optional.of(instrument));
+        TransactionRepository transactions = mock(TransactionRepository.class);
+        when(transactions.findTopByOrderByLedgerOrderDesc()).thenReturn(Optional.empty());
+        when(transactions.saveAndFlush(any(TransactionEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(transactions.findAllByOrderByTradeDateAscLedgerOrderAscIdAsc()).thenReturn(List.of());
+        TransactionService service = service(instruments, transactions, mock(PlanService.class), mock(PortfolioService.class));
+
+        DomainException exception = assertThrows(DomainException.class, () -> service.create(new TransactionRequest(
+                "VOO", TransactionType.BUY, java.time.LocalDate.of(2026, 8, 28),
+                new java.math.BigDecimal("1"), new java.math.BigDecimal("500"), null,
+                java.math.BigDecimal.ZERO, null, null)));
+
+        assertEquals("FUTURE_TRADE_DATE_NOT_ALLOWED", exception.code());
+        verify(transactions, never()).saveAndFlush(any(TransactionEntity.class));
+    }
+
+    @Test
+    void marksFutureDatedCsvRowsInvalidWithTheConfiguredClock() throws IOException {
+        InstrumentEntity instrument = instrument("VOO");
+        InstrumentRepository instruments = mock(InstrumentRepository.class);
+        when(instruments.findBySymbolIgnoreCase("VOO")).thenReturn(Optional.of(instrument));
+        TransactionRepository transactions = mock(TransactionRepository.class);
+        when(transactions.existsByImportFingerprint(anyString())).thenReturn(false);
+        TransactionService service = service(instruments, transactions, mock(PlanService.class), mock(PortfolioService.class));
+
+        var preview = service.preview(new MockMultipartFile("file", "transactions.csv", "text/csv",
+                "date,type,symbol,quantity,price,fee\n2026-08-28,BUY,VOO,1,500,0\n".getBytes()));
+
+        assertEquals(0, preview.validRows());
+        assertTrue(preview.rows().getFirst().errors().contains("trade date cannot be in the future"));
     }
 
     @Test
@@ -222,7 +261,8 @@ class TransactionServiceValidationTest {
                                                PlanService plans, PortfolioService portfolio,
                                                PortfolioSnapshotInvalidator invalidator) {
         return new TransactionService(transactions, instruments, mock(SplitEventRepository.class),
-                mock(MarketDataService.class), plans, portfolio, invalidator);
+                mock(MarketDataService.class), plans, portfolio, invalidator,
+                Clock.fixed(Instant.parse("2026-08-27T12:00:00Z"), ZoneId.of("UTC")), ZoneId.of("UTC"));
     }
 
     private static InstrumentEntity instrument(String symbol) {

@@ -414,8 +414,11 @@ public class PlanService {
     }
 
     private void refreshUpcomingCycles(InvestmentPlanEntity plan) {
+        LocalDate today = LocalDate.now(clock.withZone(zone));
         for (InvestmentPlanCycleEntity cycle : cycleRepository.findAllByPlanIdOrderByPeriodAsc(plan.getId())) {
-            if (cycle.getStatus() == CycleStatus.UPCOMING) {
+            List<TransactionEntity> linkedTransactions = transactionRepository
+                    .findAllByPlanCycleIdOrderByTradeDateAscLedgerOrderAscIdAsc(cycle.getId());
+            if (isMutableFutureCycle(cycle, today, !linkedTransactions.isEmpty())) {
                 cycleAssetRepository.deleteAllByCycleId(cycle.getId());
                 cycleAssetRepository.flush();
                 cycle.setPlannedAmount(plan.getMonthlyBudget());
@@ -425,20 +428,33 @@ public class PlanService {
         }
     }
 
+    static boolean isMutableFutureCycle(InvestmentPlanCycleEntity cycle, LocalDate today,
+                                        boolean hasLinkedTransactions) {
+        if (cycle == null || cycle.getPlan() == null || cycle.getPeriod() == null
+                || today == null || hasLinkedTransactions) return false;
+        YearMonth period = YearMonth.parse(cycle.getPeriod());
+        int startDay = Math.max(1, Math.min(cycle.getPlan().getExecutionStartDay(), period.lengthOfMonth()));
+        return period.atDay(startDay).isAfter(today);
+    }
+
     private CycleResponse refreshAndResponse(InvestmentPlanCycleEntity cycle) {
-        List<TransactionEntity> transactions = transactionRepository.findAllByPlanCycleIdOrderByTradeDateAscLedgerOrderAscIdAsc(cycle.getId());
+        LocalDate today = LocalDate.now(clock.withZone(zone));
+        List<TransactionEntity> transactions = transactionRepository
+                .findAllByPlanCycleIdOrderByTradeDateAscLedgerOrderAscIdAsc(cycle.getId()).stream()
+                .filter(transaction -> transaction.getTradeDate() != null
+                        && !transaction.getTradeDate().isAfter(today))
+                .toList();
         BigDecimal executed = transactions.stream().filter(transaction -> transaction.getTransactionType() == TransactionType.BUY)
                 .map(transaction -> transaction.getQuantity().multiply(transaction.getUnitPrice(), MC).add(DecimalMath.zeroIfNull(transaction.getFee()), MC))
                 .reduce(BigDecimal.ZERO, (a, b) -> a.add(b, MC));
         YearMonth period = YearMonth.parse(cycle.getPeriod());
-        LocalDate today = LocalDate.now(clock.withZone(zone));
         CycleStatus status;
-        if (executed.compareTo(cycle.getPlannedAmount()) >= 0) status = CycleStatus.COMPLETED;
+        LocalDate windowStart = period.atDay(executionStartDay(period, cycle.getPlan()));
+        LocalDate windowEnd = period.atDay(executionEndDay(period, cycle.getPlan()));
+        if (today.isBefore(windowStart)) status = CycleStatus.UPCOMING;
+        else if (executed.compareTo(cycle.getPlannedAmount()) >= 0) status = CycleStatus.COMPLETED;
         else if (executed.signum() > 0) status = CycleStatus.PARTIAL;
-        else if (period.isAfter(YearMonth.from(today))) status = CycleStatus.UPCOMING;
-        else if (period.isBefore(YearMonth.from(today))) status = CycleStatus.SKIPPED;
-        else if (today.getDayOfMonth() < executionStartDay(period, cycle.getPlan())) status = CycleStatus.UPCOMING;
-        else if (today.getDayOfMonth() <= executionEndDay(period, cycle.getPlan())) status = CycleStatus.OPEN;
+        else if (!today.isAfter(windowEnd)) status = CycleStatus.OPEN;
         else status = CycleStatus.SKIPPED;
         cycle.setExecutedAmount(executed);
         cycle.setStatus(status);

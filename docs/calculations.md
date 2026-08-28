@@ -229,6 +229,11 @@ is the sum of linked BUY cash outlay:
 BUY execution = quantity * unit price + fee
 ```
 
+The real transaction ledger accepts only trade dates on or before the
+application-local current date. A future-dated transaction is rejected with
+`FUTURE_TRADE_DATE_NOT_ALLOWED`; cycle status and executed amount never use a
+future transaction to advance a cycle before its execution window.
+
 Statuses are deterministic:
 
 ```text

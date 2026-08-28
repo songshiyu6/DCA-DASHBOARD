@@ -27,7 +27,7 @@ export function toPortfolioChartPoints(data: PortfolioHistoryPoint[]): Portfolio
   })
 }
 
-export function PortfolioChart({ data }: { data: PortfolioHistoryPoint[] }) {
+export function PortfolioChart({ data, netLiqLabel = 'Net Liq Value', netInvestmentLabel = 'Net investment' }: { data: PortfolioHistoryPoint[]; netLiqLabel?: string; netInvestmentLabel?: string }) {
   const { t } = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -44,13 +44,55 @@ export function PortfolioChart({ data }: { data: PortfolioHistoryPoint[] }) {
     chart.setOption({
       animationDuration: 450,
       grid: { left: 8, right: 10, top: 22, bottom: 8, containLabel: true },
-      legend: { top: 0, right: 2, textStyle: { color: text, fontSize: 11 }, itemWidth: 14, itemHeight: 2 },
-      tooltip: { trigger: 'axis', backgroundColor: '#151c27', borderColor: grid, textStyle: { color: '#e8eef6', fontSize: 12 }, formatter: (rawParams: unknown) => { const params = Array.isArray(rawParams) ? rawParams as Array<{ axisValue?: string; seriesName?: string; value?: unknown; marker?: string }> : []; const lines = [`<strong>${params[0]?.axisValue ?? ''}</strong>`]; params.forEach((item) => lines.push(`${item.marker ?? ''} ${item.seriesName ?? ''}: ${formatMoney(String(item.value ?? ''))}`)); return lines.join('<br/>') } },
+      legend: { show: false },
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'line', snap: true, lineStyle: { color: accent, width: 1 } },
+        backgroundColor: '#151c27',
+        borderColor: grid,
+        textStyle: { color: '#e8eef6', fontSize: 12 },
+        formatter: (rawParams: unknown) => {
+          const params = Array.isArray(rawParams)
+            ? rawParams as Array<{ axisValue?: string; seriesName?: string; value?: unknown; marker?: string }>
+            : []
+          const ordered = [...params].sort((left, right) => {
+            if (left.seriesName === netLiqLabel) return -1
+            if (right.seriesName === netLiqLabel) return 1
+            return 0
+          })
+          const lines = [`<strong>${ordered[0]?.axisValue ?? ''}</strong>`]
+          ordered.forEach((item) => lines.push(`${item.marker ?? ''} ${item.seriesName ?? ''}: ${formatMoney(String(item.value ?? ''))}`))
+          return lines.join('<br/>')
+        },
+      },
       xAxis: { type: 'category', boundaryGap: false, data: points.map((point) => point.date.includes('T') ? point.date.slice(0, 10) : point.date), axisLine: { lineStyle: { color: grid } }, axisLabel: { color: text, fontSize: 10, hideOverlap: true }, axisTick: { show: false } },
       yAxis: { type: 'value', scale: true, splitNumber: 3, axisLabel: { color: text, fontSize: 10, formatter: (value: number) => formatMoney(String(value), 'USD', 0) }, splitLine: { lineStyle: { color: grid, type: 'dashed' } }, axisLine: { show: false } },
       series: [
-        { name: 'Market value', type: 'line', smooth: 0.25, showSymbol: true, symbol: 'circle', connectNulls: false, data: points.map((point, index) => ({ value: point.marketValue, symbolSize: index === liveIndex ? 7 : 0 })), lineStyle: { width: 2, color: accent }, itemStyle: { color: accent, borderColor: '#ffffff', borderWidth: 1 }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(122,184,255,.16)' }, { offset: 1, color: 'rgba(122,184,255,0)' }]) } },
-        { name: 'Net investment', type: 'line', smooth: 0.2, showSymbol: false, data: points.map((point) => point.netInvested), lineStyle: { width: 1.5, type: 'dashed', color: positive }, itemStyle: { color: positive } },
+        {
+          name: netInvestmentLabel,
+          type: 'line',
+          smooth: 0.2,
+          showSymbol: false,
+          z: 1,
+          data: points.map((point) => point.netInvested),
+          lineStyle: { width: 1.25, type: 'dashed', color: positive, opacity: 0.72 },
+          itemStyle: { color: positive },
+          emphasis: { disabled: true },
+        },
+        {
+          name: netLiqLabel,
+          type: 'line',
+          smooth: 0.25,
+          showSymbol: true,
+          symbol: 'circle',
+          connectNulls: false,
+          z: 3,
+          data: points.map((point, index) => ({ value: point.marketValue, symbolSize: index === liveIndex ? 7 : 0 })),
+          lineStyle: { width: 2.4, color: accent },
+          itemStyle: { color: accent, borderColor: '#ffffff', borderWidth: 1 },
+          emphasis: { focus: 'series' },
+          areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(122,184,255,.16)' }, { offset: 1, color: 'rgba(122,184,255,0)' }]) },
+        },
       ],
     })
     const resize = () => chart.resize()
@@ -58,6 +100,6 @@ export function PortfolioChart({ data }: { data: PortfolioHistoryPoint[] }) {
     observer?.observe(ref.current)
     window.addEventListener('resize', resize)
     return () => { observer?.disconnect(); window.removeEventListener('resize', resize); chart.dispose() }
-  }, [data])
+  }, [data, netInvestmentLabel, netLiqLabel])
   return <div ref={ref} className="portfolio-chart" role="img" aria-label={t('charts.portfolioValue')} />
 }

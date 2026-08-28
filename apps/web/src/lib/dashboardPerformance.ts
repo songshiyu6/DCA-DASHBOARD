@@ -96,6 +96,32 @@ export function ytdTimeWeightedReturn(history: PortfolioHistoryPoint[]): string 
   return timeWeightedReturn(points, `${year}-01-01`)
 }
 
+export function ytdPerformance(history: PortfolioHistoryPoint[]): PeriodPerformance {
+  const points = validPoints(history)
+  if (!points.length) return { pnl: null, returnRate: null }
+
+  const current = points[points.length - 1]
+  const year = Number(day(current.date).slice(0, 4))
+  if (!Number.isFinite(year)) return { pnl: null, returnRate: null }
+  const startDay = `${year}-01-01`
+  const beforeYear = points.filter((point) => day(point.date) < startDay).at(-1)
+  const inYear = points.filter((point) => day(point.date) >= startDay)
+  if (!inYear.length) return { pnl: null, returnRate: null }
+
+  const returnRate = ytdTimeWeightedReturn(points)
+  if (beforeYear) {
+    const openingValue = decimal(beforeYear.marketValue)
+    const externalFlow = decimal(current.netInvested).minus(beforeYear.netInvested)
+    const pnl = decimal(current.marketValue).minus(openingValue).minus(externalFlow)
+    return { pnl: pnl.toString(), returnRate }
+  }
+
+  // With no pre-year valuation, the portfolio began during the current year.
+  // Net invested is the external capital base, so the residual is the YTD P/L amount.
+  const pnl = decimal(current.marketValue).minus(current.netInvested)
+  return { pnl: pnl.toString(), returnRate }
+}
+
 export function filterPortfolioHistory(history: PortfolioHistoryPoint[], range: ChartRange): PortfolioHistoryPoint[] {
   if (!history.length || range === '1Y') return history
   const endRaw = history[history.length - 1].date

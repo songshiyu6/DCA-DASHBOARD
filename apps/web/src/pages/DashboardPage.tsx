@@ -72,6 +72,7 @@ export function DashboardPage() {
   const ytd = useMemo(() => ytdPerformance(currentHistory), [currentHistory])
   const isZh = (i18n.resolvedLanguage ?? i18n.language).toLowerCase().startsWith('zh')
   const portfolioLabel = isZh ? '投资组合' : 'Portfolio'
+  const portfolioOverviewLabel = isZh ? '投资组合总览' : 'Portfolio overview'
   const pnlLabel = isZh ? '盈亏' : 'P/L'
   const costLabel = isZh ? '成本' : 'Cost'
   const netLiqLabel = isZh ? '净清算价值' : 'Net Liq Value'
@@ -122,7 +123,7 @@ export function DashboardPage() {
     URL.revokeObjectURL(url)
   }
 
-  if (dashboard.isLoading) return <div className="page"><div className="page-intro"><div><span className="page-eyebrow">{t('dashboard.eyebrow')}</span><h1>{t('dashboard.title')}</h1></div></div><div className="metric-grid metric-grid-main">{[1, 2, 3, 4].map((item) => <LoadingBlock key={item} lines={2} />)}</div><div className="content-grid"><Panel title={portfolioGrowthLabel}><LoadingBlock lines={5} /></Panel><Panel title={t('dashboard.nextDca')}><LoadingBlock lines={4} /></Panel></div></div>
+  if (dashboard.isLoading) return <div className="page"><div className="page-intro"><div><span className="page-eyebrow">{portfolioOverviewLabel}</span><h1>{t('dashboard.title')}</h1></div></div><div className="metric-grid metric-grid-main">{[1, 2, 3, 4].map((item) => <LoadingBlock key={item} lines={2} />)}</div><div className="content-grid"><Panel title={portfolioGrowthLabel}><LoadingBlock lines={5} /></Panel><Panel title={t('dashboard.nextDca')}><LoadingBlock lines={4} /></Panel></div></div>
   if (dashboard.isError || !dashboard.data) return <div className="page"><ErrorState onRetry={() => void dashboard.refetch()} /></div>
   const { data, meta } = dashboard.data
   const summary = data.summary
@@ -134,7 +135,7 @@ export function DashboardPage() {
     ? summary.totalPnl
     : ytd.pnl
   return <div className="page dashboard-page dashboard-page-v2">
-    <div className="page-intro dashboard-intro"><div><span className="page-eyebrow">{t('dashboard.eyebrow')}</span><h1>{t('dashboard.title')}</h1><p>{t('dashboard.subtitle')}</p></div><div className="page-actions"><button type="button" className="button button-ghost" onClick={() => void refreshMarket()} disabled={marketRefreshing || dashboard.isFetching}><RefreshCw size={15} className={marketRefreshing ? 'spin-icon' : undefined} />{marketRefreshing || dashboard.isFetching ? t('common.loading') : t('common.refresh')}</button><button type="button" className="button button-secondary" onClick={() => { exportDashboard(data) }}><Download size={15} />{t('common.export')}</button></div></div>
+    <div className="page-intro dashboard-intro"><div><span className="page-eyebrow">{portfolioOverviewLabel}</span><h1>{t('dashboard.title')}</h1><p>{t('dashboard.subtitle')}</p></div><div className="page-actions"><button type="button" className="button button-ghost" onClick={() => void refreshMarket()} disabled={marketRefreshing || dashboard.isFetching}><RefreshCw size={15} className={marketRefreshing ? 'spin-icon' : undefined} />{marketRefreshing || dashboard.isFetching ? t('common.loading') : t('common.refresh')}</button><button type="button" className="button button-secondary" onClick={() => { exportDashboard(data) }}><Download size={15} />{t('common.export')}</button></div></div>
     <DataStateBanner status={meta.status} message={meta.message} source={meta.source === 'FIXTURE' ? t('common.demoData') : meta.source} asOf={meta.asOf} retrievedAt={meta.retrievedAt} />
     <div className="metric-grid metric-grid-main dashboard-performance-grid">
       <MetricCard label={portfolioLabel} value={formatMoney(summary.marketValue)} detail={t('dashboard.trackedEtfs', { count: data.holdings.length })} icon={CircleDollarSign} tone="accent" />
@@ -143,8 +144,7 @@ export function DashboardPage() {
       <MetricCard label={`YTD ${pnlLabel}`} value={formatSignedMoney(ytdPnl)} detail={formatSignedPercent(ytd.returnRate)} icon={ArrowUpRight} tone={trendClass(ytdPnl) === 'trend-negative' ? 'negative' : 'positive'} />
     </div>
     <div className="capital-summary-strip capital-summary-strip-compact" aria-label={costLabel}>
-      <span><small>{costLabel}</small><strong>{formatMoney(summary.costBasis)}</strong></span>
-      <span><small>{t('dashboard.personalXirr')}</small><strong className={trendClass(summary.xirr)}>{formatSignedPercent(summary.xirr)}</strong><em>{t('dashboard.moneyWeightedReturn')}</em></span>
+      <span className="capital-cost-summary"><small>{costLabel}</small><strong>{formatMoney(summary.costBasis)}</strong><em><b className={trendClass(summary.xirr)}>XIRR {formatSignedPercent(summary.xirr)}</b> · {t('dashboard.moneyWeightedReturn')}</em></span>
     </div>
     <Panel title={t('dashboard.holdings')} detail={t('dashboard.ledgerProjection')} action={<button type="button" className="text-button" onClick={() => navigate('/transactions')}>{t('common.viewAll')} <ChevronRight size={15} /></button>} className="holdings-panel dashboard-holdings-first" flush>
       {data.holdings.length ? <div className="holdings-list">{data.holdings.map((holding) => <HoldingRow key={holding.symbol} holding={holding} onOpen={(symbol) => navigate(`/etfs/${symbol}`)} />)}</div> : <EmptyState title={t('common.noData')} />}

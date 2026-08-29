@@ -107,14 +107,19 @@ public class YahooFinanceProvider implements MarketDataProvider {
     @Override
     public ProviderQuote getLatestQuote(InstrumentEntity instrument) {
         JsonNode result = chart(instrument.getSymbol(), "5d", "1d", null, null);
-        JsonNode meta = chartResult(result).path("meta");
+        JsonNode chart = chartResult(result);
+        JsonNode meta = chart.path("meta");
         BigDecimal price = decimal(meta, "regularMarketPrice");
+        Instant timestamp = instant(meta, "regularMarketTime");
+        // Yahoo's previousClose is the authoritative prior regular-session close when present.
+        // chartPreviousClose instead refers to the close before the requested chart window;
+        // with range=5d it can be several sessions old and must only be a last-resort fallback.
         BigDecimal previousClose = decimal(meta, "previousClose");
+        if (previousClose == null) previousClose = previousTradingClose(chart, timestamp);
         if (previousClose == null) previousClose = decimal(meta, "chartPreviousClose");
         if (price == null || price.signum() <= 0) {
             throw new ProviderException(id(), "Yahoo returned no valid regular market price", false);
         }
-        Instant timestamp = instant(meta, "regularMarketTime");
         return new ProviderQuote(price, previousClose, decimal(meta, "bid"), decimal(meta, "ask"),
                         timestamp, Instant.now());
     }
@@ -256,6 +261,45 @@ public class YahooFinanceProvider implements MarketDataProvider {
         } catch (Exception exception) {
             throw new ProviderException(id(), "Yahoo response could not be decoded", false, exception);
         }
+    }
+
+    private static BigDecimal previousTradingClose(JsonNode chart, Instant marketTimestamp) {
+        JsonNode timestamps = chart.path("timestamp");
+        JsonNode closes = chart.path("indicators").path("quote").path(0).path("close");
+        if (!timestamps.isArray() || !closes.isArray()) return null;
+
+        Instant latestTimestamp = null;
+        BigDecimal latestClose = null;
+        Instant priorTimestamp = null;
+        BigDecimal priorClose = null;
+        int count = Math.min(timestamps.size(), closes.size());
+        for (int i = 0; i < count; i++) {
+            JsonNode timestampNode = timestamps.get(i);
+            BigDecimal close = decimalAt(closes, i);
+            if (timestampNode == null || !timestampNode.isNumber() || close == null) continue;
+            Instant barTimestamp = Instant.ofEpochSecond(timestampNode.asLong());
+            if (latestTimestamp == null || barTimestamp.isAfter(latestTimestamp)) {
+                priorTimestamp = latestTimestamp;
+                priorClose = latestClose;
+                latestTimestamp = barTimestamp;
+                latestClose = close;
+            } else if (priorTimestamp == null || barTimestamp.isAfter(priorTimestamp)) {
+                priorTimestamp = barTimestamp;
+                priorClose = close;
+            }
+        }
+        if (latestTimestamp == null) return null;
+        if (marketTimestamp == null) return priorClose != null ? priorClose : latestClose;
+
+        ZoneId exchangeZone = exchangeZone(chart.path("meta"));
+        LocalDate marketDate = marketTimestamp.atZone(exchangeZone).toLocalDate();
+        LocalDate latestTradeDate = latestTimestamp.atZone(exchangeZone).toLocalDate();
+        // Before the current session has a daily bar (for example pre-market Monday),
+        // the latest bar itself is the prior completed trading session.
+        if (latestTradeDate.isBefore(marketDate)) return latestClose;
+        // During/after the session, Yahoo includes a bar for the current trading date;
+        // the immediately preceding valid bar is yesterday's regular-session close.
+        return priorClose;
     }
 
     private static Proxy proxyFor(String proxyUrl) {

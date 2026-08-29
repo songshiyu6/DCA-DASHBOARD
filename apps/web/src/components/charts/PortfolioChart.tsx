@@ -55,14 +55,9 @@ export function PortfolioChart({ data, netLiqLabel = 'Net Liq Value', netInvestm
           const params = Array.isArray(rawParams)
             ? rawParams as Array<{ axisValue?: string; seriesName?: string; value?: unknown; marker?: string }>
             : []
-          const ordered = [...params].sort((left, right) => {
-            if (left.seriesName === netLiqLabel) return -1
-            if (right.seriesName === netLiqLabel) return 1
-            return 0
-          })
-          const lines = [`<strong>${ordered[0]?.axisValue ?? ''}</strong>`]
-          ordered.forEach((item) => lines.push(`${item.marker ?? ''} ${item.seriesName ?? ''}: ${formatMoney(String(item.value ?? ''))}`))
-          return lines.join('<br/>')
+          const nlv = params.find((item) => item.seriesName === netLiqLabel)
+          if (!nlv) return ''
+          return [`<strong>${nlv.axisValue ?? ''}</strong>`, `${nlv.marker ?? ''} ${netLiqLabel}: ${formatMoney(String(nlv.value ?? ''))}`].join('<br/>')
         },
       },
       xAxis: { type: 'category', boundaryGap: false, data: points.map((point) => point.date.includes('T') ? point.date.slice(0, 10) : point.date), axisLine: { lineStyle: { color: grid } }, axisLabel: { color: text, fontSize: 10, hideOverlap: true }, axisTick: { show: false } },
@@ -73,11 +68,13 @@ export function PortfolioChart({ data, netLiqLabel = 'Net Liq Value', netInvestm
           type: 'line',
           smooth: 0.2,
           showSymbol: false,
+          silent: true,
           z: 1,
           data: points.map((point) => point.netInvested),
-          lineStyle: { width: 1.25, type: 'dashed', color: positive, opacity: 0.72 },
+          lineStyle: { width: 1.25, type: 'dashed', color: positive, opacity: 0.62 },
           itemStyle: { color: positive },
           emphasis: { disabled: true },
+          tooltip: { show: false },
         },
         {
           name: netLiqLabel,
@@ -90,7 +87,7 @@ export function PortfolioChart({ data, netLiqLabel = 'Net Liq Value', netInvestm
           data: points.map((point, index) => ({ value: point.marketValue, symbolSize: index === liveIndex ? 7 : 0 })),
           lineStyle: { width: 2.4, color: accent },
           itemStyle: { color: accent, borderColor: '#ffffff', borderWidth: 1 },
-          emphasis: { focus: 'series' },
+          emphasis: { focus: 'series', scale: 1.5 },
           areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(122,184,255,.16)' }, { offset: 1, color: 'rgba(122,184,255,0)' }]) },
         },
       ],

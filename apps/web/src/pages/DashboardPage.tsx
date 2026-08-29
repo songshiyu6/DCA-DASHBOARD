@@ -4,7 +4,7 @@ import { ArrowUpRight, CalendarDays, ChevronRight, CircleDollarSign, Download, R
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
-import { filterPortfolioHistory, latestDayPerformance, withCurrentPortfolioPoint, ytdPerformance, type ChartRange } from '../lib/dashboardPerformance'
+import { CHART_RANGE_OPTIONS, filterPortfolioHistory, latestDayPerformance, portfolioRangeStartDay, withCurrentPortfolioPoint, ytdPerformance, type ChartRange } from '../lib/dashboardPerformance'
 import { decimal, decimalMax, decimalMin, formatDate, formatMoney, formatPeriod, formatShares, formatSignedMoney, formatSignedPercent, formatPercent } from '../lib/format'
 import { queryKeys } from '../lib/queryKeys'
 import { DataStateBanner, EmptyState, ErrorState, LoadingBlock } from '../components/DataState'
@@ -68,6 +68,8 @@ export function DashboardPage() {
     dashboard.data?.meta.status ?? 'STALE',
   ), [rawData?.portfolioHistory, rawData?.summary.marketValue, rawData?.summary.netInvested, dashboard.data?.meta.retrievedAt, dashboard.data?.meta.status])
   const visibleHistory = useMemo(() => filterPortfolioHistory(currentHistory, chartRange), [currentHistory, chartRange])
+  const chartRangeEnd = currentHistory.at(-1)?.date.slice(0, 10)
+  const chartRangeStart = chartRangeEnd ? portfolioRangeStartDay(chartRangeEnd, chartRange) ?? undefined : undefined
   const today = useMemo(() => latestDayPerformance(currentHistory), [currentHistory])
   const ytd = useMemo(() => ytdPerformance(currentHistory), [currentHistory])
   const isZh = (i18n.resolvedLanguage ?? i18n.language).toLowerCase().startsWith('zh')
@@ -150,8 +152,8 @@ export function DashboardPage() {
       {data.holdings.length ? <div className="holdings-list">{data.holdings.map((holding) => <HoldingRow key={holding.symbol} holding={holding} onOpen={(symbol) => navigate(`/etfs/${symbol}`)} />)}</div> : <EmptyState title={t('common.noData')} />}
     </Panel>
     <div className="content-grid dashboard-top-grid dashboard-primary-grid">
-      <Panel className="chart-panel" title={portfolioGrowthLabel} detail={portfolioGrowthDetail} action={<div className="chart-toolbar"><div className="chart-legend"><span><i className="legend-dot legend-market" />{netLiqLabel}</span><span><i className="legend-dot legend-investment" />{netInvestmentLabel}</span></div><div className="chart-range-control" aria-label={t('charts.range')}>{(['1M', '3M', 'YTD', '1Y'] as ChartRange[]).map((range) => <button key={range} type="button" className={chartRange === range ? 'active' : ''} onClick={() => setChartRange(range)}>{range}</button>)}</div></div>}>
-        {visibleHistory.length ? <Suspense fallback={<div className="chart-loading" aria-label={t('common.loading')} />}><PortfolioChart data={visibleHistory} netLiqLabel={netLiqLabel} netInvestmentLabel={netInvestmentLabel} /></Suspense> : <EmptyState title={t('common.noData')} detail={t('dashboard.historyEmpty')} />}
+      <Panel className="chart-panel" title={portfolioGrowthLabel} detail={portfolioGrowthDetail} action={<div className="chart-toolbar"><div className="chart-legend"><span><i className="legend-dot legend-market" />{netLiqLabel}</span><span><i className="legend-dot legend-investment" />{netInvestmentLabel}</span></div><div className="chart-range-control" aria-label={t('charts.range')}>{CHART_RANGE_OPTIONS.map((range) => <button key={range} type="button" className={chartRange === range ? 'active' : ''} aria-pressed={chartRange === range} onClick={() => setChartRange(range)}>{range}</button>)}</div></div>}>
+        {visibleHistory.length ? <Suspense fallback={<div className="chart-loading" aria-label={t('common.loading')} />}><PortfolioChart data={visibleHistory} netLiqLabel={netLiqLabel} netInvestmentLabel={netInvestmentLabel} rangeStart={chartRangeStart} rangeEnd={chartRangeEnd} /></Suspense> : <EmptyState title={t('common.noData')} detail={t('dashboard.historyEmpty')} />}
       </Panel>
       {data.nextDca ? <NextDcaCard {...data.nextDca} /> : <Panel title={t('dashboard.nextDca')}><EmptyState title={t('plan.noPlan')} /></Panel>}
     </div>

@@ -16,7 +16,8 @@ export interface PortfolioChartPoint {
 }
 
 export interface PortfolioTooltipItem {
-  axisValue?: string
+  axisValue?: string | number
+  axisValueLabel?: string
   seriesName?: string
   value?: unknown
   marker?: string
@@ -39,6 +40,29 @@ function chartDate(value: string): string {
   return value.includes('T') ? value.slice(0, 10) : value
 }
 
+function pointTimestamp(value: string): number | undefined {
+  const parsed = Date.parse(value.includes('T') ? value : `${value}T12:00:00Z`)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function rangeTimestamp(value: string | undefined, endOfDay = false): number | undefined {
+  if (!value) return undefined
+  const parsed = Date.parse(value.includes('T') ? value : `${value}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function formatAxisDate(value: unknown): string {
+  const timestamp = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(timestamp)) return typeof value === 'string' ? chartDate(value) : ''
+  const date = new Date(timestamp)
+  if (Number.isNaN(date.getTime())) return ''
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`
+}
+
+function seriesValue(value: unknown): unknown {
+  return Array.isArray(value) ? value.at(-1) : value
+}
+
 export function formatPortfolioTooltip(
   params: PortfolioTooltipItem[],
   points: PortfolioChartPoint[],
@@ -49,13 +73,19 @@ export function formatPortfolioTooltip(
   const nlv = params.find((item) => item.seriesName === netLiqLabel)
   if (!nlv) return ''
 
+  const axisTimestamp = typeof nlv.axisValue === 'number' ? nlv.axisValue : Number(nlv.axisValue)
   const point = typeof nlv.dataIndex === 'number'
     ? points[nlv.dataIndex]
-    : points.find((item) => chartDate(item.date) === nlv.axisValue)
+    : points.find((item) => {
+        const timestamp = pointTimestamp(item.date)
+        return (Number.isFinite(axisTimestamp) && timestamp === axisTimestamp) || chartDate(item.date) === String(nlv.axisValue ?? '')
+      })
   const investmentMarker = `<span style="display:inline-block;margin-right:4px;border-radius:10px;width:10px;height:10px;background-color:${netInvestmentColor};"></span>`
+  const dateLabel = point ? chartDate(point.date) : nlv.axisValueLabel ?? formatAxisDate(nlv.axisValue)
+  const marketValue = point?.marketValue ?? seriesValue(nlv.value)
   const lines = [
-    `<strong>${nlv.axisValue ?? ''}</strong>`,
-    `${nlv.marker ?? ''} ${netLiqLabel}: ${formatMoney(String(nlv.value ?? ''))}`,
+    `<strong>${dateLabel}</strong>`,
+    `${nlv.marker ?? ''} ${netLiqLabel}: ${formatMoney(marketValue === null || marketValue === undefined ? null : String(marketValue))}`,
   ]
   if (point) {
     lines.push(`${investmentMarker} ${netInvestmentLabel}: ${formatMoney(point.netInvested)}`)
@@ -63,7 +93,19 @@ export function formatPortfolioTooltip(
   return lines.join('<br/>')
 }
 
-export function PortfolioChart({ data, netLiqLabel = 'Net Liq Value', netInvestmentLabel = 'Net investment' }: { data: PortfolioHistoryPoint[]; netLiqLabel?: string; netInvestmentLabel?: string }) {
+export function PortfolioChart({
+  data,
+  netLiqLabel = 'Net Liq Value',
+  netInvestmentLabel = 'Net investment',
+  rangeStart,
+  rangeEnd,
+}: {
+  data: PortfolioHistoryPoint[]
+  netLiqLabel?: string
+  netInvestmentLabel?: string
+  rangeStart?: string
+  rangeEnd?: string
+}) {
   const { t } = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -77,6 +119,12 @@ export function PortfolioChart({ data, netLiqLabel = 'Net Liq Value', netInvestm
     const accent = styles.getPropertyValue('--accent').trim() || '#7ab8ff'
     const positive = styles.getPropertyValue('--positive').trim() || '#73d3a1'
     const liveIndex = points[points.length - 1]?.date.includes('T') ? points.length - 1 : -1
+    const timedPoints = points.flatMap((point, index) => {
+      const timestamp = pointTimestamp(point.date)
+      return timestamp === undefined ? [] : [{ point, index, timestamp }]
+    })
+    if (timedPoints.length === 0) return () => chart.dispose()
+
     chart.setOption({
       animationDuration: 450,
       grid: { left: 8, right: 10, top: 22, bottom: 8, containLabel: true },
@@ -92,7 +140,15 @@ export function PortfolioChart({ data, netLiqLabel = 'Net Liq Value', netInvestm
           return formatPortfolioTooltip(params, points, netLiqLabel, netInvestmentLabel, positive)
         },
       },
-      xAxis: { type: 'category', boundaryGap: false, data: points.map((point) => chartDate(point.date)), axisLine: { lineStyle: { color: grid } }, axisLabel: { color: text, fontSize: 10, hideOverlap: true }, axisTick: { show: false } },
+      xAxis: {
+        type: 'time',
+        min: rangeTimestamp(rangeStart),
+        max: rangeTimestamp(rangeEnd, true),
+        boundaryGap: false,
+        axisLine: { lineStyle: { color: grid } },
+        axisLabel: { color: text, fontSize: 10, hideOverlap: true, formatter: (value: number) => formatAxisDate(value) },
+        axisTick: { show: false },
+      },
       yAxis: { type: 'value', scale: true, splitNumber: 3, axisLabel: { color: text, fontSize: 10, formatter: (value: number) => formatMoney(String(value), 'USD', 0) }, splitLine: { lineStyle: { color: grid, type: 'dashed' } }, axisLine: { show: false } },
       series: [
         {
@@ -102,7 +158,7 @@ export function PortfolioChart({ data, netLiqLabel = 'Net Liq Value', netInvestm
           showSymbol: false,
           silent: true,
           z: 1,
-          data: points.map((point) => point.netInvested),
+          data: timedPoints.map(({ timestamp, point }) => [timestamp, point.netInvested]),
           lineStyle: { width: 1.25, type: 'dashed', color: positive, opacity: 0.62 },
           itemStyle: { color: positive },
           emphasis: { disabled: true },
@@ -118,7 +174,7 @@ export function PortfolioChart({ data, netLiqLabel = 'Net Liq Value', netInvestm
           symbol: 'circle',
           connectNulls: false,
           z: 3,
-          data: points.map((point, index) => ({ value: point.marketValue, symbolSize: index === liveIndex ? 7 : 0 })),
+          data: timedPoints.map(({ timestamp, point, index }) => ({ value: [timestamp, point.marketValue], symbolSize: index === liveIndex ? 7 : 0 })),
           lineStyle: { width: 2.4, color: accent },
           itemStyle: { color: accent, borderColor: '#ffffff', borderWidth: 1 },
           emphasis: { focus: 'series', scale: 1.5 },
@@ -131,6 +187,6 @@ export function PortfolioChart({ data, netLiqLabel = 'Net Liq Value', netInvestm
     observer?.observe(ref.current)
     window.addEventListener('resize', resize)
     return () => { observer?.disconnect(); window.removeEventListener('resize', resize); chart.dispose() }
-  }, [data, netInvestmentLabel, netLiqLabel])
+  }, [data, netInvestmentLabel, netLiqLabel, rangeEnd, rangeStart])
   return <div ref={ref} className="portfolio-chart" role="img" aria-label={t('charts.portfolioValue')} />
 }

@@ -16,19 +16,36 @@ describe('PortfolioChart data adapter', () => {
     const points = toPortfolioChartPoints([
       { date: '2026-08-20', marketValue: '58454.54', netInvested: '59120.00', dataStatus: 'FRESH' },
     ])
+    const timestamp = Date.parse('2026-08-20T12:00:00Z')
 
     const tooltip = formatPortfolioTooltip([
       {
-        axisValue: '2026-08-20',
+        axisValue: timestamp,
         seriesName: '净清算价值',
-        value: 58454.54,
+        value: [timestamp, 58454.54],
         marker: '<span>nlv</span>',
         dataIndex: 0,
       },
     ], points, '净清算价值', '净投入', '#00aa66')
 
+    expect(tooltip).toContain('2026-08-20')
     expect(tooltip).toContain('净清算价值: $58,454.54')
     expect(tooltip).toContain('净投入: $59,120.00')
     expect(tooltip).toContain('#00aa66')
+  })
+
+  it('extracts the money value from an ECharts time-series tuple', () => {
+    const timestamp = Date.parse('2026-08-20T12:00:00Z')
+    const tooltip = formatPortfolioTooltip([
+      {
+        axisValue: timestamp,
+        axisValueLabel: '2026-08-20',
+        seriesName: 'Net Liq Value',
+        value: [timestamp, 58454.54],
+      },
+    ], [], 'Net Liq Value', 'Net investment')
+
+    expect(tooltip).toContain('2026-08-20')
+    expect(tooltip).toContain('Net Liq Value: $58,454.54')
   })
 })

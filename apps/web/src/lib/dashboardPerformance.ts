@@ -1,7 +1,8 @@
 import { decimal } from './format'
 import type { DataStatus, PortfolioHistoryPoint } from '../types'
 
-export type ChartRange = '1M' | '3M' | 'YTD' | '1Y'
+export const CHART_RANGE_OPTIONS = ['1M', '3M', '1Y', 'YTD'] as const
+export type ChartRange = (typeof CHART_RANGE_OPTIONS)[number]
 
 export interface PeriodPerformance {
   pnl: string | null
@@ -10,6 +11,37 @@ export interface PeriodPerformance {
 
 function day(value: string): string {
   return value.slice(0, 10)
+}
+
+function parseUtcDay(value: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value)
+  if (!match) return null
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const date = Number(match[3])
+  const parsed = new Date(Date.UTC(year, month - 1, date))
+  if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== date) return null
+  return parsed
+}
+
+function formatUtcDay(value: Date): string {
+  return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, '0')}-${String(value.getUTCDate()).padStart(2, '0')}`
+}
+
+function subtractMonthsClamped(value: Date, months: number): Date {
+  const target = new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth() - months, 1))
+  const lastDay = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate()
+  target.setUTCDate(Math.min(value.getUTCDate(), lastDay))
+  return target
+}
+
+export function portfolioRangeStartDay(endValue: string, range: ChartRange): string | null {
+  const end = parseUtcDay(endValue)
+  if (!end) return null
+  if (range === 'YTD') return `${end.getUTCFullYear()}-01-01`
+  if (range === '1M') return formatUtcDay(subtractMonthsClamped(end, 1))
+  if (range === '3M') return formatUtcDay(subtractMonthsClamped(end, 3))
+  return formatUtcDay(subtractMonthsClamped(end, 12))
 }
 
 function validPoints(history: PortfolioHistoryPoint[]): PortfolioHistoryPoint[] {
@@ -123,16 +155,8 @@ export function ytdPerformance(history: PortfolioHistoryPoint[]): PeriodPerforma
 }
 
 export function filterPortfolioHistory(history: PortfolioHistoryPoint[], range: ChartRange): PortfolioHistoryPoint[] {
-  if (!history.length || range === '1Y') return history
-  const endRaw = history[history.length - 1].date
-  const end = new Date(endRaw.includes('T') ? endRaw : `${endRaw}T12:00:00Z`)
-  if (Number.isNaN(end.getTime())) return history
-  const start = new Date(end)
-  if (range === '1M') start.setUTCMonth(start.getUTCMonth() - 1)
-  if (range === '3M') start.setUTCMonth(start.getUTCMonth() - 3)
-  if (range === 'YTD') start.setTime(Date.UTC(end.getUTCFullYear(), 0, 1))
-  return history.filter((point) => {
-    const date = new Date(point.date.includes('T') ? point.date : `${point.date}T12:00:00Z`)
-    return !Number.isNaN(date.getTime()) && date.getTime() >= start.getTime()
-  })
+  if (!history.length) return history
+  const startDay = portfolioRangeStartDay(history[history.length - 1].date, range)
+  if (!startDay) return history
+  return history.filter((point) => day(point.date) >= startDay)
 }

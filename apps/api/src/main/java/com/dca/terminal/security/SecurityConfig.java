@@ -21,10 +21,13 @@ import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfTokenRepository;
 import org.springframework.security.web.authentication.session.ChangeSessionIdAuthenticationStrategy;
 import org.springframework.security.web.authentication.session.SessionAuthenticationStrategy;
+import org.springframework.session.web.http.CookieSerializer;
+import org.springframework.session.web.http.DefaultCookieSerializer;
 
 @Configuration
 public class SecurityConfig {
     private static final Pattern USERNAME = Pattern.compile("[A-Za-z0-9._@+-]{1,128}");
+    private static final int DEFAULT_SESSION_COOKIE_MAX_AGE_SECONDS = 31_536_000;
 
     @Bean
     PasswordEncoder passwordEncoder() {
@@ -56,6 +59,20 @@ public class SecurityConfig {
     @Bean
     SessionAuthenticationStrategy sessionAuthenticationStrategy() {
         return new ChangeSessionIdAuthenticationStrategy();
+    }
+
+    @Bean
+    CookieSerializer sessionCookieSerializer(
+            @Value("${dca.security.cookie-secure:true}") boolean secure,
+            @Value("${dca.security.session-cookie-max-age-seconds:31536000}") int maxAgeSeconds) {
+        DefaultCookieSerializer serializer = new DefaultCookieSerializer();
+        serializer.setCookieName("SESSION");
+        serializer.setCookiePath("/");
+        serializer.setUseHttpOnlyCookie(true);
+        serializer.setUseSecureCookie(secure);
+        serializer.setSameSite("Lax");
+        serializer.setCookieMaxAge(maxAgeSeconds > 0 ? maxAgeSeconds : DEFAULT_SESSION_COOKIE_MAX_AGE_SECONDS);
+        return serializer;
     }
 
     @Bean

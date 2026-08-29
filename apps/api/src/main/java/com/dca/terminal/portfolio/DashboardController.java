@@ -30,7 +30,7 @@ public class DashboardController {
         NextDcaResponse nextDca = active == null ? null : planService.nextDca(active.id()).orElse(null);
         ContributionProgress progress = active == null ? null : planService.contributionProgress(active.id());
         PortfolioService.CurrentViews current = portfolioService.currentViews();
-        return new DashboardResponse(current.summary(), nextDca, portfolioService.history("1Y"),
+        return new DashboardResponse(current.summary(), nextDca, portfolioService.history("ALL"),
                 current.holdings(), current.allocation(), progress);
     }
 }

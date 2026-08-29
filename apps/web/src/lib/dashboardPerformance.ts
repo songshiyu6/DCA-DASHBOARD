@@ -120,6 +120,40 @@ export function timeWeightedReturn(history: PortfolioHistoryPoint[], startDay?: 
   return periods ? factor.minus(1).toString() : null
 }
 
+export function annualizedTimeWeightedReturn(history: PortfolioHistoryPoint[]): string | null {
+  const points = validPoints(history)
+  if (points.length < 2) return null
+  const firstDate = parseUtcDay(points[0].date)
+  const lastDate = parseUtcDay(points[points.length - 1].date)
+  if (!firstDate || !lastDate) return null
+  const elapsedDays = (lastDate.getTime() - firstDate.getTime()) / 86_400_000
+  if (elapsedDays <= 0) return null
+
+  const initialCapital = decimal(points[0].netInvested)
+  const initialValue = decimal(points[0].marketValue)
+  if (initialCapital.lte(0) || initialValue.lte(0)) return null
+
+  let factor = initialValue.div(initialCapital)
+  let periods = 1
+  let previous = points[0]
+  for (const point of points.slice(1)) {
+    const openingValue = decimal(previous.marketValue)
+    if (openingValue.lte(0)) {
+      previous = point
+      continue
+    }
+    const externalFlow = decimal(point.netInvested).minus(previous.netInvested)
+    const adjustedEndingValue = decimal(point.marketValue).minus(externalFlow)
+    if (adjustedEndingValue.lte(0)) return null
+    factor = factor.mul(adjustedEndingValue.div(openingValue))
+    periods++
+    previous = point
+  }
+  if (!periods || factor.lte(0)) return null
+
+  return factor.pow(365.2425 / elapsedDays).minus(1).toString()
+}
+
 export function ytdTimeWeightedReturn(history: PortfolioHistoryPoint[]): string | null {
   const points = validPoints(history)
   if (!points.length) return null

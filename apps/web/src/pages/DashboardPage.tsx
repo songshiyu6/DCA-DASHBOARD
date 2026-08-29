@@ -4,7 +4,7 @@ import { ArrowUpRight, CalendarDays, ChevronRight, CircleDollarSign, Download, R
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
-import { CHART_RANGE_OPTIONS, filterPortfolioHistory, latestDayPerformance, portfolioRangeStartDay, withCurrentPortfolioPoint, ytdPerformance, type ChartRange } from '../lib/dashboardPerformance'
+import { annualizedTimeWeightedReturn, CHART_RANGE_OPTIONS, filterPortfolioHistory, latestDayPerformance, portfolioRangeStartDay, withCurrentPortfolioPoint, ytdPerformance, type ChartRange } from '../lib/dashboardPerformance'
 import { decimal, decimalMax, decimalMin, formatDate, formatMoney, formatPeriod, formatShares, formatSignedMoney, formatSignedPercent, formatPercent } from '../lib/format'
 import { queryKeys } from '../lib/queryKeys'
 import { DataStateBanner, EmptyState, ErrorState, LoadingBlock } from '../components/DataState'
@@ -68,6 +68,7 @@ export function DashboardPage() {
     dashboard.data?.meta.status ?? 'STALE',
   ), [rawData?.portfolioHistory, rawData?.summary.marketValue, rawData?.summary.netInvested, dashboard.data?.meta.retrievedAt, dashboard.data?.meta.status])
   const visibleHistory = useMemo(() => filterPortfolioHistory(currentHistory, chartRange), [currentHistory, chartRange])
+  const cagr = useMemo(() => annualizedTimeWeightedReturn(currentHistory), [currentHistory])
   const chartRangeEnd = currentHistory.at(-1)?.date.slice(0, 10)
   const chartRangeStart = chartRangeEnd ? portfolioRangeStartDay(chartRangeEnd, chartRange) ?? undefined : undefined
   const today = useMemo(() => latestDayPerformance(currentHistory), [currentHistory])
@@ -77,6 +78,7 @@ export function DashboardPage() {
   const portfolioOverviewLabel = isZh ? '投资组合总览' : 'Portfolio overview'
   const pnlLabel = isZh ? '盈亏' : 'P/L'
   const costLabel = isZh ? '成本' : 'Cost'
+  const timeWeightedAnnualizedLabel = isZh ? '时间加权年化' : 'Time-weighted annualized'
   const netLiqLabel = isZh ? '净清算价值' : 'Net Liq Value'
   const netInvestmentLabel = isZh ? '净投入' : 'Net investment'
   const portfolioGrowthLabel = isZh ? '投资组合增长' : 'Portfolio growth'
@@ -145,8 +147,12 @@ export function DashboardPage() {
       <MetricCard label={`${t('dashboard.sinceInception')} ${pnlLabel}`} value={formatSignedMoney(summary.totalPnl)} detail={formatSignedPercent(cumulativeReturn)} icon={TrendingUp} tone={trendClass(summary.totalPnl) === 'trend-negative' ? 'negative' : 'positive'} />
       <MetricCard label={`YTD ${pnlLabel}`} value={formatSignedMoney(ytdPnl)} detail={formatSignedPercent(ytd.returnRate)} icon={ArrowUpRight} tone={trendClass(ytdPnl) === 'trend-negative' ? 'negative' : 'positive'} />
     </div>
-    <div className="capital-summary-strip capital-summary-strip-compact" aria-label={costLabel}>
-      <span className="capital-cost-summary"><small>{costLabel}</small><strong>{formatMoney(summary.costBasis)}</strong><em><b className={trendClass(summary.xirr)}>XIRR {formatSignedPercent(summary.xirr)}</b> · {t('dashboard.moneyWeightedReturn')}</em></span>
+    <div className="capital-summary-strip capital-summary-strip-overview" aria-label={`${costLabel}, CAGR, XIRR`}>
+      <span className="capital-cost-block"><small>{costLabel}</small><strong>{formatMoney(summary.costBasis)}</strong></span>
+      <span className="capital-return-summary">
+        <span className="capital-return-row"><small>CAGR</small><strong className={trendClass(cagr)}>{formatSignedPercent(cagr)}</strong><em>{timeWeightedAnnualizedLabel}</em></span>
+        <span className="capital-return-row"><small>XIRR</small><strong className={trendClass(summary.xirr)}>{formatSignedPercent(summary.xirr)}</strong><em>{t('dashboard.moneyWeightedReturn')}</em></span>
+      </span>
     </div>
     <Panel title={t('dashboard.holdings')} detail={t('dashboard.ledgerProjection')} action={<button type="button" className="text-button" onClick={() => navigate('/transactions')}>{t('common.viewAll')} <ChevronRight size={15} /></button>} className="holdings-panel dashboard-holdings-first" flush>
       {data.holdings.length ? <div className="holdings-list">{data.holdings.map((holding) => <HoldingRow key={holding.symbol} holding={holding} onOpen={(symbol) => navigate(`/etfs/${symbol}`)} />)}</div> : <EmptyState title={t('common.noData')} />}

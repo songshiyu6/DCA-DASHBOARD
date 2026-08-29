@@ -31,16 +31,23 @@ spring:
       max-request-size: ${TRANSACTION_MAX_CSV_REQUEST_SIZE:2MB}
   cache:
     type: caffeine
+  session:
+    timeout: ${APP_SESSION_MAX_AGE_SECONDS:31536000}
+    jdbc:
+      initialize-schema: never
 
 server:
   port: ${SERVER_PORT:8080}
   forward-headers-strategy: framework
   servlet:
     session:
+      timeout: ${APP_SESSION_MAX_AGE_SECONDS:31536000}
       cookie:
+        name: JSESSIONID
         http-only: true
         secure: ${APP_COOKIE_SECURE:true}
         same-site: lax
+        max-age: ${APP_SESSION_MAX_AGE_SECONDS:31536000}
   error:
     include-message: never
 
@@ -86,6 +93,7 @@ dca:
     username: ${APP_USERNAME:admin}
     password-hash: ${APP_PASSWORD_HASH:}
     cookie-secure: ${APP_COOKIE_SECURE:true}
+    session-cookie-max-age-seconds: ${APP_SESSION_MAX_AGE_SECONDS:31536000}
     login-throttle:
       max-attempts: ${APP_LOGIN_MAX_ATTEMPTS:5}
       window-seconds: ${APP_LOGIN_THROTTLE_WINDOW_SECONDS:900}

@@ -51,6 +51,25 @@ function rangeTimestamp(value: string | undefined, endOfDay = false): number | u
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
+function earliestPointTimestamp(points: PortfolioChartPoint[], fundedOnly: boolean): number | undefined {
+  let earliest: number | undefined
+  for (const point of points) {
+    if (fundedOnly && point.netInvested <= 0) continue
+    const timestamp = pointTimestamp(point.date)
+    if (timestamp === undefined) continue
+    if (earliest === undefined || timestamp < earliest) earliest = timestamp
+  }
+  return earliest
+}
+
+export function resolvePortfolioChartStart(points: PortfolioChartPoint[], rangeStart?: string): number | undefined {
+  const requestedStart = rangeTimestamp(rangeStart)
+  const portfolioStart = earliestPointTimestamp(points, true) ?? earliestPointTimestamp(points, false)
+  if (requestedStart === undefined) return portfolioStart
+  if (portfolioStart === undefined) return requestedStart
+  return Math.max(requestedStart, portfolioStart)
+}
+
 function formatAxisDate(value: unknown): string {
   const timestamp = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(timestamp)) return typeof value === 'string' ? chartDate(value) : ''
@@ -142,7 +161,7 @@ export function PortfolioChart({
       },
       xAxis: {
         type: 'time',
-        min: rangeTimestamp(rangeStart),
+        min: resolvePortfolioChartStart(points, rangeStart),
         max: rangeTimestamp(rangeEnd, true),
         boundaryGap: false,
         axisLine: { lineStyle: { color: grid } },

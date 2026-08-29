@@ -2,7 +2,7 @@ import { AlertTriangle, Database, RefreshCw, WifiOff } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { DataStatus } from '../types'
-import { formatDate, formatTime } from '../lib/format'
+import { formatDate, formatUserTime } from '../lib/format'
 import { StatusBadge } from './StatusBadge'
 
 export function LoadingBlock({ lines = 3 }: { lines?: number }) {
@@ -44,7 +44,7 @@ export function DataStateBanner({ status, message, source, asOf, retrievedAt, on
   if (status === 'FRESH' && !message) return null
   const statusLabel = t(`status.${status}`)
   const detail = message && message !== statusLabel ? message : undefined
-  const timestamp = asOf ? `${t('common.asOf')} ${formatDate(asOf)}` : retrievedAt ? `${t('common.updated')} ${formatTime(retrievedAt)}` : undefined
+  const timestamp = asOf ? `${t('common.asOf')} ${formatDate(asOf)}` : retrievedAt ? `${t('common.updated')} ${formatUserTime(retrievedAt)}` : undefined
   return <div className={`data-banner banner-${status.toLowerCase()}`}>
     <StatusBadge status={status} compact />
     {detail ? <span>{detail}</span> : null}

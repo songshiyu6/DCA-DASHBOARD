@@ -25,10 +25,10 @@ function prefersLightTheme(): boolean {
 
 function RequireSession() {
   const location = useLocation()
-  const session = useQuery({ queryKey: queryKeys.session, queryFn: api.getSession, staleTime: 300_000, retry: false })
-  if (session.isLoading) return <RouteLoading />
-  if (session.isError || !session.data?.data.authenticated) return <Navigate to="/login" replace state={{ from: location.pathname }} />
-  return <Outlet />
+  const session = useQuery({ queryKey: queryKeys.session, queryFn: api.getSession, staleTime: 300_000, retry: 2 })
+  if (session.data?.data.authenticated) return <Outlet />
+  if (session.isLoading || session.isFetching || session.isError) return <RouteLoading />
+  return <Navigate to="/login" replace state={{ from: location.pathname }} />
 }
 
 export default function App() {

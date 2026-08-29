@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CHART_RANGE_OPTIONS, filterPortfolioHistory, latestDayPerformance, portfolioRangeStartDay, timeWeightedReturn, withCurrentPortfolioPoint, ytdPerformance, ytdTimeWeightedReturn } from './dashboardPerformance'
+import { annualizedTimeWeightedReturn, CHART_RANGE_OPTIONS, filterPortfolioHistory, latestDayPerformance, portfolioRangeStartDay, timeWeightedReturn, withCurrentPortfolioPoint, ytdPerformance, ytdTimeWeightedReturn } from './dashboardPerformance'
 import type { PortfolioHistoryPoint } from '../types'
 
 const point = (date: string, marketValue: string, netInvested: string): PortfolioHistoryPoint => ({ date, marketValue, netInvested, dataStatus: 'FRESH' })
@@ -24,6 +24,20 @@ describe('dashboard performance', () => {
 
     expect(Number(timeWeightedReturn(history))).toBeCloseTo(0.15, 8)
     expect(Number(ytdTimeWeightedReturn(history))).toBeCloseTo(0.15, 8)
+  })
+
+  it('annualizes time-weighted performance without treating contributions as return', () => {
+    const history = [
+      point('2025-01-01', '1000', '1000'),
+      point('2026-01-01', '1200', '1100'),
+    ]
+    const expected = Math.pow(1.1, 365.2425 / 365) - 1
+
+    expect(Number(annualizedTimeWeightedReturn(history))).toBeCloseTo(expected, 8)
+  })
+
+  it('requires more than one valuation day to annualize performance', () => {
+    expect(annualizedTimeWeightedReturn([point('2026-08-28', '1000', '1000')])).toBeNull()
   })
 
   it('shows YTD profit as money without treating contributions as profit', () => {

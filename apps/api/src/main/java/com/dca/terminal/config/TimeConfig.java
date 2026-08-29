@@ -4,26 +4,18 @@ import java.time.Clock;
 import java.time.ZoneId;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Primary;
 
 @Configuration
 public class TimeConfig {
-    public static final String MARKET_ZONE = "marketZone";
-    public static final String USER_ZONE = "userZone";
+    public static final String MARKET_ZONE_ID = "America/New_York";
 
     @Bean
     public Clock applicationClock() {
         return Clock.systemUTC();
     }
 
-    @Bean(name = MARKET_ZONE)
-    @Primary
-    public ZoneId marketZone() {
-        return ZoneId.of("America/New_York");
-    }
-
-    @Bean(name = USER_ZONE)
-    public ZoneId userZone() {
-        return ZoneId.of("Asia/Shanghai");
+    @Bean
+    public ZoneId applicationZone() {
+        return ZoneId.of(MARKET_ZONE_ID);
     }
 }

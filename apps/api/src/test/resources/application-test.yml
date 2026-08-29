@@ -16,7 +16,7 @@ spring:
     type: simple
   session:
     jdbc:
-      initialize-schema: always
+      initialize-schema: embedded
 
 dca:
   scheduler:

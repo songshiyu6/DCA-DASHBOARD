@@ -78,6 +78,13 @@
 
 .dashboard-holdings-first {
   margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.dashboard-holdings-first.panel-flush .panel-header {
+  border-bottom: 1px solid var(--line-subtle);
+  margin-bottom: 0;
+  padding: 20px 20px 15px;
 }
 
 .dashboard-primary-grid {
@@ -161,6 +168,10 @@
 
   .dashboard-holdings-first {
     margin-bottom: 12px;
+  }
+
+  .dashboard-holdings-first.panel-flush .panel-header {
+    padding: 15px 14px 12px;
   }
 
   .dashboard-page-v2 .holding-row {

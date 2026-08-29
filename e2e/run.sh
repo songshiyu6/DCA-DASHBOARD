@@ -66,6 +66,11 @@ printf '%s\n' \
 
 COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" -f "$OVERRIDE_FILE")
 "${COMPOSE[@]}" config --quiet
+
+# GitHub-hosted runners start with an unpredictable Docker image cache. Pull
+# the image-backed E2E services explicitly, then keep `up --pull never` so the
+# actual stack startup is deterministic and cannot silently replace images.
+"${COMPOSE[@]}" pull postgres caddy mock-yahoo
 "${COMPOSE[@]}" up -d --build --pull never
 
 wait_http() {

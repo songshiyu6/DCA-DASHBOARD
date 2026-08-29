@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { assertNoFixtureLeak, login, setMockChart } from '../playwright.config'
+import { appBusinessDate, assertNoFixtureLeak, login, setMockChart } from '../playwright.config'
 
 test.describe('E2E-01 core journey @smoke', () => {
   test('login, track VOO, plan, BUY, and ledger-derived dashboard persist after refresh', async ({ page, context }) => {
@@ -37,8 +37,7 @@ test.describe('E2E-01 core journey @smoke', () => {
 
     await page.getByRole('link', { name: 'Transactions' }).click()
     await page.getByRole('button', { name: 'Add transaction' }).click()
-    const tradeDate = new Date()
-    const isoDate = tradeDate.toISOString().slice(0, 10)
+    const isoDate = appBusinessDate()
     await page.getByLabel('Date').fill(isoDate)
     await page.getByLabel('Ticker').fill('VOO')
     await page.getByLabel('Quantity').fill('10')

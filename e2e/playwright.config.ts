@@ -3,6 +3,7 @@ import { defineConfig, devices, type Page } from '@playwright/test'
 export const e2eUser = process.env.DCA_E2E_USERNAME ?? 'e2e'
 export const e2ePassword = process.env.DCA_E2E_PASSWORD ?? 'sa08-ci-password'
 export const mockUrl = process.env.DCA_E2E_MOCK_URL ?? 'http://127.0.0.1:38081'
+export const e2eTimeZone = process.env.DCA_E2E_TIMEZONE ?? 'America/New_York'
 
 process.env.PLAYWRIGHT_CHROMIUM_USE_HEADLESS_SHELL = '0'
 
@@ -17,6 +18,25 @@ export const FIXTURE_MARKERS = [
   'dca-terminal-fixture-state',
   'fixtureInstruments',
 ]
+
+export function appBusinessDate(now = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: e2eTimeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now)
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value
+  const year = value('year')
+  const month = value('month')
+  const day = value('day')
+  if (!year || !month || !day) throw new Error(`could not derive business date in ${e2eTimeZone}`)
+  return `${year}-${month}-${day}`
+}
+
+export function appBusinessPeriod(now = new Date()): string {
+  return appBusinessDate(now).slice(0, 7)
+}
 
 export async function login(page: Page): Promise<void> {
   await page.addInitScript(() => {

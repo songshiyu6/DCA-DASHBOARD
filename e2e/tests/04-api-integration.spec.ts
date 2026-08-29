@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext } from '@playwright/test'
-import { e2ePassword, e2eUser, setMockChart } from '../playwright.config'
+import { appBusinessPeriod, e2ePassword, e2eUser, setMockChart } from '../playwright.config'
 
 async function csrf(request: APIRequestContext) {
   const response = await request.get('/api/v1/auth/csrf')
@@ -128,8 +128,7 @@ test.describe('API integration contracts', () => {
       headers: { [token.header]: token.token, 'content-type': 'application/json' },
       data: { symbol: 'VOO' },
     })
-    const today = new Date()
-    const period = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`
+    const period = appBusinessPeriod()
     const created = await request.post('/api/v1/plans', {
       headers: { [token.header]: token.token, 'content-type': 'application/json' },
       data: {

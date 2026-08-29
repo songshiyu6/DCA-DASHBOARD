@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { filterPortfolioHistory, latestDayPerformance, timeWeightedReturn, withCurrentPortfolioPoint, ytdPerformance, ytdTimeWeightedReturn } from './dashboardPerformance'
+import { CHART_RANGE_OPTIONS, filterPortfolioHistory, latestDayPerformance, portfolioRangeStartDay, timeWeightedReturn, withCurrentPortfolioPoint, ytdPerformance, ytdTimeWeightedReturn } from './dashboardPerformance'
 import type { PortfolioHistoryPoint } from '../types'
 
 const point = (date: string, marketValue: string, netInvested: string): PortfolioHistoryPoint => ({ date, marketValue, netInvested, dataStatus: 'FRESH' })
@@ -61,15 +61,43 @@ describe('dashboard performance', () => {
     expect(current.at(-1)?.date).toBe('2026-08-28T00:15:00Z')
   })
 
-  it('filters chart history using the selected range', () => {
+  it('orders the range controls with YTD at the far right', () => {
+    expect(CHART_RANGE_OPTIONS).toEqual(['1M', '3M', '1Y', 'YTD'])
+  })
+
+  it('calculates exact calendar windows and clamps short months', () => {
+    expect(portfolioRangeStartDay('2026-08-28', '1M')).toBe('2026-07-28')
+    expect(portfolioRangeStartDay('2026-08-28', '3M')).toBe('2026-05-28')
+    expect(portfolioRangeStartDay('2026-08-28', '1Y')).toBe('2025-08-28')
+    expect(portfolioRangeStartDay('2026-08-28', 'YTD')).toBe('2026-01-01')
+    expect(portfolioRangeStartDay('2026-03-31', '1M')).toBe('2026-02-28')
+  })
+
+  it('returns distinct history slices for each selected range', () => {
     const history = [
-      point('2025-12-31', '900', '900'),
-      point('2026-01-02', '1000', '1000'),
+      point('2025-07-01', '800', '800'),
+      point('2025-09-01', '900', '900'),
+      point('2026-02-01', '1000', '1000'),
+      point('2026-06-01', '1050', '1000'),
       point('2026-08-28T16:00:00Z', '1100', '1000'),
     ]
 
+    expect(filterPortfolioHistory(history, '1M').map((item) => item.date)).toEqual([
+      '2026-08-28T16:00:00Z',
+    ])
+    expect(filterPortfolioHistory(history, '3M').map((item) => item.date)).toEqual([
+      '2026-06-01',
+      '2026-08-28T16:00:00Z',
+    ])
+    expect(filterPortfolioHistory(history, '1Y').map((item) => item.date)).toEqual([
+      '2025-09-01',
+      '2026-02-01',
+      '2026-06-01',
+      '2026-08-28T16:00:00Z',
+    ])
     expect(filterPortfolioHistory(history, 'YTD').map((item) => item.date)).toEqual([
-      '2026-01-02',
+      '2026-02-01',
+      '2026-06-01',
       '2026-08-28T16:00:00Z',
     ])
   })

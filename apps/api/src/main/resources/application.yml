@@ -43,7 +43,7 @@ server:
     session:
       timeout: ${APP_SESSION_MAX_AGE_SECONDS:31536000}
       cookie:
-        name: SESSION
+        name: JSESSIONID
         http-only: true
         secure: ${APP_COOKIE_SECURE:true}
         same-site: lax

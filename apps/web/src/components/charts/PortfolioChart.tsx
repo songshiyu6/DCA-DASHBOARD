@@ -15,6 +15,14 @@ export interface PortfolioChartPoint {
   netInvested: number
 }
 
+export interface PortfolioTooltipItem {
+  axisValue?: string
+  seriesName?: string
+  value?: unknown
+  marker?: string
+  dataIndex?: number
+}
+
 export function toPortfolioChartPoints(data: PortfolioHistoryPoint[]): PortfolioChartPoint[] {
   return data.flatMap((point) => {
     const netInvested = Number(point.netInvested)
@@ -25,6 +33,34 @@ export function toPortfolioChartPoints(data: PortfolioHistoryPoint[]): Portfolio
     const marketValue = Number(point.marketValue)
     return [{ date: point.date, marketValue: Number.isFinite(marketValue) ? marketValue : null, netInvested }]
   })
+}
+
+function chartDate(value: string): string {
+  return value.includes('T') ? value.slice(0, 10) : value
+}
+
+export function formatPortfolioTooltip(
+  params: PortfolioTooltipItem[],
+  points: PortfolioChartPoint[],
+  netLiqLabel: string,
+  netInvestmentLabel: string,
+  netInvestmentColor = '#73d3a1',
+): string {
+  const nlv = params.find((item) => item.seriesName === netLiqLabel)
+  if (!nlv) return ''
+
+  const point = typeof nlv.dataIndex === 'number'
+    ? points[nlv.dataIndex]
+    : points.find((item) => chartDate(item.date) === nlv.axisValue)
+  const investmentMarker = `<span style="display:inline-block;margin-right:4px;border-radius:10px;width:10px;height:10px;background-color:${netInvestmentColor};"></span>`
+  const lines = [
+    `<strong>${nlv.axisValue ?? ''}</strong>`,
+    `${nlv.marker ?? ''} ${netLiqLabel}: ${formatMoney(String(nlv.value ?? ''))}`,
+  ]
+  if (point) {
+    lines.push(`${investmentMarker} ${netInvestmentLabel}: ${formatMoney(point.netInvested)}`)
+  }
+  return lines.join('<br/>')
 }
 
 export function PortfolioChart({ data, netLiqLabel = 'Net Liq Value', netInvestmentLabel = 'Net investment' }: { data: PortfolioHistoryPoint[]; netLiqLabel?: string; netInvestmentLabel?: string }) {
@@ -52,15 +88,11 @@ export function PortfolioChart({ data, netLiqLabel = 'Net Liq Value', netInvestm
         borderColor: grid,
         textStyle: { color: '#e8eef6', fontSize: 12 },
         formatter: (rawParams: unknown) => {
-          const params = Array.isArray(rawParams)
-            ? rawParams as Array<{ axisValue?: string; seriesName?: string; value?: unknown; marker?: string }>
-            : []
-          const nlv = params.find((item) => item.seriesName === netLiqLabel)
-          if (!nlv) return ''
-          return [`<strong>${nlv.axisValue ?? ''}</strong>`, `${nlv.marker ?? ''} ${netLiqLabel}: ${formatMoney(String(nlv.value ?? ''))}`].join('<br/>')
+          const params = Array.isArray(rawParams) ? rawParams as PortfolioTooltipItem[] : []
+          return formatPortfolioTooltip(params, points, netLiqLabel, netInvestmentLabel, positive)
         },
       },
-      xAxis: { type: 'category', boundaryGap: false, data: points.map((point) => point.date.includes('T') ? point.date.slice(0, 10) : point.date), axisLine: { lineStyle: { color: grid } }, axisLabel: { color: text, fontSize: 10, hideOverlap: true }, axisTick: { show: false } },
+      xAxis: { type: 'category', boundaryGap: false, data: points.map((point) => chartDate(point.date)), axisLine: { lineStyle: { color: grid } }, axisLabel: { color: text, fontSize: 10, hideOverlap: true }, axisTick: { show: false } },
       yAxis: { type: 'value', scale: true, splitNumber: 3, axisLabel: { color: text, fontSize: 10, formatter: (value: number) => formatMoney(String(value), 'USD', 0) }, splitLine: { lineStyle: { color: grid, type: 'dashed' } }, axisLine: { show: false } },
       series: [
         {
@@ -74,6 +106,8 @@ export function PortfolioChart({ data, netLiqLabel = 'Net Liq Value', netInvestm
           lineStyle: { width: 1.25, type: 'dashed', color: positive, opacity: 0.62 },
           itemStyle: { color: positive },
           emphasis: { disabled: true },
+          // Keep this series passive so ECharts hover/emphasis stays anchored to Net Liq Value.
+          // Its value is still rendered in the shared tooltip by formatPortfolioTooltip above.
           tooltip: { show: false },
         },
         {

@@ -111,12 +111,11 @@ public class YahooFinanceProvider implements MarketDataProvider {
         JsonNode meta = chart.path("meta");
         BigDecimal price = decimal(meta, "regularMarketPrice");
         Instant timestamp = instant(meta, "regularMarketTime");
-        // chartPreviousClose is the close immediately before the requested chart window.
-        // With range=5d that can be several sessions old, so it must not be used as
-        // yesterday's close when computing the current daily change. Derive the latest
-        // completed session strictly before regularMarketTime from the returned daily bars.
-        BigDecimal previousClose = previousTradingClose(chart, timestamp);
-        if (previousClose == null) previousClose = decimal(meta, "previousClose");
+        // Yahoo's previousClose is the authoritative prior regular-session close when present.
+        // chartPreviousClose instead refers to the close before the requested chart window;
+        // with range=5d it can be several sessions old and must only be a last-resort fallback.
+        BigDecimal previousClose = decimal(meta, "previousClose");
+        if (previousClose == null) previousClose = previousTradingClose(chart, timestamp);
         if (previousClose == null) previousClose = decimal(meta, "chartPreviousClose");
         if (price == null || price.signum() <= 0) {
             throw new ProviderException(id(), "Yahoo returned no valid regular market price", false);
@@ -161,7 +160,7 @@ public class YahooFinanceProvider implements MarketDataProvider {
             if (close != null) {
                 bars.add(new IntradayBar(timestamp, decimalAt(quote.path("open"), i),
                         decimalAt(quote.path("high"), i), decimalAt(quote.path("low"), i), close,
-                        longAt(quote.path("volume"), i));
+                        longAt(quote.path("volume"), i)));
             }
         }
         return bars;
@@ -265,29 +264,42 @@ public class YahooFinanceProvider implements MarketDataProvider {
     }
 
     private static BigDecimal previousTradingClose(JsonNode chart, Instant marketTimestamp) {
-        if (marketTimestamp == null) return null;
         JsonNode timestamps = chart.path("timestamp");
         JsonNode closes = chart.path("indicators").path("quote").path(0).path("close");
         if (!timestamps.isArray() || !closes.isArray()) return null;
 
-        ZoneId exchangeZone = exchangeZone(chart.path("meta"));
-        LocalDate marketDate = marketTimestamp.atZone(exchangeZone).toLocalDate();
-        BigDecimal previousClose = null;
-        Instant previousTimestamp = null;
+        Instant latestTimestamp = null;
+        BigDecimal latestClose = null;
+        Instant priorTimestamp = null;
+        BigDecimal priorClose = null;
         int count = Math.min(timestamps.size(), closes.size());
         for (int i = 0; i < count; i++) {
             JsonNode timestampNode = timestamps.get(i);
             BigDecimal close = decimalAt(closes, i);
             if (timestampNode == null || !timestampNode.isNumber() || close == null) continue;
             Instant barTimestamp = Instant.ofEpochSecond(timestampNode.asLong());
-            LocalDate tradeDate = barTimestamp.atZone(exchangeZone).toLocalDate();
-            if (!tradeDate.isBefore(marketDate)) continue;
-            if (previousTimestamp == null || barTimestamp.isAfter(previousTimestamp)) {
-                previousTimestamp = barTimestamp;
-                previousClose = close;
+            if (latestTimestamp == null || barTimestamp.isAfter(latestTimestamp)) {
+                priorTimestamp = latestTimestamp;
+                priorClose = latestClose;
+                latestTimestamp = barTimestamp;
+                latestClose = close;
+            } else if (priorTimestamp == null || barTimestamp.isAfter(priorTimestamp)) {
+                priorTimestamp = barTimestamp;
+                priorClose = close;
             }
         }
-        return previousClose;
+        if (latestTimestamp == null) return null;
+        if (marketTimestamp == null) return priorClose != null ? priorClose : latestClose;
+
+        ZoneId exchangeZone = exchangeZone(chart.path("meta"));
+        LocalDate marketDate = marketTimestamp.atZone(exchangeZone).toLocalDate();
+        LocalDate latestTradeDate = latestTimestamp.atZone(exchangeZone).toLocalDate();
+        // Before the current session has a daily bar (for example pre-market Monday),
+        // the latest bar itself is the prior completed trading session.
+        if (latestTradeDate.isBefore(marketDate)) return latestClose;
+        // During/after the session, Yahoo includes a bar for the current trading date;
+        // the immediately preceding valid bar is yesterday's regular-session close.
+        return priorClose;
     }
 
     private static Proxy proxyFor(String proxyUrl) {

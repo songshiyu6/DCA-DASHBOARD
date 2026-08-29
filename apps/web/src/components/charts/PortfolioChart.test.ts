@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatPortfolioTooltip, toPortfolioChartPoints } from './PortfolioChart'
+import { formatPortfolioTooltip, resolvePortfolioChartStart, toPortfolioChartPoints } from './PortfolioChart'
 
 describe('PortfolioChart data adapter', () => {
   it('keeps missing market value as a gap while retaining net investment', () => {
@@ -10,6 +10,29 @@ describe('PortfolioChart data adapter', () => {
       { date: '2026-08-26', marketValue: null, netInvested: 100 },
       { date: '2026-08-27', marketValue: 101, netInvested: 100 },
     ])
+  })
+
+  it('clamps every requested window to the first funded portfolio point', () => {
+    const points = toPortfolioChartPoints([
+      { date: '2026-08-01', marketValue: '0', netInvested: '0', dataStatus: 'FRESH' },
+      { date: '2026-08-07', marketValue: '59000', netInvested: '59000', dataStatus: 'FRESH' },
+      { date: '2026-08-28', marketValue: '58900', netInvested: '59000', dataStatus: 'FRESH' },
+    ])
+    const firstInvestment = Date.parse('2026-08-07T12:00:00Z')
+
+    expect(resolvePortfolioChartStart(points, '2026-01-01')).toBe(firstInvestment)
+    expect(resolvePortfolioChartStart(points, '2026-05-28')).toBe(firstInvestment)
+    expect(resolvePortfolioChartStart(points, '2026-07-28')).toBe(firstInvestment)
+    expect(resolvePortfolioChartStart(points, '2026-08-20')).toBe(Date.parse('2026-08-20T00:00:00Z'))
+  })
+
+  it('falls back to the first available point when funded history is unavailable', () => {
+    const points = toPortfolioChartPoints([
+      { date: '2026-08-05', marketValue: '0', netInvested: '0', dataStatus: 'FRESH' },
+      { date: '2026-08-06', marketValue: '0', netInvested: '0', dataStatus: 'FRESH' },
+    ])
+
+    expect(resolvePortfolioChartStart(points, '2026-01-01')).toBe(Date.parse('2026-08-05T12:00:00Z'))
   })
 
   it('shows both NLV and net investment while the interactive series remains NLV-only', () => {

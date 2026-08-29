@@ -66,7 +66,7 @@ public class SecurityConfig {
             @Value("${dca.security.cookie-secure:true}") boolean secure,
             @Value("${dca.security.session-cookie-max-age-seconds:31536000}") int maxAgeSeconds) {
         DefaultCookieSerializer serializer = new DefaultCookieSerializer();
-        serializer.setCookieName("SESSION");
+        serializer.setCookieName("JSESSIONID");
         serializer.setCookiePath("/");
         serializer.setUseHttpOnlyCookie(true);
         serializer.setUseSecureCookie(secure);

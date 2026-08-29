@@ -236,7 +236,8 @@ export interface AppSettings {
   twelveDataConfigured: boolean
   alphaVantageConfigured: boolean
   theme: 'SYSTEM' | 'LIGHT' | 'DARK'
-  timezone: string
+  /** Legacy demo-state compatibility only; the live settings API no longer exposes or accepts timezone. */
+  timezone?: string
 }
 
 export interface Session {

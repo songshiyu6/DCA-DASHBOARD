@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatMoney, formatPercent, formatShares, formatSignedMoney, formatSignedPercent } from './format'
+import { MARKET_TIME_ZONE, USER_TIME_ZONE, formatMoney, formatPercent, formatShares, formatSignedMoney, formatSignedPercent, formatTime, formatUserTime } from './format'
 
 describe('financial display formatting', () => {
   it('formats money from decimal strings without locale float artifacts', () => {
@@ -20,5 +20,11 @@ describe('financial display formatting', () => {
   it('keeps fractional shares readable', () => {
     expect(formatShares('18.43210000')).toBe('18.4321')
     expect(formatShares('0')).toBe('0')
+  })
+
+  it('keeps market and user display timezones explicit', () => {
+    expect(MARKET_TIME_ZONE).toBe('America/New_York')
+    expect(USER_TIME_ZONE).toBe('Asia/Shanghai')
+    expect(formatUserTime('2026-08-29T15:00:00Z')).not.toBe(formatTime('2026-08-29T15:00:00Z'))
   })
 })

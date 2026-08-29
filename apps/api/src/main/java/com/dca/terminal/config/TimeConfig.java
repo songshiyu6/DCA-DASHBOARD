@@ -2,12 +2,12 @@ package com.dca.terminal.config;
 
 import java.time.Clock;
 import java.time.ZoneId;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 @Configuration
 public class TimeConfig {
+    public static final String MARKET_ZONE_ID = "America/New_York";
 
     @Bean
     public Clock applicationClock() {
@@ -15,7 +15,7 @@ public class TimeConfig {
     }
 
     @Bean
-    public ZoneId applicationZone(@Value("${dca.timezone:America/New_York}") String timezone) {
-        return ZoneId.of(timezone);
+    public ZoneId applicationZone() {
+        return ZoneId.of(MARKET_ZONE_ID);
     }
 }

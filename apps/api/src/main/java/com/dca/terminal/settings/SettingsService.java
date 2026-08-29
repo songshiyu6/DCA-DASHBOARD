@@ -5,7 +5,6 @@ import com.dca.terminal.marketdata.MarketDataDtos.ProviderStatus;
 import com.dca.terminal.marketdata.MarketDataService;
 import com.dca.terminal.marketdata.ProviderId;
 import com.dca.terminal.portfolio.PortfolioSnapshotInvalidator;
-import java.time.ZoneId;
 import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -22,18 +21,15 @@ public class SettingsService {
     static final String PRIMARY_PROVIDER = "primaryProvider";
     static final String FALLBACK_PROVIDER = "fallbackProvider";
     static final String THEME = "theme";
-    static final String TIMEZONE = "timezone";
 
     private final AppSettingRepository repository;
     private final MarketDataService marketDataService;
-    private final ZoneId defaultTimezone;
     private final PortfolioSnapshotInvalidator snapshotInvalidator;
 
-    public SettingsService(AppSettingRepository repository, MarketDataService marketDataService, ZoneId defaultTimezone,
+    public SettingsService(AppSettingRepository repository, MarketDataService marketDataService,
                            PortfolioSnapshotInvalidator snapshotInvalidator) {
         this.repository = repository;
         this.marketDataService = marketDataService;
-        this.defaultTimezone = defaultTimezone;
         this.snapshotInvalidator = snapshotInvalidator;
     }
 
@@ -46,11 +42,10 @@ public class SettingsService {
         String primary = provider(values.get(PRIMARY_PROVIDER), marketDataService.primaryProvider(), false);
         String fallback = provider(values.get(FALLBACK_PROVIDER), marketDataService.fallbackProvider(), true);
         String theme = theme(values.get(THEME));
-        String timezone = timezone(values.get(TIMEZONE));
         Map<String, Boolean> configured = marketDataService.providerStatuses().stream()
                 .collect(Collectors.toMap(ProviderStatus::id, ProviderStatus::configured, (first, ignored) -> first));
         return new SettingsResponse("USD", primary, fallback, configured.getOrDefault(ProviderId.TWELVE_DATA.name(), false),
-                configured.getOrDefault(ProviderId.ALPHA_VANTAGE.name(), false), theme, timezone);
+                configured.getOrDefault(ProviderId.ALPHA_VANTAGE.name(), false), theme);
     }
 
     @Transactional
@@ -61,7 +56,6 @@ public class SettingsService {
         if (request.primaryProvider() != null) save(PRIMARY_PROVIDER, provider(request.primaryProvider(), null, false));
         if (request.fallbackProvider() != null) save(FALLBACK_PROVIDER, provider(request.fallbackProvider(), null, true));
         if (request.theme() != null) save(THEME, theme(request.theme()));
-        if (request.timezone() != null) save(TIMEZONE, timezone(request.timezone()));
         SettingsResponse updated = get();
         if (previous != null && (!previous.primaryProvider().equals(updated.primaryProvider())
                 || !previous.fallbackProvider().equals(updated.fallbackProvider()))) {
@@ -95,14 +89,5 @@ public class SettingsService {
             throw new DomainException(HttpStatus.BAD_REQUEST, "INVALID_THEME", "Theme must be SYSTEM, LIGHT or DARK");
         }
         return normalized;
-    }
-
-    private String timezone(String value) {
-        String candidate = value == null || value.isBlank() ? defaultTimezone.getId() : value.trim();
-        try {
-            return ZoneId.of(candidate).getId();
-        } catch (Exception exception) {
-            throw new DomainException(HttpStatus.BAD_REQUEST, "INVALID_TIMEZONE", "Timezone is not recognized: " + candidate);
-        }
     }
 }

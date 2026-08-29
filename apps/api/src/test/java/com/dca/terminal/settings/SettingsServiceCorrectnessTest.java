@@ -3,7 +3,6 @@ package com.dca.terminal.settings;
 import com.dca.terminal.marketdata.MarketDataDtos.ProviderStatus;
 import com.dca.terminal.marketdata.MarketDataService;
 import com.dca.terminal.portfolio.PortfolioSnapshotInvalidator;
-import java.time.ZoneId;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -34,7 +33,7 @@ class SettingsServiceCorrectnessTest {
         SettingsService service = service(repository, invalidator);
 
         SettingsDtos.SettingsResponse response = service.update(
-                new SettingsDtos.SettingsUpdateRequest(primary, fallback, null, null));
+                new SettingsDtos.SettingsUpdateRequest(primary, fallback, null));
 
         assertEquals(primary, response.primaryProvider());
         assertEquals(fallback, response.fallbackProvider());
@@ -49,7 +48,7 @@ class SettingsServiceCorrectnessTest {
         PortfolioSnapshotInvalidator invalidator = mock(PortfolioSnapshotInvalidator.class);
         SettingsService service = service(repository("YAHOO", "TWELVE_DATA"), invalidator);
 
-        service.update(new SettingsDtos.SettingsUpdateRequest("YAHOO", "TWELVE_DATA", null, null));
+        service.update(new SettingsDtos.SettingsUpdateRequest("YAHOO", "TWELVE_DATA", null));
 
         verifyNoInteractions(invalidator);
     }
@@ -62,7 +61,7 @@ class SettingsServiceCorrectnessTest {
         when(marketData.providerStatuses()).thenReturn(List.of(
                 new ProviderStatus("TWELVE_DATA", false),
                 new ProviderStatus("ALPHA_VANTAGE", false)));
-        return new SettingsService(repository, marketData, ZoneId.of("UTC"), invalidator);
+        return new SettingsService(repository, marketData, invalidator);
     }
 
     private static AppSettingRepository repository(String primary, String fallback) {

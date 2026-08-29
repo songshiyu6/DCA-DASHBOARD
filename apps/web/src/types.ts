@@ -236,7 +236,6 @@ export interface AppSettings {
   twelveDataConfigured: boolean
   alphaVantageConfigured: boolean
   theme: 'SYSTEM' | 'LIGHT' | 'DARK'
-  timezone: string
 }
 
 export interface Session {

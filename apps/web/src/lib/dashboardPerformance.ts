@@ -129,8 +129,12 @@ export function annualizedTimeWeightedReturn(history: PortfolioHistoryPoint[]): 
   const elapsedDays = (lastDate.getTime() - firstDate.getTime()) / 86_400_000
   if (elapsedDays <= 0) return null
 
-  let factor = decimal(1)
-  let periods = 0
+  const initialCapital = decimal(points[0].netInvested)
+  const initialValue = decimal(points[0].marketValue)
+  if (initialCapital.lte(0) || initialValue.lte(0)) return null
+
+  let factor = initialValue.div(initialCapital)
+  let periods = 1
   let previous = points[0]
   for (const point of points.slice(1)) {
     const openingValue = decimal(previous.marketValue)

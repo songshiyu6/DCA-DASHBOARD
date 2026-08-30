@@ -1,4 +1,4 @@
-import type { ApiResult, AppSettings, DashboardData, EtfMetrics, Instrument, InstrumentSyncResult, InvestmentPlan, PlanCycle, PricePoint, Quote, Recommendation, Session, Transaction, TransactionCsvRow, TransactionImportCommit, TransactionImportPreview, TransactionInput } from '../../types'
+import type { ApiResult, AppSettings, ContributionAnalysis, ContributionBatch, DashboardData, EtfMetrics, Instrument, InstrumentSyncResult, InvestmentPlan, PlanCycle, PricePoint, Quote, Recommendation, Session, Transaction, TransactionCsvRow, TransactionImportCommit, TransactionImportPreview, TransactionInput } from '../../types'
 import {
   createFixturePlan,
   createFixtureTransaction,
@@ -26,8 +26,12 @@ import {
 } from './fixtures'
 import { parseTransactionCsv } from '../transactionCsv'
 import { normalizeDashboardData, normalizeMetrics, normalizePricePoints, normalizeRecommendation, normalizeSettings, normalizeSyncResult } from '../api/normalize'
+import { decimal } from '../format'
 
 const fixtureMeta = { status: 'STALE' as const, source: 'FIXTURE', message: 'Demo data only. This workspace is not connected to the API.' }
+const DEMO_TODAY = '2026-08-27'
+let demoInitialCapital: string | null = '18000.00'
+const demoInitialTransactions = new Set<string>()
 
 function localImportPreview(csv: string): ApiResult<TransactionImportPreview> {
   const parsed = parseTransactionCsv(csv)
@@ -61,6 +65,60 @@ function localImportCommit(preview: TransactionImportPreview): ApiResult<Transac
   return {
     data: { batchId: preview.batchId, importedRows: result.data.length, transactionIds: result.data.map((transaction) => transaction.id) },
     meta: result.meta,
+  }
+}
+
+function buyPrincipal(transaction: Transaction): string {
+  if (!transaction.quantity || !transaction.unitPrice) return '0'
+  return decimal(transaction.quantity).mul(transaction.unitPrice).plus(transaction.fee).toString()
+}
+
+function marketDays(date: string): number {
+  const start = new Date(`${date}T12:00:00Z`).getTime()
+  const end = new Date(`${DEMO_TODAY}T12:00:00Z`).getTime()
+  return Math.max(0, Math.round((end - start) / 86_400_000))
+}
+
+function batchFromTransactions(type: 'INITIAL' | 'DCA', period: string | null, transactions: Transaction[]): ContributionBatch {
+  const principal = transactions.reduce((sum, transaction) => sum.plus(buyPrincipal(transaction)), decimal(0))
+  const weightedDays = transactions.reduce((sum, transaction) => sum.plus(decimal(buyPrincipal(transaction)).mul(marketDays(transaction.tradeDate))), decimal(0))
+  const averageMarketDays = principal.gt(0) ? weightedDays.div(principal).toDecimalPlaces(0).toNumber() : 0
+  return { type, period, principal: principal.toString(), value: principal.toString(), pnl: '0', returnRate: '0', averageMarketDays, dataStatus: 'STALE' }
+}
+
+function demoContributionAnalysis(): ApiResult<ContributionAnalysis> {
+  const transactions = getFixtureTransactions().data
+  const cyclePeriods = new Map(getFixtureCycles('core-plan').data.map((cycle) => [cycle.id, cycle.period]))
+  const initialTransactions = transactions.filter((transaction) => transaction.transactionType === 'BUY' && demoInitialTransactions.has(transaction.id))
+  const dcaGroups = new Map<string, Transaction[]>()
+  for (const transaction of transactions) {
+    if (transaction.transactionType !== 'BUY' || !transaction.planCycleId) continue
+    const period = cyclePeriods.get(transaction.planCycleId)
+    if (!period) continue
+    const rows = dcaGroups.get(period) ?? []
+    rows.push(transaction)
+    dcaGroups.set(period, rows)
+  }
+  const unclassified = transactions.filter((transaction) => transaction.transactionType === 'BUY' && !transaction.planCycleId && !demoInitialTransactions.has(transaction.id))
+  const initialBatch = batchFromTransactions('INITIAL', null, initialTransactions)
+  const dcaBatches = [...dcaGroups.entries()].map(([period, rows]) => batchFromTransactions('DCA', period, rows)).sort((left, right) => (right.period ?? '').localeCompare(left.period ?? ''))
+  const dcaPrincipal = dcaBatches.reduce((sum, batch) => sum.plus(batch.principal), decimal(0))
+  const dcaWeightedDays = dcaBatches.reduce((sum, batch) => sum.plus(decimal(batch.principal).mul(batch.averageMarketDays)), decimal(0))
+  const dcaAverageDays = dcaPrincipal.gt(0) ? dcaWeightedDays.div(dcaPrincipal).toDecimalPlaces(0).toNumber() : 0
+  const unclassifiedAmount = unclassified.reduce((sum, transaction) => sum.plus(buyPrincipal(transaction)), decimal(0))
+  const batches = [...(decimal(initialBatch.principal).gt(0) ? [initialBatch] : []), ...dcaBatches]
+  return {
+    data: {
+      totalInvested: decimal(initialBatch.principal).plus(dcaPrincipal).toString(),
+      initial: { plannedPrincipal: demoInitialCapital, principal: initialBatch.principal, value: initialBatch.value, pnl: initialBatch.pnl, returnRate: initialBatch.returnRate, averageMarketDays: initialBatch.averageMarketDays, batchCount: decimal(initialBatch.principal).gt(0) ? 1 : 0, dataStatus: 'STALE' },
+      dca: { plannedPrincipal: null, principal: dcaPrincipal.toString(), value: dcaPrincipal.toString(), pnl: '0', returnRate: dcaPrincipal.gt(0) ? '0' : null, averageMarketDays: dcaAverageDays, batchCount: dcaBatches.length, dataStatus: 'STALE' },
+      unclassifiedAmount: unclassifiedAmount.toString(),
+      unclassifiedBuys: unclassified.map((transaction) => ({ transactionId: transaction.id, tradeDate: transaction.tradeDate, symbol: transaction.instrumentSymbol, principal: buyPrincipal(transaction) })),
+      batches,
+      dataStatus: 'STALE',
+      asOf: DEMO_TODAY,
+    },
+    meta: fixtureMeta,
   }
 }
 
@@ -101,6 +159,19 @@ export const demoApi = {
   getRecommendation: async (id: string): Promise<ApiResult<Recommendation>> => {
     const result = getFixtureRecommendation(id)
     return { ...result, data: normalizeRecommendation(result.data) }
+  },
+  getContributionAnalysis: async (_id: string): Promise<ApiResult<ContributionAnalysis>> => demoContributionAnalysis(),
+  updateInitialCapital: async (_id: string, amount: string | null): Promise<ApiResult<ContributionAnalysis>> => {
+    demoInitialCapital = amount
+    return demoContributionAnalysis()
+  },
+  classifyInitialContribution: async (_id: string, transactionId: string): Promise<ApiResult<ContributionAnalysis>> => {
+    demoInitialTransactions.add(transactionId)
+    return demoContributionAnalysis()
+  },
+  unclassifyInitialContribution: async (_id: string, transactionId: string): Promise<ApiResult<ContributionAnalysis>> => {
+    demoInitialTransactions.delete(transactionId)
+    return demoContributionAnalysis()
   },
   getTransactions: async (): Promise<ApiResult<Transaction[]>> => getFixtureTransactions(),
   createTransaction: async (input: TransactionInput): Promise<ApiResult<Transaction>> => createFixtureTransaction(input),

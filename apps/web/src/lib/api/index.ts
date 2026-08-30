@@ -1,4 +1,5 @@
 import { authApi } from './auth'
+import { contributionsApi } from './contributions'
 import { instrumentsApi } from './instruments'
 import { plansApi } from './plans'
 import { portfolioApi } from './portfolio'
@@ -20,6 +21,7 @@ const liveApi = {
   ...instrumentsApi,
   ...portfolioApi,
   ...plansApi,
+  ...contributionsApi,
   ...transactionsApi,
   ...settingsApi,
 }
@@ -53,6 +55,10 @@ const demoApiProxy = {
   updatePlan: (id: string, patch: Parameters<typeof liveApi.updatePlan>[1]) => loadDemoApi().then((adapter) => adapter.updatePlan(id, patch)),
   getCycles: (id: string) => loadDemoApi().then((adapter) => adapter.getCycles(id)),
   getRecommendation: (id: string) => loadDemoApi().then((adapter) => adapter.getRecommendation(id)),
+  getContributionAnalysis: (id: string) => loadDemoApi().then((adapter) => adapter.getContributionAnalysis(id)),
+  updateInitialCapital: (id: string, amount: string | null) => loadDemoApi().then((adapter) => adapter.updateInitialCapital(id, amount)),
+  classifyInitialContribution: (id: string, transactionId: string) => loadDemoApi().then((adapter) => adapter.classifyInitialContribution(id, transactionId)),
+  unclassifyInitialContribution: (id: string, transactionId: string) => loadDemoApi().then((adapter) => adapter.unclassifyInitialContribution(id, transactionId)),
   getTransactions: () => loadDemoApi().then((adapter) => adapter.getTransactions()),
   createTransaction: (input: Parameters<typeof liveApi.createTransaction>[0]) => loadDemoApi().then((adapter) => adapter.createTransaction(input)),
   updateTransaction: (id: string, input: Parameters<typeof liveApi.updateTransaction>[1]) => loadDemoApi().then((adapter) => adapter.updateTransaction(id, input)),

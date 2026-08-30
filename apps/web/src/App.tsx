@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import { AppShell } from './components/AppShell'
+import { ContributionsPage } from './pages/ContributionsPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { EtfDetailPage } from './pages/EtfDetailPage'
 import { EtfsPage } from './pages/EtfsPage'
@@ -44,6 +45,7 @@ export default function App() {
       <Route element={<AppShell />}>
         <Route index element={<DashboardPage />} />
         <Route path="plan" element={<PlanPage />} />
+        <Route path="contributions" element={<ContributionsPage />} />
         <Route path="etfs" element={<EtfsPage />} />
         <Route path="etfs/:symbol" element={<EtfDetailPage />} />
         <Route path="transactions" element={<TransactionsPage />} />

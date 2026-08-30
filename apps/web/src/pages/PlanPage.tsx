@@ -16,6 +16,7 @@ import { StatusBadge } from '../components/StatusBadge'
 const weightPattern = /^\d{1,3}(?:\.\d{1,4})?$/
 const planSchema = z.object({
   name: z.string().trim().min(2, 'validation.planNameRequired'),
+  initialCapital: z.string().regex(/^\d*(?:\.\d{1,2})?$/, 'validation.budgetInvalid'),
   monthlyBudget: z.string().regex(/^\d+(?:\.\d{1,2})?$/, 'validation.budgetInvalid').refine((value) => decimal(value).gt(0), 'validation.budgetPositive'),
   startDate: z.string().min(1, 'validation.startDateRequired'),
   executionStartDay: z.coerce.number().int().min(1).max(31),
@@ -33,6 +34,7 @@ type PlanFormValues = z.infer<typeof planSchema>
 
 const emptyForm: PlanFormValues = {
   name: 'Core ETF Plan',
+  initialCapital: '',
   monthlyBudget: '1500.00',
   startDate: '2026-01-01',
   executionStartDay: 1,
@@ -40,9 +42,10 @@ const emptyForm: PlanFormValues = {
   assets: [{ symbol: 'VOO', targetWeight: '100.00' }],
 }
 
-function formValues(plan: InvestmentPlan): PlanFormValues {
+function formValues(plan: InvestmentPlan, initialCapital?: string | null): PlanFormValues {
   return {
     name: plan.name,
+    initialCapital: initialCapital ?? '',
     monthlyBudget: plan.monthlyBudget,
     startDate: plan.startDate,
     executionStartDay: plan.executionStartDay,
@@ -91,24 +94,25 @@ function TargetAllocationPanel({ plan }: { plan: InvestmentPlan }) {
   </Panel>
 }
 
-function PlanEditor({ plan, instruments, pending, saved, onSubmit }: { plan?: InvestmentPlan; instruments: Instrument[]; pending: boolean; saved: boolean; onSubmit: (values: PlanFormValues) => void }) {
-  const { t } = useTranslation()
-  const form = useForm<PlanFormValues>({ resolver: zodResolver(planSchema), defaultValues: plan ? formValues(plan) : emptyForm, mode: 'onBlur' })
+function PlanEditor({ plan, initialCapital, instruments, pending, saved, onSubmit }: { plan?: InvestmentPlan; initialCapital?: string | null; instruments: Instrument[]; pending: boolean; saved: boolean; onSubmit: (values: PlanFormValues) => void }) {
+  const { t, i18n } = useTranslation()
+  const isZh = (i18n.resolvedLanguage ?? i18n.language).toLowerCase().startsWith('zh')
+  const form = useForm<PlanFormValues>({ resolver: zodResolver(planSchema), defaultValues: plan ? formValues(plan, initialCapital) : emptyForm, mode: 'onBlur' })
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'assets' })
   const watchedAssets = useWatch({ control: form.control, name: 'assets' })
   const totalWeight = useMemo(() => watchedAssets?.reduce((sum, asset) => sum.plus(decimal(asset.targetWeight)), decimal(0)) ?? decimal(0), [watchedAssets])
 
   useEffect(() => {
-    form.reset(plan ? formValues(plan) : emptyForm)
-  }, [form, plan])
+    form.reset(plan ? formValues(plan, initialCapital) : emptyForm)
+  }, [form, initialCapital, plan])
 
   const totalValid = totalWeight.minus(100).abs().lte('0.01')
   const allocationMessage = typeof form.formState.errors.assets?.message === 'string' ? form.formState.errors.assets.message : undefined
   const allocationError = totalValid ? (allocationMessage ? t(allocationMessage) : undefined) : t('validation.weightsTotal')
   return <form onSubmit={form.handleSubmit(onSubmit)} className="form-stack">
     <div className="form-field"><label htmlFor="plan-name">{t('plan.name')}</label><input id="plan-name" {...form.register('name')} aria-invalid={Boolean(form.formState.errors.name)} aria-describedby={form.formState.errors.name ? 'plan-name-error' : undefined} />{form.formState.errors.name ? <small id="plan-name-error" className="field-error">{t(form.formState.errors.name.message ?? 'errors.validation')}</small> : null}</div>
-    <div className="form-grid-two"><div className="form-field"><label htmlFor="monthly-budget">{t('plan.monthlyBudget')}</label><div className="input-prefix"><span>$</span><input id="monthly-budget" inputMode="decimal" {...form.register('monthlyBudget')} aria-invalid={Boolean(form.formState.errors.monthlyBudget)} aria-describedby={form.formState.errors.monthlyBudget ? 'monthly-budget-error' : undefined} /></div>{form.formState.errors.monthlyBudget ? <small id="monthly-budget-error" className="field-error">{t(form.formState.errors.monthlyBudget.message ?? 'errors.validation')}</small> : null}</div><div className="form-field"><label htmlFor="frequency">{t('plan.frequency')}</label><select id="frequency" defaultValue="MONTHLY" disabled><option value="MONTHLY">{t('plan.monthly')}</option></select></div></div>
-    <div className="form-field"><label htmlFor="start-date">{t('plan.startDate')}</label><input id="start-date" type="date" {...form.register('startDate')} aria-invalid={Boolean(form.formState.errors.startDate)} aria-describedby={form.formState.errors.startDate ? 'start-date-error' : undefined} />{form.formState.errors.startDate ? <small id="start-date-error" className="field-error">{t(form.formState.errors.startDate.message ?? 'errors.validation')}</small> : null}</div>
+    <div className="form-grid-two"><div className="form-field"><label htmlFor="initial-capital">{isZh ? '初始资金' : 'Initial capital'}</label><div className="input-prefix"><span>$</span><input id="initial-capital" inputMode="decimal" placeholder="50000.00" {...form.register('initialCapital')} aria-invalid={Boolean(form.formState.errors.initialCapital)} aria-describedby="initial-capital-hint" /></div>{form.formState.errors.initialCapital ? <small className="field-error">{t(form.formState.errors.initialCapital.message ?? 'errors.validation')}</small> : <small id="initial-capital-hint" className="initial-capital-hint">{isZh ? '一次性建仓计划金额，不计入每月定投完成率。实际投入仍以 BUY 交易为准。' : 'One-time opening budget. It does not count toward monthly DCA completion; actual BUYs remain the source of truth.'}</small>}</div><div className="form-field"><label htmlFor="monthly-budget">{t('plan.monthlyBudget')}</label><div className="input-prefix"><span>$</span><input id="monthly-budget" inputMode="decimal" {...form.register('monthlyBudget')} aria-invalid={Boolean(form.formState.errors.monthlyBudget)} aria-describedby={form.formState.errors.monthlyBudget ? 'monthly-budget-error' : undefined} /></div>{form.formState.errors.monthlyBudget ? <small id="monthly-budget-error" className="field-error">{t(form.formState.errors.monthlyBudget.message ?? 'errors.validation')}</small> : null}</div></div>
+    <div className="form-grid-two"><div className="form-field"><label htmlFor="start-date">{t('plan.startDate')}</label><input id="start-date" type="date" {...form.register('startDate')} aria-invalid={Boolean(form.formState.errors.startDate)} aria-describedby={form.formState.errors.startDate ? 'start-date-error' : undefined} />{form.formState.errors.startDate ? <small id="start-date-error" className="field-error">{t(form.formState.errors.startDate.message ?? 'errors.validation')}</small> : null}</div><div className="form-field"><label htmlFor="frequency">{t('plan.frequency')}</label><select id="frequency" defaultValue="MONTHLY" disabled><option value="MONTHLY">{t('plan.monthly')}</option></select></div></div>
     <div className="form-field"><span className="form-label">{t('plan.executionWindow')}</span><div className="form-grid-two"><div className="form-field"><label htmlFor="execution-start-day">{t('plan.executionStart')}</label><input id="execution-start-day" type="number" min="1" max="31" {...form.register('executionStartDay')} /></div><div className="form-field"><label htmlFor="execution-end-day">{t('plan.executionEnd')}</label><input id="execution-end-day" type="number" min="1" max="31" {...form.register('executionEndDay')} aria-invalid={Boolean(form.formState.errors.executionEndDay)} aria-describedby={form.formState.errors.executionEndDay ? 'execution-end-day-error' : undefined} />{form.formState.errors.executionEndDay ? <small id="execution-end-day-error" className="field-error">{t(form.formState.errors.executionEndDay.message ?? 'errors.validation')}</small> : null}</div></div><small className="field-hint">{t('plan.executionHint')}</small></div>
     <div className="form-footer"><span className="save-feedback">{saved ? <><Check size={14} />{t('plan.saved')}</> : null}</span><button className="button button-primary" type="submit" disabled={pending || !totalValid}><Save size={15} />{pending ? t('settings.saving') : plan ? t('common.save') : t('plan.createPlan')}</button></div>
     <div className="asset-editor"><div className="asset-editor-header"><span>{t('etfs.ticker')}</span><span>{t('dashboard.target')}</span><span /></div>{fields.map((field, index) => { const symbolError = form.formState.errors.assets?.[index]?.symbol?.message; const weightError = form.formState.errors.assets?.[index]?.targetWeight?.message; const symbolErrorId = `plan-asset-${index}-symbol-error`; const weightErrorId = `plan-asset-${index}-weight-error`; return <div className="asset-editor-row" key={field.id}><select {...form.register(`assets.${index}.symbol`)} aria-label={t('plan.assetLabel', { count: index + 1 })} aria-invalid={Boolean(symbolError)} aria-describedby={symbolError ? symbolErrorId : undefined}><option value="">{t('plan.selectEtf')}</option>{instruments.map((instrument) => <option key={instrument.symbol} value={instrument.symbol}>{instrument.symbol} · {instrument.name}</option>)}</select>{symbolError ? <small id={symbolErrorId} className="field-error">{t(symbolError)}</small> : null}<div className="input-suffix"><input inputMode="decimal" {...form.register(`assets.${index}.targetWeight`)} aria-label={t('plan.targetWeightLabel', { symbol: field.symbol || t('etfs.ticker') })} aria-invalid={Boolean(weightError)} aria-describedby={weightError ? weightErrorId : index === 0 && allocationError ? 'plan-asset-0-weight-error' : undefined} /><span>%</span></div>{weightError ? <small id={weightErrorId} className="field-error">{t(weightError)}</small> : null}<button type="button" className="icon-button subtle-icon" onClick={() => remove(index)} disabled={fields.length <= 1} aria-label={t('plan.removeAsset', { symbol: field.symbol || t('plan.asset') })}><Trash2 size={15} /></button></div> })}</div>
@@ -126,18 +130,30 @@ export function PlanPage() {
   const plan = plans.data?.data.find((candidate) => candidate.status === 'ACTIVE')
   const cycles = useQuery({ queryKey: plan ? queryKeys.planCycles(plan.id) : queryKeys.planCycles('none'), queryFn: () => api.getCycles(plan?.id ?? ''), enabled: Boolean(plan) })
   const recommendation = useQuery({ queryKey: plan ? queryKeys.recommendation(plan.id) : queryKeys.recommendation('none'), queryFn: () => api.getRecommendation(plan?.id ?? ''), enabled: Boolean(plan) })
+  const contributions = useQuery({ queryKey: plan ? queryKeys.contributionAnalysis(plan.id) : queryKeys.contributionAnalysis('none'), queryFn: () => api.getContributionAnalysis(plan?.id ?? ''), enabled: Boolean(plan) })
   const [saved, setSaved] = useState(false)
-  const savePlan = useMutation({ mutationFn: (values: PlanFormValues) => plan ? api.updatePlan(plan.id, planPayload(values)) : api.createPlan(planPayload(values)), onSuccess: () => { setSaved(true); void invalidatePlanQueries(queryClient, plan?.id) } })
+  const savePlan = useMutation({
+    mutationFn: async (values: PlanFormValues) => {
+      const result = plan ? await api.updatePlan(plan.id, planPayload(values)) : await api.createPlan(planPayload(values))
+      await api.updateInitialCapital(result.data.id, values.initialCapital.trim() ? decimal(values.initialCapital).toFixed(2) : null)
+      return result
+    },
+    onSuccess: (result) => {
+      setSaved(true)
+      void invalidatePlanQueries(queryClient, result.data.id)
+    },
+  })
 
   if (plans.isLoading) return <div className="page"><div className="page-intro"><LoadingBlock lines={2} /></div><div className="content-grid plan-grid"><Panel><LoadingBlock lines={8} /></Panel><Panel><LoadingBlock lines={8} /></Panel></div></div>
   if (plans.isError) return <div className="page"><ErrorState onRetry={() => void plans.refetch()} /></div>
 
   const cycleData = cycles.data?.data ?? plan?.cycles ?? []
+  const contributionError = plan && contributions.isError
   return <div className="page plan-page">
     <div className="page-intro"><div><span className="page-eyebrow">{t('plan.eyebrow')}</span><h1>{t('plan.title')}</h1><p>{t('plan.subtitle')}</p></div>{plan ? <div className="page-actions"><span className="active-plan-chip"><span className="status-dot" />{t('plan.active')}</span></div> : null}</div>
     <DataStateBanner status={plans.data?.meta.status ?? 'STALE'} message={plans.data?.meta.message} source={plans.data?.meta.source === 'FIXTURE' ? t('common.demoData') : plans.data?.meta.source} asOf={plans.data?.meta.asOf} retrievedAt={plans.data?.meta.retrievedAt} />
     <div className="content-grid plan-grid">
-      <Panel title={t('plan.planSettings')} detail={t('plan.planSettingsHint')}>{instruments.isError ? <ErrorState onRetry={() => void instruments.refetch()} /> : <PlanEditor plan={plan} instruments={instruments.data?.data ?? []} pending={savePlan.isPending} saved={saved} onSubmit={(values) => { setSaved(false); savePlan.mutate(values) }} />}</Panel>
+      <Panel title={t('plan.planSettings')} detail={t('plan.planSettingsHint')}>{instruments.isError ? <ErrorState onRetry={() => void instruments.refetch()} /> : contributionError ? <ErrorState onRetry={() => void contributions.refetch()} /> : <PlanEditor plan={plan} initialCapital={contributions.data?.data.initial.plannedPrincipal} instruments={instruments.data?.data ?? []} pending={savePlan.isPending || Boolean(plan && contributions.isLoading)} saved={saved} onSubmit={(values) => { setSaved(false); savePlan.mutate(values) }} />}</Panel>
       {plan ? <TargetAllocationPanel plan={plan} /> : <Panel title={t('plan.targetAllocation')} detail={t('plan.allocationHint')}><EmptyState title={t('plan.noPlan')} detail={t('plan.noAssets')} /></Panel>}
     </div>
     {savePlan.error instanceof Error ? <p className="form-alert page-alert" role="alert">{savePlan.error.message}</p> : null}

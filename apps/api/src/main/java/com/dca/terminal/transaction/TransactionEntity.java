@@ -35,6 +35,13 @@ public class TransactionEntity extends PersistedEntity {
     private UUID planCycleId;
 
     @Enumerated(EnumType.STRING)
+    @Column(name = "contribution_type", length = 16)
+    private ContributionType contributionType;
+
+    @Column(name = "contribution_plan_id")
+    private UUID contributionPlanId;
+
+    @Enumerated(EnumType.STRING)
     @Column(name = "transaction_type", nullable = false, length = 16)
     private TransactionType transactionType;
 
@@ -72,6 +79,10 @@ public class TransactionEntity extends PersistedEntity {
     public void setInstrument(InstrumentEntity instrument) { this.instrument = instrument; }
     public UUID getPlanCycleId() { return planCycleId; }
     public void setPlanCycleId(UUID planCycleId) { this.planCycleId = planCycleId; }
+    public ContributionType getContributionType() { return contributionType; }
+    public void setContributionType(ContributionType contributionType) { this.contributionType = contributionType; }
+    public UUID getContributionPlanId() { return contributionPlanId; }
+    public void setContributionPlanId(UUID contributionPlanId) { this.contributionPlanId = contributionPlanId; }
     public TransactionType getTransactionType() { return transactionType; }
     public void setTransactionType(TransactionType transactionType) { this.transactionType = transactionType; }
     public LocalDate getTradeDate() { return tradeDate; }

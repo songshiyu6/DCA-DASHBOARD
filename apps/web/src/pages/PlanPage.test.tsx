@@ -13,6 +13,8 @@ const mockedApi = vi.hoisted(() => ({
   getInstruments: vi.fn(),
   getCycles: vi.fn(),
   getRecommendation: vi.fn(),
+  getContributionAnalysis: vi.fn(),
+  updateInitialCapital: vi.fn(),
   createPlan: vi.fn(),
   updatePlan: vi.fn(),
 }))
@@ -31,7 +33,9 @@ beforeEach(() => {
   mockedApi.getInstruments.mockResolvedValue({ data: fixtureInstruments, meta: { status: 'FRESH', source: 'API' } })
   mockedApi.getCycles.mockResolvedValue({ data: [], meta: { status: 'FRESH', source: 'API' } })
   mockedApi.getRecommendation.mockResolvedValue({ data: { amount: '1500.00', method: 'CONTRIBUTION_FIRST', dataStatus: 'FRESH', items: [] }, meta: { status: 'FRESH', source: 'API' } })
+  mockedApi.getContributionAnalysis.mockResolvedValue({ data: { totalInvested: '0', initial: { plannedPrincipal: '50000.00', principal: '0', value: '0', pnl: '0', returnRate: null, averageMarketDays: 0, batchCount: 0, dataStatus: 'FRESH' }, dca: { plannedPrincipal: null, principal: '0', value: '0', pnl: '0', returnRate: null, averageMarketDays: 0, batchCount: 0, dataStatus: 'FRESH' }, unclassifiedAmount: '0', unclassifiedBuys: [], batches: [], dataStatus: 'FRESH', asOf: '2026-08-27' }, meta: { status: 'FRESH', source: 'API' } })
   mockedApi.updatePlan.mockResolvedValue({ data: plan, meta: { status: 'FRESH', source: 'API' } })
+  mockedApi.updateInitialCapital.mockResolvedValue({ data: {}, meta: { status: 'FRESH', source: 'API' } })
 })
 
 describe('plan editor', () => {
@@ -39,7 +43,8 @@ describe('plan editor', () => {
     const user = userEvent.setup()
     renderPage()
 
-    const weight = await screen.findByLabelText('VOO target weight')
+    await waitFor(() => expect(screen.getByLabelText('Initial capital')).toHaveValue('50000.00'))
+    const weight = screen.getByLabelText('VOO target weight')
     await user.clear(weight)
     await user.type(weight, '99.00')
     await user.tab()
@@ -49,13 +54,15 @@ describe('plan editor', () => {
     expect(screen.getByRole('button', { name: /Save changes/ })).toBeDisabled()
   })
 
-  it('converts percentage input to decimal-string API weights on save', async () => {
+  it('saves initial capital separately from the monthly DCA plan payload', async () => {
     const user = userEvent.setup()
     renderPage()
 
-    const saveButton = await screen.findByRole('button', { name: /Save changes/ })
+    await waitFor(() => expect(screen.getByLabelText('Initial capital')).toHaveValue('50000.00'))
+    const saveButton = screen.getByRole('button', { name: /Save changes/ })
     await user.click(saveButton)
 
     await waitFor(() => expect(mockedApi.updatePlan).toHaveBeenCalledWith('core-plan', expect.objectContaining({ monthlyBudget: '1500.00', assets: expect.arrayContaining([{ symbol: 'VOO', targetWeight: '0.50000000' }]) })))
+    expect(mockedApi.updateInitialCapital).toHaveBeenCalledWith('core-plan', '50000.00')
   })
 })

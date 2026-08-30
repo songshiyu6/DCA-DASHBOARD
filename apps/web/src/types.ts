@@ -211,6 +211,48 @@ export interface ContributionProgress {
   }>
 }
 
+export type ContributionType = 'INITIAL' | 'DCA' | 'UNPLANNED'
+
+export interface ContributionBatch {
+  type: ContributionType
+  period: string | null
+  principal: string
+  value: string | null
+  pnl: string | null
+  returnRate: string | null
+  averageMarketDays: number
+  dataStatus: DataStatus
+}
+
+export interface ContributionBucket {
+  plannedPrincipal: string | null
+  principal: string
+  value: string | null
+  pnl: string | null
+  returnRate: string | null
+  averageMarketDays: number
+  batchCount: number
+  dataStatus: DataStatus
+}
+
+export interface UnclassifiedBuy {
+  transactionId: string
+  tradeDate: string
+  symbol: string
+  principal: string
+}
+
+export interface ContributionAnalysis {
+  totalInvested: string
+  initial: ContributionBucket
+  dca: ContributionBucket
+  unclassifiedAmount: string
+  unclassifiedBuys: UnclassifiedBuy[]
+  batches: ContributionBatch[]
+  dataStatus: DataStatus
+  asOf: string
+}
+
 export interface NextDca {
   period: string
   amount: string

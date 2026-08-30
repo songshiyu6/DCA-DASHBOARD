@@ -14,6 +14,7 @@ describe('query key and invalidation policy', () => {
       queryKeys.dashboard,
       queryKeys.planCycles('plan-1'),
       queryKeys.recommendation('plan-1'),
+      queryKeys.contributionAnalysis('plan-1'),
     ])
   })
 
@@ -28,6 +29,7 @@ describe('query key and invalidation policy', () => {
       queryKeys.dashboard,
       queryKeys.planCycles('plan-1'),
       queryKeys.recommendation('plan-1'),
+      queryKeys.contributionAnalysis('plan-1'),
     ])
   })
 })

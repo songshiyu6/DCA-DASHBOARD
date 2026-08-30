@@ -65,7 +65,8 @@ public class TransactionController {
     private TransactionResponse response(TransactionEntity entity) {
         return new TransactionResponse(entity.getId(), entity.getInstrument().getSymbol(), entity.getInstrument().getName(),
                 entity.getTransactionType(), entity.getTradeDate(), entity.getQuantity(), entity.getUnitPrice(),
-                entity.getAmount(), entity.getFee(), entity.getCurrency(), entity.getPlanCycleId(), entity.getNotes(),
+                entity.getAmount(), entity.getFee(), entity.getCurrency(), entity.getPlanCycleId(),
+                entity.getContributionType(), entity.getContributionPlanId(), entity.getNotes(),
                 entity.getCreatedAt(), entity.getUpdatedAt(), entity.getLedgerOrder());
     }
 }

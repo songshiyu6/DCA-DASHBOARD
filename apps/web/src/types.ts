@@ -240,6 +240,8 @@ export interface AppSettings {
   theme: 'SYSTEM' | 'LIGHT' | 'DARK'
   marketTimezone?: AppTimezone
   displayTimezone?: AppTimezone
+  /** Legacy demo-state compatibility only. */
+  timezone?: string
 }
 
 export interface Session {

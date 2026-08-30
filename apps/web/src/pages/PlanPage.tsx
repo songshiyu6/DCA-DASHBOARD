@@ -7,6 +7,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { decimal, decimalMax, decimalMin, formatMoney, formatPercent, formatPeriod, formatSignedPercent } from '../lib/format'
+import { isInitialContributionPeriod } from '../lib/initialContributionPresentation'
 import { invalidatePlanQueries, queryKeys } from '../lib/queryKeys'
 import type { Instrument, InvestmentPlan, PlanCycle, Recommendation } from '../types'
 import { DataStateBanner, EmptyState, ErrorState, LoadingBlock } from '../components/DataState'
@@ -65,7 +66,18 @@ function planPayload(values: PlanFormValues): Omit<InvestmentPlan, 'id' | 'cycle
   }
 }
 
-function CycleRow({ cycle }: { cycle: PlanCycle }) {
+function CycleRow({ cycle, planStartDate, initialPrincipal }: { cycle: PlanCycle; planStartDate: string; initialPrincipal: string }) {
+  const { i18n } = useTranslation()
+  const isZh = (i18n.resolvedLanguage ?? i18n.language).toLowerCase().startsWith('zh')
+  const initialLabel = isZh ? '初始投入' : 'Initial capital'
+  const initialCycle = isInitialContributionPeriod(cycle.period, cycle.status, planStartDate, initialPrincipal, cycle.executedAmount)
+  if (initialCycle) {
+    return <div className="cycle-row cycle-row-initial">
+      <div className="cycle-period"><span className="cycle-marker cycle-marker-initial">$</span><div><strong>{formatPeriod(cycle.period)}</strong><small>{cycle.period}</small></div></div>
+      <div className="cycle-progress cycle-progress-initial"><div className="cycle-initial-copy"><small>{initialLabel}</small><strong>{formatMoney(initialPrincipal)}</strong></div></div>
+      <div className="cycle-status"><span className="status-badge status-initial status-compact"><span className="status-dot" />{initialLabel}</span></div>
+    </div>
+  }
   const planned = decimal(cycle.plannedAmount)
   const ratio = planned.gt(0) ? decimalMin(decimalMax(decimal(cycle.executedAmount).div(planned), 0), 1).toNumber() * 100 : 0
   return <div className="cycle-row">
@@ -126,6 +138,7 @@ export function PlanPage() {
   const plan = plans.data?.data.find((candidate) => candidate.status === 'ACTIVE')
   const cycles = useQuery({ queryKey: plan ? queryKeys.planCycles(plan.id) : queryKeys.planCycles('none'), queryFn: () => api.getCycles(plan?.id ?? ''), enabled: Boolean(plan) })
   const recommendation = useQuery({ queryKey: plan ? queryKeys.recommendation(plan.id) : queryKeys.recommendation('none'), queryFn: () => api.getRecommendation(plan?.id ?? ''), enabled: Boolean(plan) })
+  const contributionAnalysis = useQuery({ queryKey: plan ? queryKeys.contributionAnalysis(plan.id) : queryKeys.contributionAnalysis('none'), queryFn: () => api.getContributionAnalysis(plan?.id ?? ''), enabled: Boolean(plan) })
   const [saved, setSaved] = useState(false)
   const savePlan = useMutation({
     mutationFn: (values: PlanFormValues) => plan ? api.updatePlan(plan.id, planPayload(values)) : api.createPlan(planPayload(values)),
@@ -139,6 +152,7 @@ export function PlanPage() {
   if (plans.isError) return <div className="page"><ErrorState onRetry={() => void plans.refetch()} /></div>
 
   const cycleData = cycles.data?.data ?? plan?.cycles ?? []
+  const initialPrincipal = contributionAnalysis.data?.data.initial.principal ?? '0'
   return <div className="page plan-page">
     <div className="page-intro"><div><span className="page-eyebrow">{t('plan.eyebrow')}</span><h1>{t('plan.title')}</h1><p>{t('plan.subtitle')}</p></div>{plan ? <div className="page-actions"><span className="active-plan-chip"><span className="status-dot" />{t('plan.active')}</span></div> : null}</div>
     <DataStateBanner status={plans.data?.meta.status ?? 'STALE'} message={plans.data?.meta.message} source={plans.data?.meta.source === 'FIXTURE' ? t('common.demoData') : plans.data?.meta.source} asOf={plans.data?.meta.asOf} retrievedAt={plans.data?.meta.retrievedAt} />
@@ -147,6 +161,6 @@ export function PlanPage() {
       {plan ? <TargetAllocationPanel plan={plan} /> : <Panel title={t('plan.targetAllocation')} detail={t('plan.allocationHint')}><EmptyState title={t('plan.noPlan')} detail={t('plan.noAssets')} /></Panel>}
     </div>
     {savePlan.error instanceof Error ? <p className="form-alert page-alert" role="alert">{savePlan.error.message}</p> : null}
-    {plan ? <div className="content-grid plan-secondary-grid"><div className="plan-cycles-column"><Panel title={t('plan.cycles')} detail={t('plan.executionHistory')}>{cycles.isLoading ? <LoadingBlock lines={8} /> : cycles.isError ? <ErrorState onRetry={() => void cycles.refetch()} /> : cycleData.length ? <div className="cycles-list">{cycleData.map((cycle) => <CycleRow key={cycle.id} cycle={cycle} />)}</div> : <EmptyState title={t('common.noData')} />}</Panel></div><div>{recommendation.isLoading ? <Panel title={t('plan.recommendation')}><LoadingBlock lines={6} /></Panel> : recommendation.isError ? <ErrorState onRetry={() => void recommendation.refetch()} /> : recommendation.data ? <><DataStateBanner status={recommendation.data.meta.status} message={recommendation.data.meta.message} source={recommendation.data.meta.source === 'FIXTURE' ? t('common.demoData') : recommendation.data.meta.source} asOf={recommendation.data.meta.asOf} retrievedAt={recommendation.data.meta.retrievedAt} /><RecommendationPanel recommendation={recommendation.data.data} /></> : <EmptyState title={t('common.noData')} />}</div></div> : null}
+    {plan ? <div className="content-grid plan-secondary-grid"><div className="plan-cycles-column"><Panel title={t('plan.cycles')} detail={t('plan.executionHistory')}>{cycles.isLoading ? <LoadingBlock lines={8} /> : cycles.isError ? <ErrorState onRetry={() => void cycles.refetch()} /> : cycleData.length ? <div className="cycles-list">{cycleData.map((cycle) => <CycleRow key={cycle.id} cycle={cycle} planStartDate={plan.startDate} initialPrincipal={initialPrincipal} />)}</div> : <EmptyState title={t('common.noData')} />}</Panel></div><div>{recommendation.isLoading ? <Panel title={t('plan.recommendation')}><LoadingBlock lines={6} /></Panel> : recommendation.isError ? <ErrorState onRetry={() => void recommendation.refetch()} /> : recommendation.data ? <><DataStateBanner status={recommendation.data.meta.status} message={recommendation.data.meta.message} source={recommendation.data.meta.source === 'FIXTURE' ? t('common.demoData') : recommendation.data.meta.source} asOf={recommendation.data.meta.asOf} retrievedAt={recommendation.data.meta.retrievedAt} /><RecommendationPanel recommendation={recommendation.data.data} /></> : <EmptyState title={t('common.noData')} />}</div></div> : null}
   </div>
 }

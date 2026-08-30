@@ -53,7 +53,7 @@ describe('plan editor', () => {
     const user = userEvent.setup()
     renderPage()
 
-    expect(await screen.findByLabelText('Monthly DCA budget')).toHaveValue('1500.00')
+    expect(await screen.findByLabelText('Monthly budget')).toHaveValue('1500.00')
     expect(screen.queryByLabelText('Initial capital')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /Save changes/ }))
 

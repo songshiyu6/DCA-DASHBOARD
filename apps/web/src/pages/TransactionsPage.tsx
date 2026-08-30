@@ -26,7 +26,7 @@ const transactionSchema = z.object({
   fee: z.string().regex(/^\d*(?:\.\d{0,6})?$/, 'validation.feeInvalid'),
   notes: z.string().optional(),
   planCycleId: z.string().optional(),
-  contributionType: z.enum(['INITIAL', 'DCA', 'UNPLANNED']).optional(),
+  contributionType: z.enum(['INITIAL', 'DCA', 'UNPLANNED', 'UNCLASSIFIED']).optional(),
 }).superRefine((values, context) => {
   if (values.transactionType === 'BUY' || values.transactionType === 'SELL') {
     if (!values.quantity || !quantityPattern.test(values.quantity) || decimal(values.quantity).lte(0)) context.addIssue({ code: z.ZodIssueCode.custom, path: ['quantity'], message: 'validation.quantityRequired' })
@@ -42,12 +42,13 @@ const transactionSchema = z.object({
 })
 
 type TransactionFormValues = z.infer<typeof transactionSchema>
+type TransactionContributionSelection = ContributionType | 'UNCLASSIFIED'
 
 const initialForm: TransactionFormValues = { tradeDate: '2026-08-27', transactionType: 'BUY', instrumentSymbol: 'VOO', quantity: '', unitPrice: '', amount: '', fee: '0.00', notes: '', planCycleId: '', contributionType: 'UNPLANNED' }
 
-function inferredContributionType(transaction: Transaction): ContributionType {
+function inferredContributionType(transaction: Transaction): TransactionContributionSelection {
   if (transaction.contributionType) return transaction.contributionType
-  return transaction.planCycleId ? 'DCA' : 'UNPLANNED'
+  return transaction.planCycleId ? 'DCA' : 'UNCLASSIFIED'
 }
 
 function transactionValues(transaction?: Transaction): TransactionFormValues {
@@ -58,7 +59,8 @@ function transactionValues(transaction?: Transaction): TransactionFormValues {
 function transactionInput(values: TransactionFormValues, planId?: string): TransactionInput {
   const trade = values.transactionType === 'BUY' || values.transactionType === 'SELL'
   const buy = values.transactionType === 'BUY'
-  const contributionType = buy ? values.contributionType ?? 'UNPLANNED' : null
+  const selectedSource = buy ? values.contributionType ?? 'UNPLANNED' : null
+  const contributionType = selectedSource === 'UNCLASSIFIED' ? null : selectedSource
   return {
     tradeDate: values.tradeDate,
     transactionType: values.transactionType,
@@ -69,9 +71,9 @@ function transactionInput(values: TransactionFormValues, planId?: string): Trans
     fee: values.fee || '0',
     currency: 'USD',
     notes: values.notes?.trim() || undefined,
-    planCycleId: buy && contributionType === 'DCA' ? values.planCycleId || null : null,
+    planCycleId: buy && selectedSource === 'DCA' ? values.planCycleId || null : null,
     contributionType,
-    contributionPlanId: buy && contributionType === 'INITIAL' ? planId ?? null : null,
+    contributionPlanId: buy && selectedSource === 'INITIAL' ? planId ?? null : null,
   }
 }
 
@@ -101,6 +103,7 @@ function TransactionModal({ transaction, cycles, plan, onClose, onSaved }: { tra
   const initialAllowed = Boolean(plan && tradeDate === plan.startDate)
   const matchingCycles = useMemo(() => cycles.filter((cycle) => cycle.period === tradeDate.slice(0, 7)), [cycles, tradeDate])
   const invalidInitialDate = type === 'BUY' && contributionType === 'INITIAL' && !initialAllowed
+  const legacyUnclassified = Boolean(transaction && inferredContributionType(transaction) === 'UNCLASSIFIED')
   const save = useMutation({ mutationFn: (values: TransactionFormValues) => transaction ? api.updateTransaction(transaction.id, transactionInput(values, plan?.id)) : api.createTransaction(transactionInput(values, plan?.id)), onSuccess: () => { void invalidateTransactionQueries(queryClient, plan?.id); onSaved() } })
   const errorMessage = save.error instanceof Error ? save.error.message : undefined
   const sourceRegistration = form.register('contributionType')
@@ -109,7 +112,7 @@ function TransactionModal({ transaction, cycles, plan, onClose, onSaved }: { tra
     <div className="form-grid-two"><div className="form-field"><label htmlFor="transaction-date">{t('transactions.date')}</label><input id="transaction-date" type="date" {...dateRegistration} onChange={(event) => { void dateRegistration.onChange(event); const selected = cycles.find((cycle) => cycle.id === form.getValues('planCycleId')); if (selected && selected.period !== event.target.value.slice(0, 7)) form.setValue('planCycleId', '') }} aria-invalid={Boolean(form.formState.errors.tradeDate)} aria-describedby={form.formState.errors.tradeDate ? 'transaction-date-error' : undefined} />{form.formState.errors.tradeDate ? <small id="transaction-date-error" className="field-error">{t(form.formState.errors.tradeDate.message ?? 'errors.validation')}</small> : null}</div><div className="form-field"><label htmlFor="transaction-type">{t('transactions.type')}</label><select id="transaction-type" {...form.register('transactionType')}><option value="BUY">BUY</option><option value="SELL">SELL</option><option value="DIVIDEND">DIVIDEND</option><option value="FEE">FEE</option></select></div></div>
     <div className="form-field"><label htmlFor="transaction-symbol">{t('etfs.ticker')}</label><input id="transaction-symbol" placeholder="VOO" {...form.register('instrumentSymbol')} aria-invalid={Boolean(form.formState.errors.instrumentSymbol)} aria-describedby={form.formState.errors.instrumentSymbol ? 'transaction-symbol-error' : undefined} />{form.formState.errors.instrumentSymbol ? <small id="transaction-symbol-error" className="field-error">{t(form.formState.errors.instrumentSymbol.message ?? 'errors.validation')}</small> : null}</div>
     {type === 'BUY' || type === 'SELL' ? <div className="form-grid-two"><div className="form-field"><label htmlFor="transaction-quantity">{t('transactions.quantity')}</label><input id="transaction-quantity" inputMode="decimal" placeholder="1.238423" {...form.register('quantity')} aria-invalid={Boolean(form.formState.errors.quantity)} aria-describedby={form.formState.errors.quantity ? 'transaction-quantity-error' : undefined} />{form.formState.errors.quantity ? <small id="transaction-quantity-error" className="field-error">{t(form.formState.errors.quantity.message ?? 'errors.validation')}</small> : null}</div><div className="form-field"><label htmlFor="transaction-price">{t('transactions.unitPrice')}</label><div className="input-prefix"><span>$</span><input id="transaction-price" inputMode="decimal" placeholder="520.45" {...form.register('unitPrice')} aria-invalid={Boolean(form.formState.errors.unitPrice)} aria-describedby={form.formState.errors.unitPrice ? 'transaction-price-error' : undefined} /></div>{form.formState.errors.unitPrice ? <small id="transaction-price-error" className="field-error">{t(form.formState.errors.unitPrice.message ?? 'errors.validation')}</small> : null}</div></div> : <div className="form-field"><label htmlFor="transaction-amount">{t('transactions.amount')}</label><div className="input-prefix"><span>$</span><input id="transaction-amount" inputMode="decimal" placeholder="42.18" {...form.register('amount')} aria-invalid={Boolean(form.formState.errors.amount)} aria-describedby={form.formState.errors.amount ? 'transaction-amount-error' : undefined} /></div>{form.formState.errors.amount ? <small id="transaction-amount-error" className="field-error">{t(form.formState.errors.amount.message ?? 'errors.validation')}</small> : null}</div>}
-    {type === 'BUY' ? <div className="form-grid-two"><div className="form-field"><label htmlFor="transaction-fee">{t('transactions.fee')}</label><div className="input-prefix"><span>$</span><input id="transaction-fee" inputMode="decimal" {...form.register('fee')} aria-invalid={Boolean(form.formState.errors.fee)} aria-describedby={form.formState.errors.fee ? 'transaction-fee-error' : undefined} /></div>{form.formState.errors.fee ? <small id="transaction-fee-error" className="field-error">{t(form.formState.errors.fee.message ?? 'errors.validation')}</small> : null}</div><div className="form-field"><label htmlFor="transaction-contribution-source">{isZh ? '资金来源' : 'Contribution source'}</label><select id="transaction-contribution-source" {...sourceRegistration} onChange={(event) => { void sourceRegistration.onChange(event); if (event.target.value !== 'DCA') form.setValue('planCycleId', '') }}><option value="DCA" disabled={!plan}>{isZh ? '定投' : 'DCA'}</option><option value="INITIAL" disabled={!initialAllowed}>{isZh ? `初始资金${plan ? `（仅 ${plan.startDate}）` : ''}` : `Initial capital${plan ? ` (${plan.startDate} only)` : ''}`}</option><option value="UNPLANNED">{isZh ? '计划外' : 'Outside plan'}</option></select>{invalidInitialDate ? <small className="field-error">{isZh ? `初始资金只能登记在投资计划开始日 ${plan?.startDate ?? ''}。` : `Initial capital can only be recorded on the plan start date ${plan?.startDate ?? ''}.`}</small> : <small className="field-hint">{isZh ? '初始资金与每月定投分开统计。' : 'Initial capital is tracked separately from monthly DCA.'}</small>}</div></div> : <div className="form-field"><label htmlFor="transaction-fee">{t('transactions.fee')}</label><div className="input-prefix"><span>$</span><input id="transaction-fee" inputMode="decimal" {...form.register('fee')} aria-invalid={Boolean(form.formState.errors.fee)} aria-describedby={form.formState.errors.fee ? 'transaction-fee-error' : undefined} /></div>{form.formState.errors.fee ? <small id="transaction-fee-error" className="field-error">{t(form.formState.errors.fee.message ?? 'errors.validation')}</small> : null}</div>}
+    {type === 'BUY' ? <div className="form-grid-two"><div className="form-field"><label htmlFor="transaction-fee">{t('transactions.fee')}</label><div className="input-prefix"><span>$</span><input id="transaction-fee" inputMode="decimal" {...form.register('fee')} aria-invalid={Boolean(form.formState.errors.fee)} aria-describedby={form.formState.errors.fee ? 'transaction-fee-error' : undefined} /></div>{form.formState.errors.fee ? <small id="transaction-fee-error" className="field-error">{t(form.formState.errors.fee.message ?? 'errors.validation')}</small> : null}</div><div className="form-field"><label htmlFor="transaction-contribution-source">{isZh ? '资金来源' : 'Contribution source'}</label><select id="transaction-contribution-source" {...sourceRegistration} onChange={(event) => { void sourceRegistration.onChange(event); if (event.target.value !== 'DCA') form.setValue('planCycleId', '') }}>{legacyUnclassified ? <option value="UNCLASSIFIED">{isZh ? '未归类（历史）' : 'Unclassified (legacy)'}</option> : null}<option value="DCA" disabled={!plan}>{isZh ? '定投' : 'DCA'}</option><option value="INITIAL" disabled={!initialAllowed}>{isZh ? `初始资金${plan ? `（仅 ${plan.startDate}）` : ''}` : `Initial capital${plan ? ` (${plan.startDate} only)` : ''}`}</option><option value="UNPLANNED">{isZh ? '计划外' : 'Outside plan'}</option></select>{invalidInitialDate ? <small className="field-error">{isZh ? `初始资金只能登记在投资计划开始日 ${plan?.startDate ?? ''}。` : `Initial capital can only be recorded on the plan start date ${plan?.startDate ?? ''}.`}</small> : <small className="field-hint">{isZh ? '初始资金与每月定投分开统计。' : 'Initial capital is tracked separately from monthly DCA.'}</small>}</div></div> : <div className="form-field"><label htmlFor="transaction-fee">{t('transactions.fee')}</label><div className="input-prefix"><span>$</span><input id="transaction-fee" inputMode="decimal" {...form.register('fee')} aria-invalid={Boolean(form.formState.errors.fee)} aria-describedby={form.formState.errors.fee ? 'transaction-fee-error' : undefined} /></div>{form.formState.errors.fee ? <small id="transaction-fee-error" className="field-error">{t(form.formState.errors.fee.message ?? 'errors.validation')}</small> : null}</div>}
     {type === 'BUY' && contributionType === 'DCA' ? <div className="form-field"><label htmlFor="transaction-cycle">{isZh ? '定投月份' : 'DCA cycle'}</label><select id="transaction-cycle" {...form.register('planCycleId')} aria-invalid={Boolean(form.formState.errors.planCycleId)}><option value="">{isZh ? '请选择定投月份' : 'Select DCA cycle'}</option>{matchingCycles.map((cycle) => <option key={cycle.id} value={cycle.id}>{formatDate(`${cycle.period}-01`)}</option>)}</select>{form.formState.errors.planCycleId ? <small className="field-error">{isZh ? '请选择与交易日期对应的定投月份。' : 'Select the DCA cycle that matches the trade date.'}</small> : matchingCycles.length === 0 ? <small className="field-hint">{isZh ? '当前交易日期没有可用的定投周期。' : 'No DCA cycle is available for this trade date.'}</small> : null}</div> : null}
     <div className="form-field"><label htmlFor="transaction-notes">{t('transactions.notes')}</label><textarea id="transaction-notes" rows={2} placeholder={t('transactions.optionalNote')} {...form.register('notes')} /></div>
     {errorMessage ? <p className="form-alert" role="alert">{errorMessage}</p> : null}

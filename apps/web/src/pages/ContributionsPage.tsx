@@ -55,19 +55,18 @@ export function ContributionsPage() {
   if (analysis.isError || !analysis.data) return <div className="page"><ErrorState onRetry={() => void analysis.refetch()} /></div>
 
   const { data, meta } = analysis.data
-  const plannedInitial = data.initial.plannedPrincipal
   return <div className="page contributions-page">
-    <div className="page-intro"><div><span className="page-eyebrow">{isZh ? '资金批次' : 'Capital batches'}</span><h1>{isZh ? '投入分析' : 'Contributions'}</h1><p>{isZh ? '把初始资金和每个月定投分开，看每批钱在市场里待了多久、现在赚了多少。' : 'Separate initial capital from monthly DCA and track how long each batch has been invested and how it has performed.'}</p></div><div className="page-actions"><button type="button" className="button button-secondary" onClick={() => navigate('/plan')}><WalletCards size={15} />{isZh ? '设置资金计划' : 'Capital settings'}</button></div></div>
+    <div className="page-intro"><div><span className="page-eyebrow">{isZh ? '资金批次' : 'Capital batches'}</span><h1>{isZh ? '投入分析' : 'Contributions'}</h1><p>{isZh ? '把初始资金和每个月定投分开，看每批钱在市场里待了多久、现在赚了多少。' : 'Separate initial capital from monthly DCA and track how long each batch has been invested and how it has performed.'}</p></div><div className="page-actions"><button type="button" className="button button-secondary" onClick={() => navigate('/plan')}><WalletCards size={15} />{isZh ? '定投计划' : 'DCA plan'}</button></div></div>
     <DataStateBanner status={meta.status} message={meta.message} source={meta.source} asOf={data.asOf || meta.asOf} retrievedAt={meta.retrievedAt} />
 
     <div className="contribution-total-strip">
       <span><small>{isZh ? '累计实际投入' : 'Total actual contributions'}</small><strong>{formatMoney(data.totalInvested)}</strong></span>
-      <span><small>{isZh ? '初始资金计划' : 'Planned initial capital'}</small><strong>{plannedInitial === null ? (isZh ? '未设置' : 'Not set') : formatMoney(plannedInitial)}</strong></span>
+      <span><small>{isZh ? '初始资金' : 'Initial capital'}</small><strong>{formatMoney(data.initial.principal)}</strong></span>
       <span><small>{isZh ? '定投批次' : 'DCA batches'}</small><strong>{data.dca.batchCount} {isZh ? '个月' : 'months'}</strong></span>
     </div>
 
     <div className="contribution-summary-grid">
-      <SummaryPanel title={isZh ? '初始资金' : 'Initial capital'} bucket={data.initial} isZh={isZh} detail={plannedInitial === null ? (isZh ? '未设置计划金额' : 'No planned amount') : `${isZh ? '计划' : 'Planned'} ${formatMoney(plannedInitial)}`} />
+      <SummaryPanel title={isZh ? '初始资金' : 'Initial capital'} bucket={data.initial} isZh={isZh} detail={isZh ? '来自实际 BUY 交易' : 'From actual BUY transactions'} />
       <SummaryPanel title={isZh ? '定投资金' : 'DCA capital'} bucket={data.dca} isZh={isZh} detail={isZh ? `${data.dca.batchCount} 个实际投入月份` : `${data.dca.batchCount} funded months`} />
     </div>
 

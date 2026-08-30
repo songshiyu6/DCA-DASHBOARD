@@ -27,6 +27,8 @@ public class InvestmentPlanEntity extends PersistedEntity {
     private PlanFrequency frequency = PlanFrequency.MONTHLY;
     @Column(name = "monthly_budget", nullable = false, precision = 20, scale = 6)
     private BigDecimal monthlyBudget;
+    @Column(name = "initial_capital", precision = 20, scale = 6)
+    private BigDecimal initialCapital;
     @Column(name = "start_date", nullable = false)
     private LocalDate startDate;
     @Column(name = "execution_start_day", nullable = false)
@@ -46,6 +48,8 @@ public class InvestmentPlanEntity extends PersistedEntity {
     public void setFrequency(PlanFrequency frequency) { this.frequency = frequency; }
     public BigDecimal getMonthlyBudget() { return monthlyBudget; }
     public void setMonthlyBudget(BigDecimal monthlyBudget) { this.monthlyBudget = monthlyBudget; }
+    public BigDecimal getInitialCapital() { return initialCapital; }
+    public void setInitialCapital(BigDecimal initialCapital) { this.initialCapital = initialCapital; }
     public LocalDate getStartDate() { return startDate; }
     public void setStartDate(LocalDate startDate) { this.startDate = startDate; }
     public int getExecutionStartDay() { return executionStartDay; }

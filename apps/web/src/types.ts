@@ -162,11 +162,14 @@ export interface Recommendation {
 }
 
 export type TransactionType = 'BUY' | 'SELL' | 'DIVIDEND' | 'FEE'
+export type ContributionType = 'INITIAL' | 'DCA' | 'UNPLANNED'
 
 export interface Transaction {
   id: string
   instrumentSymbol: string
   planCycleId?: string | null
+  contributionType?: ContributionType | null
+  contributionPlanId?: string | null
   transactionType: TransactionType
   tradeDate: string
   quantity: string | null
@@ -210,8 +213,6 @@ export interface ContributionProgress {
     status: CycleStatus | 'NONE'
   }>
 }
-
-export type ContributionType = 'INITIAL' | 'DCA' | 'UNPLANNED'
 
 export interface ContributionBatch {
   type: ContributionType
@@ -290,6 +291,8 @@ export interface Session {
 export interface TransactionInput {
   instrumentSymbol: string
   planCycleId?: string | null
+  contributionType?: ContributionType | null
+  contributionPlanId?: string | null
   transactionType: TransactionType
   tradeDate: string
   quantity?: string

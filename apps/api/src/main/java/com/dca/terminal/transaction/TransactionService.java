@@ -284,6 +284,61 @@ public class TransactionService {
         UUID cycleId = request.planCycleId();
         if (cycleId != null) planService.validateCycleForTransaction(cycleId, instrument.getId(),
                 request.type(), request.tradeDate());
+
+        ContributionType contributionType = request.contributionType();
+        UUID contributionPlanId = request.contributionPlanId();
+        if (request.type() != TransactionType.BUY) {
+            if (contributionType != null || contributionPlanId != null) {
+                throw new DomainException(HttpStatus.BAD_REQUEST, "CONTRIBUTION_SOURCE_REQUIRES_BUY",
+                        "Contribution source is only valid for BUY transactions");
+            }
+            contributionType = null;
+            contributionPlanId = null;
+        } else if (cycleId != null) {
+            if (contributionType != null && contributionType != ContributionType.DCA) {
+                throw new DomainException(HttpStatus.CONFLICT, "CONTRIBUTION_SOURCE_CONFLICT",
+                        "A BUY linked to a plan cycle must be classified as DCA");
+            }
+            if (contributionPlanId != null) {
+                throw new DomainException(HttpStatus.BAD_REQUEST, "INVALID_CONTRIBUTION_PLAN",
+                        "DCA contribution plan is determined by the selected cycle");
+            }
+            contributionType = ContributionType.DCA;
+        } else if (contributionType == ContributionType.DCA) {
+            throw new DomainException(HttpStatus.BAD_REQUEST, "DCA_CONTRIBUTION_REQUIRES_CYCLE",
+                    "A DCA contribution must be linked to a plan cycle");
+        } else if (contributionType == ContributionType.INITIAL) {
+            if (contributionPlanId == null) {
+                throw new DomainException(HttpStatus.BAD_REQUEST, "INITIAL_CONTRIBUTION_REQUIRES_PLAN",
+                        "Initial capital must be linked to an investment plan");
+            }
+            LocalDate startDate = planService.getEntity(contributionPlanId).getStartDate();
+            if (!request.tradeDate().equals(startDate)) {
+                throw new DomainException(HttpStatus.BAD_REQUEST, "INITIAL_CONTRIBUTION_START_DATE_ONLY",
+                        "Initial capital can only be recorded on the investment plan start date");
+            }
+        } else if (contributionType == ContributionType.UNPLANNED) {
+            if (contributionPlanId != null) {
+                throw new DomainException(HttpStatus.BAD_REQUEST, "INVALID_CONTRIBUTION_PLAN",
+                        "Unplanned contributions cannot be linked to an investment plan");
+            }
+        } else if (contributionPlanId != null) {
+            throw new DomainException(HttpStatus.BAD_REQUEST, "INVALID_CONTRIBUTION_PLAN",
+                    "Contribution plan requires an explicit contribution type");
+        } else if (entity.getContributionType() == ContributionType.INITIAL
+                && entity.getContributionPlanId() != null) {
+            contributionType = ContributionType.INITIAL;
+            contributionPlanId = entity.getContributionPlanId();
+            LocalDate startDate = planService.getEntity(contributionPlanId).getStartDate();
+            if (!request.tradeDate().equals(startDate)) {
+                throw new DomainException(HttpStatus.BAD_REQUEST, "INITIAL_CONTRIBUTION_START_DATE_ONLY",
+                        "Initial capital can only be recorded on the investment plan start date");
+            }
+        } else if (entity.getContributionType() == ContributionType.UNPLANNED) {
+            contributionType = ContributionType.UNPLANNED;
+            contributionPlanId = null;
+        }
+
         entity.setInstrument(instrument);
         entity.setTransactionType(request.type());
         entity.setTradeDate(request.tradeDate());
@@ -292,6 +347,8 @@ public class TransactionService {
         entity.setAmount(request.amount());
         entity.setFee(request.fee() == null ? BigDecimal.ZERO : request.fee());
         entity.setPlanCycleId(cycleId);
+        entity.setContributionType(contributionType);
+        entity.setContributionPlanId(contributionPlanId);
         entity.setNotes(request.notes());
         entity.setCurrency("USD");
     }
@@ -344,7 +401,8 @@ public class TransactionService {
     private TransactionResponse toResponse(TransactionEntity entity) {
         return new TransactionResponse(entity.getId(), entity.getInstrument().getSymbol(), entity.getInstrument().getName(),
                 entity.getTransactionType(), entity.getTradeDate(), entity.getQuantity(), entity.getUnitPrice(),
-                entity.getAmount(), entity.getFee(), entity.getCurrency(), entity.getPlanCycleId(), entity.getNotes(),
+                entity.getAmount(), entity.getFee(), entity.getCurrency(), entity.getPlanCycleId(),
+                entity.getContributionType(), entity.getContributionPlanId(), entity.getNotes(),
                 entity.getCreatedAt(), entity.getUpdatedAt(), entity.getLedgerOrder());
     }
 

@@ -333,12 +333,18 @@ function transactionType(value: unknown): Transaction['transactionType'] {
   return value === 'SELL' || value === 'DIVIDEND' || value === 'FEE' ? value : 'BUY'
 }
 
+function contributionType(value: unknown): Transaction['contributionType'] {
+  return value === 'INITIAL' || value === 'DCA' || value === 'UNPLANNED' ? value : null
+}
+
 export function normalizeTransaction(value: unknown): Transaction {
   const body = isRecord(value) ? value : {}
   return {
     id: stringValue(body.id, ''),
     instrumentSymbol: stringValue(body.instrumentSymbol ?? body.symbol, '').toUpperCase(),
     planCycleId: typeof body.planCycleId === 'string' ? body.planCycleId : null,
+    contributionType: contributionType(body.contributionType),
+    contributionPlanId: typeof body.contributionPlanId === 'string' ? body.contributionPlanId : null,
     transactionType: transactionType(body.transactionType ?? body.type),
     tradeDate: stringValue(body.tradeDate ?? body.date, ''),
     quantity: nullableString(body.quantity),

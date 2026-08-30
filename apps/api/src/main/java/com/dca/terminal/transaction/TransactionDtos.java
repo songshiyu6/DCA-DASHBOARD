@@ -23,7 +23,16 @@ public final class TransactionDtos {
             @DecimalMin(value = "0", inclusive = true) BigDecimal amount,
             @DecimalMin(value = "0", inclusive = true) BigDecimal fee,
             UUID planCycleId,
+            ContributionType contributionType,
+            UUID contributionPlanId,
             @Size(max = 1000) String notes) {
+        public TransactionRequest(String instrumentSymbol, TransactionType transactionType, LocalDate tradeDate,
+                                  BigDecimal quantity, BigDecimal unitPrice, BigDecimal amount, BigDecimal fee,
+                                  UUID planCycleId, String notes) {
+            this(instrumentSymbol, transactionType, tradeDate, quantity, unitPrice, amount, fee,
+                    planCycleId, null, null, notes);
+        }
+
         public String symbol() { return instrumentSymbol; }
         public TransactionType type() { return transactionType; }
     }
@@ -31,7 +40,8 @@ public final class TransactionDtos {
     public record TransactionResponse(
             UUID id, String instrumentSymbol, String instrumentName, TransactionType transactionType, LocalDate tradeDate,
             BigDecimal quantity, BigDecimal unitPrice, BigDecimal amount, BigDecimal fee,
-            String currency, UUID planCycleId, String notes, Instant createdAt, Instant updatedAt, Long ledgerOrder) { }
+            String currency, UUID planCycleId, ContributionType contributionType, UUID contributionPlanId,
+            String notes, Instant createdAt, Instant updatedAt, Long ledgerOrder) { }
 
     public record CsvRowRequest(
             @NotBlank String date, @NotBlank String type, @NotBlank String symbol,

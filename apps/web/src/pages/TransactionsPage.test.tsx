@@ -32,6 +32,7 @@ beforeEach(() => {
   mockedApi.getPlans.mockResolvedValue({ data: [fixturePlan], meta: { status: 'FRESH', source: 'API' } })
   mockedApi.getCycles.mockResolvedValue({ data: fixturePlan.cycles ?? [], meta: { status: 'FRESH', source: 'API' } })
   mockedApi.updateTransaction.mockResolvedValue({ data: transaction, meta: { status: 'FRESH', source: 'API' } })
+  mockedApi.createTransaction.mockResolvedValue({ data: transaction, meta: { status: 'FRESH', source: 'API' } })
 })
 
 describe('transaction form', () => {
@@ -62,6 +63,36 @@ describe('transaction form', () => {
     await user.type(quantity, '1.50000000')
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
 
-    await waitFor(() => expect(mockedApi.updateTransaction).toHaveBeenCalledWith('txn-001', expect.objectContaining({ instrumentSymbol: 'VOO', transactionType: 'BUY', quantity: '1.50000000', unitPrice: '530.04', currency: 'USD' })))
+    await waitFor(() => expect(mockedApi.updateTransaction).toHaveBeenCalledWith('txn-001', expect.objectContaining({ instrumentSymbol: 'VOO', transactionType: 'BUY', quantity: '1.50000000', unitPrice: '530.04', currency: 'USD', contributionType: 'DCA', planCycleId: 'cycle-2026-01' })))
+  })
+
+  it('only enables initial capital on the investment plan start date', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: 'Add transaction' }))
+    const date = screen.getByLabelText('Date')
+    const source = screen.getByLabelText('Contribution source')
+    const initialOption = screen.getByRole('option', { name: /Initial capital/ })
+
+    expect(initialOption).toBeDisabled()
+
+    await user.clear(date)
+    await user.type(date, '2026-01-01')
+    expect(initialOption).toBeEnabled()
+    await user.selectOptions(source, 'INITIAL')
+
+    await user.type(screen.getByLabelText('Quantity'), '2')
+    await user.type(screen.getByLabelText('Unit price'), '500')
+    await user.click(screen.getByRole('button', { name: 'Save transaction' }))
+
+    await waitFor(() => expect(mockedApi.createTransaction).toHaveBeenCalledWith(expect.objectContaining({
+      instrumentSymbol: 'VOO',
+      transactionType: 'BUY',
+      tradeDate: '2026-01-01',
+      contributionType: 'INITIAL',
+      contributionPlanId: 'core-plan',
+      planCycleId: null,
+    })))
   })
 })

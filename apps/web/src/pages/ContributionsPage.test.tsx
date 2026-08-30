@@ -19,8 +19,11 @@ const analysis = {
   totalInvested: '52000',
   initial: { plannedPrincipal: '50000', principal: '50000', value: '53850', pnl: '3850', returnRate: '0.077', averageMarketDays: 92, batchCount: 1, dataStatus: 'FRESH' },
   dca: { plannedPrincipal: null, principal: '2000', value: '2106', pnl: '106', returnRate: '0.053', averageMarketDays: 59, batchCount: 1, dataStatus: 'FRESH' },
-  unclassifiedAmount: '800',
-  unclassifiedBuys: [{ transactionId: 'legacy-buy', tradeDate: '2026-06-01', symbol: 'VOO', principal: '800' }],
+  unclassifiedAmount: '1600',
+  unclassifiedBuys: [
+    { transactionId: 'opening-buy', tradeDate: '2026-01-01', symbol: 'VOO', principal: '800' },
+    { transactionId: 'legacy-buy', tradeDate: '2026-06-01', symbol: 'QQQ', principal: '800' },
+  ],
   batches: [
     { type: 'INITIAL', period: null, principal: '50000', value: '53850', pnl: '3850', returnRate: '0.077', averageMarketDays: 92, dataStatus: 'FRESH' },
     { type: 'DCA', period: '2026-07', principal: '2000', value: '2106', pnl: '106', returnRate: '0.053', averageMarketDays: 59, dataStatus: 'FRESH' },
@@ -38,7 +41,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockedApi.getPlans.mockResolvedValue({ data: [fixturePlan], meta: { status: 'FRESH', source: 'API' } })
   mockedApi.getContributionAnalysis.mockResolvedValue({ data: analysis, meta: { status: 'FRESH', source: 'API' } })
-  mockedApi.classifyInitialContribution.mockResolvedValue({ data: { ...analysis, unclassifiedAmount: '0', unclassifiedBuys: [] }, meta: { status: 'FRESH', source: 'API' } })
+  mockedApi.classifyInitialContribution.mockResolvedValue({ data: { ...analysis, unclassifiedAmount: '800', unclassifiedBuys: [analysis.unclassifiedBuys[1]] }, meta: { status: 'FRESH', source: 'API' } })
 })
 
 describe('contribution analysis', () => {
@@ -51,11 +54,13 @@ describe('contribution analysis', () => {
     expect(screen.getAllByText('92 days').length).toBeGreaterThan(0)
   })
 
-  it('requires an explicit action before an unlinked buy becomes initial capital', async () => {
+  it('only allows an opening-day unlinked buy to become initial capital', async () => {
     const user = userEvent.setup()
     renderPage()
 
-    await user.click(await screen.findByRole('button', { name: 'Mark as initial' }))
-    await waitFor(() => expect(mockedApi.classifyInitialContribution).toHaveBeenCalledWith('core-plan', 'legacy-buy'))
+    const markInitial = await screen.findByRole('button', { name: 'Mark as initial' })
+    expect(screen.getByRole('button', { name: 'Not start date' })).toBeDisabled()
+    await user.click(markInitial)
+    await waitFor(() => expect(mockedApi.classifyInitialContribution).toHaveBeenCalledWith('core-plan', 'opening-buy'))
   })
 })

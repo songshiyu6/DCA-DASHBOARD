@@ -26,7 +26,7 @@ function renderPage() {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  const plan: InvestmentPlan = { ...fixturePlan, cycles: [] }
+  const plan: InvestmentPlan = { ...fixturePlan, monthlyBudget: '1500.000000', cycles: [] }
   mockedApi.getPlans.mockResolvedValue({ data: [plan], meta: { status: 'FRESH', source: 'API' } })
   mockedApi.getInstruments.mockResolvedValue({ data: fixtureInstruments, meta: { status: 'FRESH', source: 'API' } })
   mockedApi.getCycles.mockResolvedValue({ data: [], meta: { status: 'FRESH', source: 'API' } })
@@ -49,11 +49,12 @@ describe('plan editor', () => {
     expect(screen.getByRole('button', { name: /Save changes/ })).toBeDisabled()
   })
 
-  it('keeps initial capital out of plan settings and saves only the DCA plan', async () => {
+  it('compacts stored decimal scale in editable fields and still saves canonical values', async () => {
     const user = userEvent.setup()
     renderPage()
 
-    expect(await screen.findByLabelText('Monthly budget')).toHaveValue('1500.00')
+    expect(await screen.findByLabelText('Monthly budget')).toHaveValue('1500')
+    expect(screen.getByLabelText('VOO target weight')).toHaveValue('50')
     expect(screen.queryByLabelText('Initial capital')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /Save changes/ }))
 

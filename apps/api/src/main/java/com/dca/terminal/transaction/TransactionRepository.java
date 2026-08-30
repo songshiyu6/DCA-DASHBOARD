@@ -28,7 +28,8 @@ public interface TransactionRepository extends JpaRepository<TransactionEntity, 
     List<TransactionEntity> findAllByPlanCycleIdOrderByTradeDateAscLedgerOrderAscIdAsc(UUID planCycleId);
     Optional<TransactionEntity> findTopByOrderByLedgerOrderDesc();
     boolean existsByImportFingerprint(String fingerprint);
-    boolean existsByContributionTypeAndContributionPlanId(ContributionType contributionType, UUID contributionPlanId);
+    boolean existsByContributionTypeAndContributionPlanIdAndTradeDateBetween(
+            ContributionType contributionType, UUID contributionPlanId, LocalDate from, LocalDate to);
 
     @Query(value = "SELECT nextval('transaction_ledger_order_seq')", nativeQuery = true)
     long nextLedgerOrder();

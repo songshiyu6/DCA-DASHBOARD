@@ -43,7 +43,8 @@ describe('plan editor', () => {
     const user = userEvent.setup()
     renderPage()
 
-    const weight = await screen.findByLabelText('VOO target weight')
+    await waitFor(() => expect(screen.getByLabelText('Initial capital')).toHaveValue('50000.00'))
+    const weight = screen.getByLabelText('VOO target weight')
     await user.clear(weight)
     await user.type(weight, '99.00')
     await user.tab()
@@ -57,7 +58,8 @@ describe('plan editor', () => {
     const user = userEvent.setup()
     renderPage()
 
-    const saveButton = await screen.findByRole('button', { name: /Save changes/ })
+    await waitFor(() => expect(screen.getByLabelText('Initial capital')).toHaveValue('50000.00'))
+    const saveButton = screen.getByRole('button', { name: /Save changes/ })
     await user.click(saveButton)
 
     await waitFor(() => expect(mockedApi.updatePlan).toHaveBeenCalledWith('core-plan', expect.objectContaining({ monthlyBudget: '1500.00', assets: expect.arrayContaining([{ symbol: 'VOO', targetWeight: '0.50000000' }]) })))

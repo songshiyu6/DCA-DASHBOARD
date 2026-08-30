@@ -6,6 +6,7 @@ import com.dca.terminal.common.FreshnessStatus;
 import com.dca.terminal.instrument.InstrumentEntity;
 import com.dca.terminal.instrument.InstrumentRepository;
 import com.dca.terminal.portfolio.PortfolioService;
+import com.dca.terminal.transaction.ContributionType;
 import com.dca.terminal.transaction.TransactionEntity;
 import com.dca.terminal.transaction.TransactionRepository;
 import com.dca.terminal.transaction.TransactionType;
@@ -268,6 +269,10 @@ public class PlanService {
             throw new DomainException(HttpStatus.BAD_REQUEST, "PLAN_CYCLE_PERIOD_MISMATCH",
                     "Trade date must be inside the selected plan cycle");
         }
+        if (isInitialCapitalMonth(cycle.getPlan(), period)) {
+            throw new DomainException(HttpStatus.BAD_REQUEST, "INITIAL_CAPITAL_MONTH_SKIPS_DCA",
+                    "A month containing initial capital does not run a DCA cycle");
+        }
         int lastDay = period.lengthOfMonth();
         int startDay = Math.min(cycle.getPlan().getExecutionStartDay(), lastDay);
         int endDay = Math.min(cycle.getPlan().getExecutionEndDay(), lastDay);
@@ -344,6 +349,12 @@ public class PlanService {
 
     private int executionEndDay(YearMonth period, InvestmentPlanEntity plan) {
         return Math.min(plan.getExecutionEndDay(), period.lengthOfMonth());
+    }
+
+    private boolean isInitialCapitalMonth(InvestmentPlanEntity plan, YearMonth period) {
+        if (plan == null || plan.getId() == null || period == null) return false;
+        return transactionRepository.existsByContributionTypeAndContributionPlanIdAndTradeDateBetween(
+                ContributionType.INITIAL, plan.getId(), period.atDay(1), period.atEndOfMonth());
     }
 
     private void apply(InvestmentPlanEntity plan, PlanRequest request, PlanStatus status) {
@@ -448,10 +459,13 @@ public class PlanService {
                 .map(transaction -> transaction.getQuantity().multiply(transaction.getUnitPrice(), MC).add(DecimalMath.zeroIfNull(transaction.getFee()), MC))
                 .reduce(BigDecimal.ZERO, (a, b) -> a.add(b, MC));
         YearMonth period = YearMonth.parse(cycle.getPeriod());
+        boolean skipForInitialCapital = executed.signum() == 0 && isInitialCapitalMonth(cycle.getPlan(), period);
+        BigDecimal effectivePlannedAmount = skipForInitialCapital ? BigDecimal.ZERO : cycle.getPlannedAmount();
         CycleStatus status;
         LocalDate windowStart = period.atDay(executionStartDay(period, cycle.getPlan()));
         LocalDate windowEnd = period.atDay(executionEndDay(period, cycle.getPlan()));
-        if (today.isBefore(windowStart)) status = CycleStatus.UPCOMING;
+        if (skipForInitialCapital) status = CycleStatus.SKIPPED;
+        else if (today.isBefore(windowStart)) status = CycleStatus.UPCOMING;
         else if (executed.compareTo(cycle.getPlannedAmount()) >= 0) status = CycleStatus.COMPLETED;
         else if (executed.signum() > 0) status = CycleStatus.PARTIAL;
         else if (!today.isAfter(windowEnd)) status = CycleStatus.OPEN;
@@ -471,9 +485,10 @@ public class PlanService {
                     BigDecimal assetExecuted = byInstrument.getOrDefault(asset.getInstrument().getId(), BigDecimal.ZERO);
                     asset.setExecutedAmount(assetExecuted);
                     cycleAssetRepository.save(asset);
-                    return new CycleAssetResponse(asset.getInstrument().getSymbol(), asset.getTargetWeight(), asset.getPlannedAmount(), assetExecuted);
+                    BigDecimal assetPlanned = skipForInitialCapital ? BigDecimal.ZERO : asset.getPlannedAmount();
+                    return new CycleAssetResponse(asset.getInstrument().getSymbol(), asset.getTargetWeight(), assetPlanned, assetExecuted);
                 }).toList();
-        return new CycleResponse(cycle.getId(), cycle.getPlan().getId(), cycle.getPeriod(), cycle.getPlannedAmount(),
+        return new CycleResponse(cycle.getId(), cycle.getPlan().getId(), cycle.getPeriod(), effectivePlannedAmount,
                 executed, status, assetResponses, cycle.getOpenedAt(), cycle.getCompletedAt());
     }
 

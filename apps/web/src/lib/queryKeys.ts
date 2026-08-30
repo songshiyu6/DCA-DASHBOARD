@@ -14,6 +14,7 @@ export const queryKeys = {
   plan: (id: string) => ['plan', id] as const,
   planCycles: (id: string) => ['plan-cycles', id] as const,
   recommendation: (id: string) => ['recommendation', id] as const,
+  contributionAnalysis: (id: string) => ['contribution-analysis', id] as const,
   transactions: ['transactions'] as const,
   transactionCycles: (id: string) => ['transaction-cycles', id] as const,
   settings: ['settings'] as const,
@@ -25,13 +26,13 @@ function invalidate(queryClient: QueryClient, queryKey: QueryKey): Promise<void>
 
 export function invalidatePlanQueries(queryClient: QueryClient, planId?: string): Promise<void> {
   const keys: QueryKey[] = [queryKeys.plans, queryKeys.dashboard]
-  if (planId) keys.push(queryKeys.planCycles(planId), queryKeys.recommendation(planId))
+  if (planId) keys.push(queryKeys.planCycles(planId), queryKeys.recommendation(planId), queryKeys.contributionAnalysis(planId))
   return Promise.all(keys.map((queryKey) => invalidate(queryClient, queryKey))).then(() => undefined)
 }
 
 export function invalidateTransactionQueries(queryClient: QueryClient, planId?: string): Promise<void> {
   const keys: QueryKey[] = [queryKeys.transactions, queryKeys.dashboard]
-  if (planId) keys.push(queryKeys.planCycles(planId), queryKeys.recommendation(planId))
+  if (planId) keys.push(queryKeys.planCycles(planId), queryKeys.recommendation(planId), queryKeys.contributionAnalysis(planId))
   return Promise.all(keys.map((queryKey) => invalidate(queryClient, queryKey))).then(() => undefined)
 }
 

@@ -229,6 +229,8 @@ export interface DashboardData {
   contributionProgress: ContributionProgress | null
 }
 
+export type AppTimezone = 'America/New_York' | 'Asia/Shanghai'
+
 export interface AppSettings {
   baseCurrency: 'USD'
   primaryProvider: 'YAHOO' | 'TWELVE_DATA' | 'ALPHA_VANTAGE'
@@ -236,8 +238,8 @@ export interface AppSettings {
   twelveDataConfigured: boolean
   alphaVantageConfigured: boolean
   theme: 'SYSTEM' | 'LIGHT' | 'DARK'
-  /** Legacy demo-state compatibility only; the live settings API no longer exposes or accepts timezone. */
-  timezone?: string
+  marketTimezone: AppTimezone
+  displayTimezone: AppTimezone
 }
 
 export interface Session {

@@ -33,21 +33,21 @@ type PlanFormValues = z.infer<typeof planSchema>
 
 const emptyForm: PlanFormValues = {
   name: 'Core ETF Plan',
-  monthlyBudget: '1500.00',
+  monthlyBudget: '1500',
   startDate: '2026-01-01',
   executionStartDay: 1,
   executionEndDay: 7,
-  assets: [{ symbol: 'VOO', targetWeight: '100.00' }],
+  assets: [{ symbol: 'VOO', targetWeight: '100' }],
 }
 
 function formValues(plan: InvestmentPlan): PlanFormValues {
   return {
     name: plan.name,
-    monthlyBudget: plan.monthlyBudget,
+    monthlyBudget: decimal(plan.monthlyBudget).toString(),
     startDate: plan.startDate,
     executionStartDay: plan.executionStartDay,
     executionEndDay: plan.executionEndDay,
-    assets: plan.assets.map((asset) => ({ symbol: asset.symbol, targetWeight: decimal(asset.targetWeight).mul(100).toFixed(2) })),
+    assets: plan.assets.map((asset) => ({ symbol: asset.symbol, targetWeight: decimal(asset.targetWeight).mul(100).toDecimalPlaces(4).toString() })),
   }
 }
 
@@ -113,7 +113,7 @@ function PlanEditor({ plan, instruments, pending, saved, onSubmit }: { plan?: In
     <div className="form-footer"><span className="save-feedback">{saved ? <><Check size={14} />{t('plan.saved')}</> : null}</span><button className="button button-primary" type="submit" disabled={pending || !totalValid}><Save size={15} />{pending ? t('settings.saving') : plan ? t('common.save') : t('plan.createPlan')}</button></div>
     <div className="asset-editor"><div className="asset-editor-header"><span>{t('etfs.ticker')}</span><span>{t('dashboard.target')}</span><span /></div>{fields.map((field, index) => { const symbolError = form.formState.errors.assets?.[index]?.symbol?.message; const weightError = form.formState.errors.assets?.[index]?.targetWeight?.message; const symbolErrorId = `plan-asset-${index}-symbol-error`; const weightErrorId = `plan-asset-${index}-weight-error`; return <div className="asset-editor-row" key={field.id}><select {...form.register(`assets.${index}.symbol`)} aria-label={t('plan.assetLabel', { count: index + 1 })} aria-invalid={Boolean(symbolError)} aria-describedby={symbolError ? symbolErrorId : undefined}><option value="">{t('plan.selectEtf')}</option>{instruments.map((instrument) => <option key={instrument.symbol} value={instrument.symbol}>{instrument.symbol} · {instrument.name}</option>)}</select>{symbolError ? <small id={symbolErrorId} className="field-error">{t(symbolError)}</small> : null}<div className="input-suffix"><input inputMode="decimal" {...form.register(`assets.${index}.targetWeight`)} aria-label={t('plan.targetWeightLabel', { symbol: field.symbol || t('etfs.ticker') })} aria-invalid={Boolean(weightError)} aria-describedby={weightError ? weightErrorId : index === 0 && allocationError ? 'plan-asset-0-weight-error' : undefined} /><span>%</span></div>{weightError ? <small id={weightErrorId} className="field-error">{t(weightError)}</small> : null}<button type="button" className="icon-button subtle-icon" onClick={() => remove(index)} disabled={fields.length <= 1} aria-label={t('plan.removeAsset', { symbol: field.symbol || t('plan.asset') })}><Trash2 size={15} /></button></div> })}</div>
     {allocationError ? <small id="plan-asset-0-weight-error" className="field-error block-error">{allocationError}</small> : null}
-    <button type="button" className="button button-ghost add-asset-button" onClick={() => append({ symbol: '', targetWeight: '0.00' })}><Plus size={15} />{t('plan.addAsset')}</button>
+    <button type="button" className="button button-ghost add-asset-button" onClick={() => append({ symbol: '', targetWeight: '0' })}><Plus size={15} />{t('plan.addAsset')}</button>
     <div className="allocation-editor-bar">{fields.map((field, index) => <span key={field.id} style={{ width: `${Math.max(decimal(watchedAssets?.[index]?.targetWeight).toNumber(), 0)}%` }} className={`allocation-segment segment-${index}`} />)}</div>
   </form>
 }

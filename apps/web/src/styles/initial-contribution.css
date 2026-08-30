@@ -1,0 +1,73 @@
+.cycle-row-initial .cycle-marker-initial {
+  background: var(--accent-soft);
+  border-color: rgba(122, 184, 255, .35);
+  color: var(--accent-strong);
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+}
+
+.cycle-progress-initial {
+  justify-content: center;
+}
+
+.cycle-initial-copy {
+  align-items: baseline;
+  display: flex;
+  gap: 9px;
+}
+
+.cycle-initial-copy small {
+  color: var(--accent-strong);
+}
+
+.cycle-initial-copy strong,
+.progress-initial-row strong {
+  font-family: 'DM Mono', monospace;
+  font-weight: 500;
+}
+
+.status-initial {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.status-initial .status-dot {
+  background: var(--accent);
+}
+
+.month-initial > span {
+  background: var(--accent);
+}
+
+.progress-initial-row {
+  align-items: center;
+  background: var(--accent-soft);
+  border: 1px solid rgba(122, 184, 255, .18);
+  border-radius: 5px;
+  display: flex;
+  justify-content: space-between;
+  margin-top: 13px;
+  padding: 9px 10px;
+}
+
+.progress-initial-row span {
+  align-items: baseline;
+  display: flex;
+  gap: 7px;
+}
+
+.progress-initial-row b {
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.progress-initial-row small {
+  color: var(--accent-strong);
+  font-size: 10px;
+}
+
+.progress-initial-row strong {
+  color: var(--accent-strong);
+  font-size: 11px;
+}

@@ -66,8 +66,9 @@ class TransactionContributionSourceTest {
         PlanService plans = mock(PlanService.class);
         when(plans.getEntity(planId)).thenReturn(plan);
 
+        InstrumentEntity instrument = instrument("VOO");
         InstrumentRepository instruments = mock(InstrumentRepository.class);
-        when(instruments.findBySymbolIgnoreCase("VOO")).thenReturn(Optional.of(instrument("VOO")));
+        when(instruments.findBySymbolIgnoreCase("VOO")).thenReturn(Optional.of(instrument));
         TransactionRepository transactions = mock(TransactionRepository.class);
         TransactionService service = service(instruments, transactions, plans);
 
@@ -81,8 +82,9 @@ class TransactionContributionSourceTest {
 
     @Test
     void requiresAPlanCycleForDcaSource() {
+        InstrumentEntity instrument = instrument("VOO");
         InstrumentRepository instruments = mock(InstrumentRepository.class);
-        when(instruments.findBySymbolIgnoreCase("VOO")).thenReturn(Optional.of(instrument("VOO")));
+        when(instruments.findBySymbolIgnoreCase("VOO")).thenReturn(Optional.of(instrument));
         TransactionRepository transactions = mock(TransactionRepository.class);
         TransactionService service = service(instruments, transactions, mock(PlanService.class));
 
@@ -95,7 +97,7 @@ class TransactionContributionSourceTest {
     }
 
     private static TransactionService service(InstrumentRepository instruments, TransactionRepository transactions,
-                                              PlanService plans) {
+                                               PlanService plans) {
         return new TransactionService(transactions, instruments, mock(SplitEventRepository.class),
                 mock(MarketDataService.class), plans, mock(PortfolioService.class),
                 mock(PortfolioSnapshotInvalidator.class),

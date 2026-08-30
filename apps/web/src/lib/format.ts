@@ -4,6 +4,7 @@ Decimal.set({ precision: 40, rounding: Decimal.ROUND_HALF_UP })
 
 export const MARKET_TIME_ZONE = 'America/New_York'
 export const USER_TIME_ZONE = 'Asia/Shanghai'
+export const MARKET_TIME_ZONE_STORAGE_KEY = 'dca-market-timezone'
 export const DISPLAY_TIME_ZONE_STORAGE_KEY = 'dca-display-timezone'
 
 export function decimalMax(left: Decimal, right: Decimal | string | number): Decimal {
@@ -102,17 +103,25 @@ export function formatDate(value: string | null | undefined, options?: Intl.Date
   return new Intl.DateTimeFormat(undefined, options ?? { month: 'short', day: 'numeric', year: 'numeric' }).format(date)
 }
 
-export function formatTime(value: string | null | undefined, timeZone = MARKET_TIME_ZONE): string {
-  if (!value) return '—'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', timeZone }).format(date)
+function storedTimeZone(storageKey: string, fallback: string): string {
+  if (typeof localStorage === 'undefined') return fallback
+  const saved = localStorage.getItem(storageKey)
+  return saved === MARKET_TIME_ZONE || saved === USER_TIME_ZONE ? saved : fallback
+}
+
+export function getMarketTimeZone(): string {
+  return storedTimeZone(MARKET_TIME_ZONE_STORAGE_KEY, MARKET_TIME_ZONE)
 }
 
 export function getDisplayTimeZone(): string {
-  if (typeof localStorage === 'undefined') return USER_TIME_ZONE
-  const saved = localStorage.getItem(DISPLAY_TIME_ZONE_STORAGE_KEY)
-  return saved === MARKET_TIME_ZONE || saved === USER_TIME_ZONE ? saved : USER_TIME_ZONE
+  return storedTimeZone(DISPLAY_TIME_ZONE_STORAGE_KEY, USER_TIME_ZONE)
+}
+
+export function formatTime(value: string | null | undefined, timeZone?: string): string {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', timeZone: timeZone ?? getMarketTimeZone() }).format(date)
 }
 
 export function formatUserTime(value: string | null | undefined): string {

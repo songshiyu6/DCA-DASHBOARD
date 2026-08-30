@@ -45,11 +45,13 @@ beforeEach(() => {
 })
 
 describe('contribution analysis', () => {
-  it('separates initial capital from monthly DCA batches', async () => {
+  it('separates actual initial capital from monthly DCA batches without a planned initial amount', async () => {
     renderPage()
 
     expect(await screen.findByRole('heading', { name: 'Contributions' })).toBeInTheDocument()
     expect(screen.getAllByText('$50,000.00').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Planned initial capital')).not.toBeInTheDocument()
+    expect(screen.getByText('From actual BUY transactions')).toBeInTheDocument()
     expect(screen.getByText('July 2026')).toBeInTheDocument()
     expect(screen.getAllByText('92 days').length).toBeGreaterThan(0)
   })

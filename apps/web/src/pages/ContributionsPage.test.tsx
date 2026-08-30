@@ -48,7 +48,7 @@ describe('contribution analysis', () => {
     expect(await screen.findByRole('heading', { name: 'Contributions' })).toBeInTheDocument()
     expect(screen.getAllByText('$50,000.00').length).toBeGreaterThan(0)
     expect(screen.getByText('July 2026')).toBeInTheDocument()
-    expect(screen.getByText('92 days')).toBeInTheDocument()
+    expect(screen.getAllByText('92 days').length).toBeGreaterThan(0)
   })
 
   it('requires an explicit action before an unlinked buy becomes initial capital', async () => {

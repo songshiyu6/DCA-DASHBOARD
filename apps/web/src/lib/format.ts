@@ -4,6 +4,7 @@ Decimal.set({ precision: 40, rounding: Decimal.ROUND_HALF_UP })
 
 export const MARKET_TIME_ZONE = 'America/New_York'
 export const USER_TIME_ZONE = 'Asia/Shanghai'
+export const DISPLAY_TIME_ZONE_STORAGE_KEY = 'dca-display-timezone'
 
 export function decimalMax(left: Decimal, right: Decimal | string | number): Decimal {
   return left.gte(right) ? left : new Decimal(right)
@@ -108,8 +109,14 @@ export function formatTime(value: string | null | undefined, timeZone = MARKET_T
   return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', timeZone }).format(date)
 }
 
+export function getDisplayTimeZone(): string {
+  if (typeof localStorage === 'undefined') return USER_TIME_ZONE
+  const saved = localStorage.getItem(DISPLAY_TIME_ZONE_STORAGE_KEY)
+  return saved === MARKET_TIME_ZONE || saved === USER_TIME_ZONE ? saved : USER_TIME_ZONE
+}
+
 export function formatUserTime(value: string | null | undefined): string {
-  return formatTime(value, USER_TIME_ZONE)
+  return formatTime(value, getDisplayTimeZone())
 }
 
 export function formatPeriod(period: string): string {

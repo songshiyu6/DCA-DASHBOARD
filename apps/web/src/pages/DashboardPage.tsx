@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { annualizedTimeWeightedReturn, CHART_RANGE_OPTIONS, filterPortfolioHistory, latestDayPerformance, portfolioRangeStartDay, withCurrentPortfolioPoint, ytdPerformance, type ChartRange } from '../lib/dashboardPerformance'
 import { decimal, decimalMax, decimalMin, formatDate, formatMoney, formatPeriod, formatShares, formatSignedMoney, formatSignedPercent, formatPercent } from '../lib/format'
+import { isInitialContributionPeriod } from '../lib/initialContributionPresentation'
 import { queryKeys } from '../lib/queryKeys'
 import { DataStateBanner, EmptyState, ErrorState, LoadingBlock } from '../components/DataState'
 import { MetricCard } from '../components/MetricCard'
@@ -19,11 +20,17 @@ function trendClass(value: string | null | undefined): string {
   return decimal(value).gt(0) ? 'trend-positive' : 'trend-negative'
 }
 
-function ContributionBars({ months }: { months: Array<{ period: string; planned: string; executed: string; status: string }> }) {
+function ContributionBars({ months, planStartDate, initialPrincipal, initialLabel }: { months: Array<{ period: string; planned: string; executed: string; status: string }>; planStartDate?: string; initialPrincipal: string; initialLabel: string }) {
   return <div className="contribution-months">{months.map((month) => {
+    const initial = isInitialContributionPeriod(month.period, month.status, planStartDate, initialPrincipal, month.executed)
     const planned = decimal(month.planned)
     const ratio = planned.gt(0) ? decimalMin(decimalMax(decimal(month.executed).div(planned), 0), 1).toNumber() : 0
-    return <div className="month-cell" key={month.period} title={`${formatPeriod(month.period)} · ${formatMoney(month.executed)} / ${formatMoney(month.planned)}`}><div className={`month-bar month-${month.status.toLowerCase()}`}><span style={{ height: `${Math.max(ratio * 100, month.status === 'UPCOMING' ? 4 : 8)}%` }} /></div><small>{month.period.slice(5)}</small></div>
+    const barStatus = initial ? 'initial' : month.status.toLowerCase()
+    const title = initial
+      ? `${formatPeriod(month.period)} · ${initialLabel} ${formatMoney(initialPrincipal)}`
+      : `${formatPeriod(month.period)} · ${formatMoney(month.executed)} / ${formatMoney(month.planned)}`
+    const height = initial ? 100 : Math.max(ratio * 100, month.status === 'UPCOMING' ? 4 : 8)
+    return <div className="month-cell" key={month.period} title={title}><div className={`month-bar month-${barStatus}`}><span style={{ height: `${height}%` }} /></div><small>{month.period.slice(5)}</small></div>
   })}</div>
 }
 
@@ -54,6 +61,9 @@ export function DashboardPage() {
   const { t, i18n } = useTranslation()
   const navigate = useNavigate()
   const dashboard = useQuery({ queryKey: queryKeys.dashboard, queryFn: api.getDashboard, staleTime: 30_000 })
+  const plans = useQuery({ queryKey: queryKeys.plans, queryFn: api.getPlans })
+  const activePlan = plans.data?.data.find((candidate) => candidate.status === 'ACTIVE')
+  const contributionAnalysis = useQuery({ queryKey: activePlan ? queryKeys.contributionAnalysis(activePlan.id) : queryKeys.contributionAnalysis('none'), queryFn: () => api.getContributionAnalysis(activePlan?.id ?? ''), enabled: Boolean(activePlan) })
   const [chartRange, setChartRange] = useState<ChartRange>('1Y')
   const [marketRefreshing, setMarketRefreshing] = useState(false)
   const refreshInFlight = useRef(false)
@@ -83,6 +93,9 @@ export function DashboardPage() {
   const netInvestmentLabel = isZh ? '净投入' : 'Net investment'
   const portfolioGrowthLabel = isZh ? '投资组合增长' : 'Portfolio growth'
   const portfolioGrowthDetail = isZh ? '净清算价值与净投入对比' : 'Net liq value versus net investment'
+  const initialLabel = isZh ? '初始投入' : 'Initial capital'
+  const initialPrincipal = contributionAnalysis.data?.data.initial.principal ?? '0'
+  const initialPeriod = activePlan?.startDate.slice(0, 7)
 
   const refreshMarket = useCallback(async () => {
     if (refreshInFlight.current) return
@@ -138,6 +151,7 @@ export function DashboardPage() {
   const ytdPnl = currentHistory.length && currentHistory[0].date.slice(0, 4) === currentHistory[currentHistory.length - 1].date.slice(0, 4)
     ? summary.totalPnl
     : ytd.pnl
+  const showInitialProgress = Boolean(progress && initialPeriod && progress.months.some((month) => isInitialContributionPeriod(month.period, month.status, activePlan?.startDate, initialPrincipal, month.executed)))
   return <div className="page dashboard-page dashboard-page-v2">
     <div className="page-intro dashboard-intro"><div><span className="page-eyebrow">{portfolioOverviewLabel}</span><h1>{t('dashboard.title')}</h1><p>{t('dashboard.subtitle')}</p></div><div className="page-actions"><button type="button" className="button button-ghost" onClick={() => void refreshMarket()} disabled={marketRefreshing || dashboard.isFetching}><RefreshCw size={15} className={marketRefreshing ? 'spin-icon' : undefined} />{marketRefreshing || dashboard.isFetching ? t('common.loading') : t('common.refresh')}</button><button type="button" className="button button-secondary" onClick={() => { exportDashboard(data) }}><Download size={15} />{t('common.export')}</button></div></div>
     <DataStateBanner status={meta.status} message={meta.message} source={meta.source === 'FIXTURE' ? t('common.demoData') : meta.source} asOf={meta.asOf} retrievedAt={meta.retrievedAt} />
@@ -169,7 +183,8 @@ export function DashboardPage() {
         <div className="allocation-key"><span><i className="key-line key-target" />{t('dashboard.target')}</span><span><i className="key-line key-actual" />{t('dashboard.actual')}</span></div>
       </Panel>
       {progress ? <Panel title={t('dashboard.dcaProgress')} detail={t('dashboard.contributionProgress', { year: progress.year })} action={<div className="progress-summary"><strong>{formatMoney(progress.executed)}</strong><span>/ {formatMoney(progress.planned)}</span><b>{formatPercent(progress.executionRate)}</b></div>}>
-        <ContributionBars months={progress.months} />
+        <ContributionBars months={progress.months} planStartDate={activePlan?.startDate} initialPrincipal={initialPrincipal} initialLabel={initialLabel} />
+        {showInitialProgress ? <div className="progress-initial-row"><span><b>{formatPeriod(initialPeriod ?? '')}</b><small>{initialLabel}</small></span><strong>{formatMoney(initialPrincipal)}</strong></div> : null}
         <div className="progress-foot"><span>{t('dashboard.executed')} {formatMoney(progress.executed)}</span><span>{t('dashboard.remaining')} {formatMoney(decimalMax(decimal(progress.planned).minus(progress.executed), 0).toString())}</span></div>
       </Panel> : <Panel title={t('dashboard.dcaProgress')}><EmptyState title={t('plan.noPlan')} detail={t('plan.createPlan')} /></Panel>}
     </div>

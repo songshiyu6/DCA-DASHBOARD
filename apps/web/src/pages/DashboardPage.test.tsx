@@ -1,14 +1,17 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, waitFor } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import '../lib/i18n'
+import { fixturePlan } from '../lib/fixtures'
 import type { DashboardData } from '../types'
 import { DashboardPage } from './DashboardPage'
 
 const mockedApi = vi.hoisted(() => ({
   getDashboard: vi.fn(),
   getQuote: vi.fn(),
+  getPlans: vi.fn(),
+  getContributionAnalysis: vi.fn(),
 }))
 
 vi.mock('../lib/api', () => ({ api: mockedApi }))
@@ -58,6 +61,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockedApi.getDashboard.mockResolvedValue({ data: dashboardData, meta: { status: 'FRESH', source: 'API', retrievedAt: '2026-08-28T16:00:00Z' } })
   mockedApi.getQuote.mockResolvedValue({ data: { symbol: 'VOO', price: '714.29' }, meta: { status: 'FRESH', source: 'YAHOO' } })
+  mockedApi.getPlans.mockResolvedValue({ data: [fixturePlan], meta: { status: 'FRESH', source: 'API' } })
+  mockedApi.getContributionAnalysis.mockResolvedValue({ data: { initial: { principal: '50000' } }, meta: { status: 'FRESH', source: 'API' } })
 })
 
 describe('dashboard market refresh', () => {
@@ -66,5 +71,32 @@ describe('dashboard market refresh', () => {
 
     await waitFor(() => expect(mockedApi.getQuote).toHaveBeenCalledWith('VOO'))
     await waitFor(() => expect(mockedApi.getDashboard.mock.calls.length).toBeGreaterThanOrEqual(2))
+  })
+
+  it('shows the opening skipped month as initial capital without adding it to DCA totals', async () => {
+    mockedApi.getDashboard.mockResolvedValue({
+      data: {
+        ...dashboardData,
+        contributionProgress: {
+          year: 2026,
+          executed: '1500',
+          planned: '15000',
+          remaining: '13500',
+          executionRate: '0.1',
+          months: [
+            { period: '2026-01', planned: '0', executed: '0', status: 'SKIPPED' },
+            { period: '2026-02', planned: '1500', executed: '1500', status: 'COMPLETED' },
+          ],
+        },
+      },
+      meta: { status: 'FRESH', source: 'API', retrievedAt: '2026-08-28T16:00:00Z' },
+    })
+
+    renderPage()
+
+    expect(await screen.findByText('Initial capital')).toBeInTheDocument()
+    expect(screen.getByText('$50,000.00')).toBeInTheDocument()
+    expect(screen.getByText('$1,500.00')).toBeInTheDocument()
+    expect(screen.getByText(/\/ \$15,000\.00/)).toBeInTheDocument()
   })
 })

@@ -79,7 +79,7 @@ describe('transaction form', () => {
 
     await user.clear(date)
     await user.type(date, '2026-01-01')
-    expect(initialOption).not.toBeDisabled()
+    expect(initialOption).toBeEnabled()
     await user.selectOptions(source, 'INITIAL')
 
     await user.type(screen.getByLabelText('Quantity'), '2')

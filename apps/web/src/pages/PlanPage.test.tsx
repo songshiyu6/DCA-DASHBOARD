@@ -13,6 +13,7 @@ const mockedApi = vi.hoisted(() => ({
   getInstruments: vi.fn(),
   getCycles: vi.fn(),
   getRecommendation: vi.fn(),
+  getContributionAnalysis: vi.fn(),
   createPlan: vi.fn(),
   updatePlan: vi.fn(),
 }))
@@ -31,6 +32,7 @@ beforeEach(() => {
   mockedApi.getInstruments.mockResolvedValue({ data: fixtureInstruments, meta: { status: 'FRESH', source: 'API' } })
   mockedApi.getCycles.mockResolvedValue({ data: [], meta: { status: 'FRESH', source: 'API' } })
   mockedApi.getRecommendation.mockResolvedValue({ data: { amount: '1500.00', method: 'CONTRIBUTION_FIRST', dataStatus: 'FRESH', items: [] }, meta: { status: 'FRESH', source: 'API' } })
+  mockedApi.getContributionAnalysis.mockResolvedValue({ data: { initial: { principal: '50000' } }, meta: { status: 'FRESH', source: 'API' } })
   mockedApi.updatePlan.mockResolvedValue({ data: plan, meta: { status: 'FRESH', source: 'API' } })
 })
 
@@ -62,5 +64,18 @@ describe('plan editor', () => {
       monthlyBudget: '1500.00',
       assets: expect.arrayContaining([{ symbol: 'VOO', targetWeight: '0.50000000' }]),
     })))
+  })
+
+  it('shows the skipped opening cycle as the actual initial contribution', async () => {
+    mockedApi.getCycles.mockResolvedValue({
+      data: [{ id: 'cycle-2026-01', period: '2026-01', plannedAmount: '0', executedAmount: '0', status: 'SKIPPED', assets: [] }],
+      meta: { status: 'FRESH', source: 'API' },
+    })
+
+    renderPage()
+
+    expect(await screen.findByText('$50,000.00')).toBeInTheDocument()
+    expect(screen.getAllByText('Initial capital').length).toBeGreaterThan(0)
+    expect(screen.queryByText('SKIPPED')).not.toBeInTheDocument()
   })
 })

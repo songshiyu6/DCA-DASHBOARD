@@ -1,25 +1,23 @@
-import type { AppSettings, AppTimezone } from '../../types'
+import type { AppSettings } from '../../types'
 import { apiMeta, request, type ApiResponse } from './transport'
-import { isRecord, normalizeResult, normalizeSettings } from './normalize'
+import { normalizeResult, normalizeSettings } from './normalize'
+import { DISPLAY_TIME_ZONE_STORAGE_KEY, MARKET_TIME_ZONE_STORAGE_KEY } from '../format'
 
-function timezone(value: unknown, fallback: AppTimezone): AppTimezone {
-  return value === 'America/New_York' || value === 'Asia/Shanghai' ? value : fallback
+function persistTimezones(settings: AppSettings): void {
+  if (typeof localStorage === 'undefined') return
+  localStorage.setItem(MARKET_TIME_ZONE_STORAGE_KEY, settings.marketTimezone ?? 'America/New_York')
+  localStorage.setItem(DISPLAY_TIME_ZONE_STORAGE_KEY, settings.displayTimezone ?? 'Asia/Shanghai')
 }
 
-function normalizeSettingsWithTimezones(value: unknown): AppSettings {
-  const normalized = normalizeSettings(value)
-  const body = isRecord(value) ? value : {}
-  return {
-    ...normalized,
-    marketTimezone: timezone(body.marketTimezone, 'America/New_York'),
-    displayTimezone: timezone(body.displayTimezone, 'Asia/Shanghai'),
-  }
+function withPersistedTimezones(result: Awaited<ApiResponse<AppSettings>>): Awaited<ApiResponse<AppSettings>> {
+  persistTimezones(result.data)
+  return result
 }
 
 export const settingsApi = {
-  getSettings: async (): ApiResponse<AppSettings> => normalizeResult(await request<unknown>('/settings'), normalizeSettingsWithTimezones, apiMeta()),
-  updateSettings: async (patch: Partial<AppSettings>): ApiResponse<AppSettings> => normalizeResult(await request<unknown>('/settings', {
+  getSettings: async (): ApiResponse<AppSettings> => withPersistedTimezones(normalizeResult(await request<unknown>('/settings'), normalizeSettings, apiMeta())),
+  updateSettings: async (patch: Partial<AppSettings>): ApiResponse<AppSettings> => withPersistedTimezones(normalizeResult(await request<unknown>('/settings', {
     method: 'PUT',
     body: JSON.stringify(patch),
-  }), normalizeSettingsWithTimezones, apiMeta()),
+  }), normalizeSettings, apiMeta())),
 }

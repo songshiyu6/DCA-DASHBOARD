@@ -125,8 +125,8 @@ boundaries:
 
 - `auth`: single-user session authentication, CSRF, and login throttling.
 - `instrument`: tracked ETF identity and profile metadata.
-- `marketdata`: provider SPI, registry, fallback, cache, ingestion, and data
-  freshness.
+- `marketdata`: provider SPI, registry, fallback, cache, ingestion, on-demand
+  intraday retrieval, and data freshness.
 - `transaction`: validation, CRUD, CSV import, duplicate detection, and
   transaction-to-cycle suggestions.
 - `portfolio`: split-aware FIFO replay, holdings, P/L, XIRR, allocation, and
@@ -146,21 +146,58 @@ Domain services perform financial calculations. Infrastructure adapters own
 JPA, provider HTTP clients, caching, and scheduling. Provider classes must not
 be called directly from controllers or portfolio calculations.
 
+## Market-data read paths
+
+The application deliberately has three different price paths:
+
+1. **Latest quote** — provider quote retrieval persisted in
+   `market_quote_latest`. Yahoo's authenticated v7 quote may contain regular,
+   pre-market, post-market, extended, or overnight observations. Current
+   portfolio valuation uses this path.
+2. **1D intraday chart** — provider on-demand five-minute data returned directly
+   to the ETF detail page and not persisted. Yahoo v8 chart supplies only the
+   available pre-market/regular/post-market bars; an overnight quote is not a
+   substitute for those bars.
+3. **Historical daily prices** — regular-session daily rows persisted in
+   `market_price_daily` and used by snapshots, YTD/TWR, drawdowns, and other
+   historical performance calculations.
+
+These paths must remain separate. A successful overnight quote must not be
+expanded into synthetic five-minute bars, and missing current-day intraday bars
+must not cause a previous trading day's series to be relabeled as today. The 1D
+API filters provider timestamps by `America/New_York` trade date and, when Yahoo
+supplies `currentTradingPeriod`, by the declared pre/regular/post boundaries.
+
+The 1D API has explicit market-state semantics. A current trading day with no
+bars yet returns `PARTIAL`, an empty array, no `asOf`, and the provider source.
+Weekends and observed US market holidays return `PARTIAL` without calling a
+provider and without an `asOf`. Provider failure after bounded retries returns
+`UNAVAILABLE` unless a distinct configured fallback succeeds; a fallback result
+reports the fallback provider as its real source. A persisted
+`fallbackProvider=NONE` is authoritative and never causes Twelve Data to be
+automatically enabled.
+
 ## Persistent model
 
 Flyway owns every schema change. Production uses
 `spring.jpa.hibernate.ddl-auto=validate`; Hibernate must not create or alter
-tables. The current published chain is `V001` through `V017`:
+tables. The current published chain is `V001` through `V018`:
 
 - `V013` adds `transaction_ledger_order_seq` and the default used for atomic
   same-day ledger ordering;
 - `V014` creates PostgreSQL-backed Spring Session tables;
 - `V015` removes the obsolete persisted timezone setting;
 - `V016` adds the compatibility initial-capital column plus transaction-level
-  contribution type and plan attribution; and
+  contribution type and plan attribution;
 - `V017` deprecates that column at the application boundary, backfills
   deterministic cycle-linked BUYs, adds cross-field CHECK/index rules, and
-  creates the contribution-classification audit table.
+  creates the contribution-classification audit table; and
+- `V018` adds the latest-quote session classification used to distinguish
+  regular/pre/post/overnight quotes and explicit regular-price degradation.
+
+The 1D intraday-state work requires no schema migration because the existing
+price-history response already has `dataStatus`, `source`, `asOf`, `retrievedAt`,
+and `message`, and the intraday series is intentionally not persisted.
 
 These are forward migrations. Schema cannot be rolled back with an older
 application image; restore a matching dump when an older candidate is not
@@ -172,7 +209,7 @@ The current schema contains the following logical tables:
 | --- | --- |
 | `instrument` | ETF identity, exchange, currency, issuer, and profile metadata |
 | `market_price_daily` | OHLCV, raw close, adjusted close, source, and trade date |
-| `market_quote_latest` | Latest regular or extended-hours quote, prior regular close, change, bid/ask, timestamp, freshness, and source |
+| `market_quote_latest` | Latest regular or extended-hours quote, quote session, prior regular close, change, bid/ask, timestamp, freshness, and source |
 | `fund_nav_daily` | Fund NAV by date and source; never a market price alias |
 | `instrument_split` | Effective-date split ratios from a provider |
 | `investment_transaction` | BUY, SELL, DIVIDEND, and FEE facts, ledger order, and BUY contribution attribution |
@@ -196,8 +233,8 @@ for financial values. `JacksonConfig` serializes response `BigDecimal` values
 as plain decimal JSON strings. Counts and calendar-day values remain numbers.
 Controller and Web-normalizer regressions cover full `NUMERIC(20,6/8)` boundary
 values without passing through a JavaScript number. Timestamps
-are stored in UTC. Trading dates and the monthly cycle period are date values, interpreted using
-`America/New_York` for market and schedule decisions.
+are stored in UTC. Trading dates and the monthly cycle period are date values,
+interpreted using `America/New_York` for market and schedule decisions.
 
 Database constraints include unique instrument symbols, unique provider keys
 for daily prices/NAV/splits, unique plan-plus-instrument assets, and at most
@@ -255,9 +292,18 @@ sync cannot produce usable bars, so the UI can expose the incomplete state.
 When enabled, the weekday scheduler runs at 18:30 `America/New_York`, upserts
 missing daily bars and split events, then rebuilds the current portfolio daily
 snapshot. Metrics are calculated from the stored bars when requested; the
-scheduler does not fetch profile/NAV data. Provider changes saved through
-Settings are read by subsequent market-data requests; the scheduler's
-trigger and all business-date decisions remain fixed to New York exchange time.
+scheduler does not fetch profile/NAV data or populate the on-demand 1D series.
+Provider changes saved through Settings are read by subsequent market-data
+requests; the scheduler's trigger and all business-date decisions remain fixed
+to New York exchange time.
+
+For an ETF detail 1D request, market-calendar closure is checked before provider
+I/O. On a trading day, a valid empty provider response is returned once as
+`PARTIAL` and is not treated as a transient error. Retryable provider errors use
+a bounded exponential backoff and then the configured fallback, if one actually
+exists. The web treats 1D as live data: short stale time, visible 60-second
+refresh, focus refetch, and a Retry action that refetches 1D directly. The daily
+history sync action remains specific to persisted daily history.
 
 ### Transactions
 
@@ -305,17 +351,18 @@ allocation calculation.
 The current production profile is single-user. `APP_USERNAME` and a precomputed
 BCrypt `APP_PASSWORD_HASH` are supplied through the deployment environment; the
 current `BCryptPasswordEncoder` does not accept Argon2id or delegating `{id}`
-formats. The API
-uses an HttpOnly, Secure, SameSite=Lax session cookie, rotates the session ID
-on successful login, stores the session in PostgreSQL through Spring Session,
-and enforces CSRF protection. Sessions therefore normally survive an API
-container restart while logout deletes the stored session. JWT,
+formats. The API uses an HttpOnly, Secure, SameSite=Lax session cookie, rotates
+the session ID on successful login, stores the session in PostgreSQL through
+Spring Session, and enforces CSRF protection. Sessions therefore normally
+survive an API container restart while logout deletes the stored session. JWT,
 registration, and password reset are outside the current product scope.
 
 Provider keys and database credentials are read only by Compose/API. They do
 not appear in React environment variables, API responses, logs, or Git. The
 tracked `deploy/.env.example` contains placeholders only. The real
-`deploy/.env` and generated `deploy/backups/` directory are ignored.
+`deploy/.env` and generated `deploy/backups/` directory are ignored. Provider
+retry logs must likewise exclude API keys, Yahoo cookies/crumbs, and
+Authorization headers.
 
 Spring Actuator provides the internal health check consumed by Compose. The
 public API health endpoint must return a minimal status and must not expose
@@ -329,12 +376,20 @@ the operational commands in the root README.
 
 ## Failure behavior
 
-Provider failures are represented as `STALE`, `PARTIAL`, or `UNAVAILABLE` data
-states. Existing prices remain visible with their `asOf`/`retrievedAt` times
-when possible. A failure in both market-data providers must not turn the
-dashboard into HTTP 500. Missing prices disable calculations that cannot be
-made honestly; they are never filled with a current price, a market price
-copied into NAV, or a fabricated zero return.
+Provider failure, valid empty market data, and market closure are separate
+states. For 1D intraday data, a provider 429/5xx/timeout is retried with bounded
+backoff and may use an explicitly configured fallback. A successful empty
+current-session response is `PARTIAL`, not `UNAVAILABLE`, and does not trigger
+rapid retries or fallback. Weekend/holiday closure is also `PARTIAL` but is
+identified as market closure and causes no provider request. An empty 1D state
+has no `asOf`; it is never labeled today merely because it was retrieved today.
 
-The API emits structured JSON logs with provider, symbol, source, row count,
-duration, and error category. Secrets and full credentials are excluded.
+Existing persisted prices remain visible with their `asOf`/`retrievedAt` times
+when the relevant endpoint contract permits it. Missing prices disable
+calculations that cannot be made honestly; they are never filled with a current
+price, a previous-day series relabeled as today, a market price copied into NAV,
+or a fabricated zero return. A failure in all configured market-data providers
+must not turn the dashboard into HTTP 500.
+
+The API emits structured logs/metrics with provider, operation, outcome,
+status, and bounded retry metadata. Secrets and full credentials are excluded.

@@ -20,12 +20,13 @@ interface MarketDataProvider {
 }
 ```
 
-The registry resolves an ordered chain. The current configured default order is:
-
-```text
-Yahoo Finance -> Twelve Data (when configured) -> canonical identity catalog
-                                                    -> unavailable/stale result
-```
+The registry resolves the configured primary provider and, when explicitly
+configured and usable, one fallback provider. The reviewed canonical ETF
+catalog is an identity fallback for search/confirmation only; it never supplies
+quotes or bars. The default configuration is Yahoo Finance with Twelve Data as
+an optional fallback when a server-side key is configured. A persisted Settings
+value such as `fallbackProvider=NONE` overrides the environment default and
+means there is no market-data fallback for that request.
 
 Alpha Vantage is an optional provider slot, not a high-frequency quote
 dependency. Yahoo is an unofficial source and its availability and licensing
@@ -54,22 +55,65 @@ identity metadata only and cannot be used as a source for prices or history.
 
 ## Fallback and retry policy
 
-For each request, the registry:
+Provider errors and valid empty market-data responses are deliberately different
+states. For a transient provider error, the registry:
 
 1. Calls the primary provider with a bounded connect/read timeout.
-2. Retries only transient timeout, HTTP 429, and HTTP 5xx failures with a
-   small bounded backoff.
-3. Falls back to the next configured provider after the retry budget is
-   exhausted.
-4. Stops immediately for symbol-not-found, invalid-symbol, authentication, or
-   schema errors; these are not transient failures.
-5. Returns the newest locally stored value with a `STALE` state when a cached
-   value exists, or `UNAVAILABLE` when no honest value exists.
+2. Retries only retryable failures such as timeout, HTTP 408, HTTP 429, and
+   HTTP 5xx, using an exponential backoff of 50/100/200/400 ms capped at 500 ms.
+3. Falls back only after the retry budget is exhausted and only when a distinct,
+   configured provider is actually available.
+4. Records the fallback provider as the real `source`; it is never labeled as
+   the primary provider.
+5. Returns a degraded/unavailable state when no configured provider can produce
+   an honest value.
 
-The fallback result records its actual `source`; it is never labeled as the
-primary provider. A provider failure is logged with provider, symbol,
-operation, HTTP/error category, fallback target, and duration. No API key or
-authorization header is logged.
+A successful empty list is not automatically a provider failure. In particular,
+1D intraday requests use the first valid empty result as market state and do
+not rapidly repeat the same request or switch providers merely because the
+current trading session has no bars yet. Other operations may continue to the
+configured fallback when their contract defines an empty response as incomplete.
+
+Logs and metrics identify provider, operation, attempt/outcome, and bounded
+retry delay. They never log API keys, Yahoo cookies/crumbs, authorization
+headers, or database credentials.
+
+## 1D intraday contract
+
+`GET /api/v1/instruments/{symbol}/prices?range=1D` is an on-demand provider
+request. It is not derived from the persisted daily-price table and is not an
+overnight-quote history endpoint.
+
+Yahoo exposes two separate capabilities:
+
+- the authenticated v7 quote path may contain a single current
+  `overnightMarketPrice` observation;
+- the v8 chart path supplies five-minute bars for Yahoo's pre-market, regular,
+  and post-market trading periods when those bars exist.
+
+The application never expands an overnight quote into fake five-minute bars and
+never relabels a previous trading day's chart as the current day. Yahoo 1D
+requests use `America/New_York` calendar-day boundaries, request
+`includePrePost=true`, and retain only timestamps that belong to the requested
+New York trade date and to Yahoo's declared `currentTradingPeriod` pre/regular/
+post windows when those windows are present.
+
+The API states are:
+
+| Situation | `dataStatus` | `source` | `asOf` | `data` |
+| --- | --- | --- | --- | --- |
+| Current pre/regular/post session has bars | `FRESH` | actual provider | actual New York trade date of newest bar | current-day bars |
+| Trading day but provider successfully returns no current-session bars (for example overnight before pre-market) | `PARTIAL` | actual provider | omitted | `[]` |
+| Weekend or observed US market holiday | `PARTIAL` | omitted | omitted | `[]` |
+| Provider errors exhaust retries and no usable fallback is configured | `UNAVAILABLE` | failing provider | omitted | `[]` |
+| Primary errors and configured fallback returns bars | `FRESH` | fallback provider | actual trade date | fallback bars |
+
+A trading-day empty response carries a message equivalent to `Current trading
+session has no intraday bars yet`. A closed calendar day carries a distinct
+market-closed message and does not call a provider. A provider outage carries an
+unavailable message that also states when no fallback is configured. Therefore
+HTTP 429, valid empty data, and market closure are not represented as the same
+successful empty array.
 
 ## Data separation
 
@@ -96,8 +140,8 @@ transaction or dividend.
 
 | Data | Storage | Cache/retention |
 | --- | --- | --- |
-| Latest quote | `market_quote_latest` | Caffeine, 60 seconds; current price may be regular, pre-market, extended, post-market, or overnight, selected by newest valid timestamp; includes prior regular close, change, bid/ask, source, and freshness |
-| 1D five-minute bars | Provider response | Caffeine, 60 seconds; no permanent intraday table in the current schema |
+| Latest quote | `market_quote_latest` | Caffeine, 60 seconds; current price may be regular, pre-market, extended, post-market, or overnight, selected by newest valid timestamp; includes prior regular close, change, bid/ask, source, session, and freshness |
+| 1D five-minute bars | Provider response only | API is on-demand and does not persist the series; ETF detail treats it as live data with a 30-second stale time, 60-second visible refresh, and focus refetch |
 | ETF profile | Instrument/profile columns | Caffeine, 24 hours |
 | Daily OHLCV | `market_price_daily` | Permanent local cache, incrementally updated |
 | NAV | `fund_nav_daily` | Permanent local cache, incrementally updated |
@@ -109,19 +153,21 @@ the last successful stored trade date through the current date. Upserts are
 idempotent on `(instrument_id, trade_date, source)`.
 
 The quote cache is process-local Caffeine. It is intentionally not Redis in the
-current design. A cache miss may call the configured provider chain; no permanent
-intraday store is maintained. Yahoo quote selection compares timestamped
-`regularMarketPrice`, `preMarketPrice`, `extendedMarketPrice`, `postMarketPrice`,
-and `overnightMarketPrice` candidates and uses the newest valid observation.
-An untimestamped extended-hours field never overrides a timestamped regular
-quote. If the authenticated live quote edge fails, the provider falls back to
-the regular-session chart quote rather than fabricating an extended price.
+current design. A cache miss may call the configured provider chain. No
+permanent intraday store is maintained. Yahoo quote selection compares
+timestamped `regularMarketPrice`, `preMarketPrice`, `extendedMarketPrice`,
+`postMarketPrice`, and `overnightMarketPrice` candidates and uses the newest
+valid observation. An untimestamped extended-hours field never overrides a
+timestamped regular quote. If the authenticated live quote edge fails, the
+provider falls back to the regular-session chart quote and marks it as a
+regular fallback rather than fabricating an extended price.
 
 Current portfolio summary, holdings, allocation and contribution valuation use
 the latest stored/refreshed quote. Historical snapshots, chart series, YTD/TWR
 and other close-based replay continue to use regular-session daily closes. The
 displayed live P/L may therefore move outside regular hours while close-based
-performance remains stable until the next regular close.
+performance remains stable until the next regular close. The 1D intraday chart
+contract does not change those quote or historical-performance semantics.
 
 ## Synchronization
 
@@ -134,7 +180,8 @@ typical ETF data providers have published daily bars. It:
 
 ETF metrics are calculated on the metrics endpoint from the stored bars. The
 scheduler does not fetch NAV/profile data, but it rebuilds the current
-portfolio snapshot after the active-instrument sync batch.
+portfolio snapshot after the active-instrument sync batch. The scheduler does
+not populate 1D intraday data; that endpoint remains provider on-demand.
 
 The job is idempotent and safe to retry. A partial instrument batch does not
 erase existing rows or mark unrelated instruments unavailable. The API remains
@@ -203,9 +250,11 @@ probing the target deployment again.
 
 ## Normalization rules
 
-- All provider timestamps are converted to UTC for storage; market date
-  decisions use `America/New_York`.
+- All provider timestamps are converted to UTC for storage/transport; market
+  date decisions use `America/New_York`.
 - `trade_date` is the provider's actual trading date, never the retrieval date.
+- 1D timestamps are never shifted into a different New York trade date and an
+  overnight quote is never converted into a five-minute bar.
 - Provider decimals are parsed into `BigDecimal`; binary floating-point values
   are not used for persistence or financial calculations.
 - Daily rows require a valid date and close. High/low/open/volume may be
@@ -221,22 +270,25 @@ probing the target deployment again.
 
 ## Freshness states
 
-`FRESH` means the requested value is available within the configured expected
-market-data age. `STALE` means a prior value is shown past that age.
-`PARTIAL` means some requested bars/instruments/fields are missing.
-`UNAVAILABLE` means no value can be displayed honestly. A metric with too
-little history may additionally carry `INSUFFICIENT_HISTORY`; it must return
-null rather than extrapolating.
+`FRESH` means the requested value is available within the expected market-data
+age and, for 1D, belongs to the requested current New York trading date.
+`STALE` means a prior value is deliberately shown past its expected age.
+`PARTIAL` means the request is valid but current data is incomplete or absent,
+including an overnight/current-session no-bars response or a closed calendar
+day. `UNAVAILABLE` means no value can be displayed honestly because the
+configured provider chain failed. A metric with too little history may
+additionally carry `INSUFFICIENT_HISTORY`; it must return null rather than
+extrapolating.
 
-Quote responses expose `retrievedAt`, `source`, and `status`; metrics expose
-`asOf` and `dataStatus`; portfolio summary exposes `asOf` and `dataStatus`.
-Instrument identity responses also expose the persisted latest daily-history
-status, so a newly confirmed ETF with a failed initial sync is visible as
-degraded instead of looking complete. Other current arrays do not carry a universal
-freshness envelope.
-The web UI must show delayed data clearly, for example "Data delayed; last
-update 2026-08-26 16:00 ET". A provider outage is a degraded-data state, not a
-reason to fabricate a current price or return HTTP 500 for the entire
+Quote responses expose `retrievedAt`, `source`, `status`, and quote session;
+metrics expose `asOf` and `dataStatus`; 1D prices expose `dataStatus`, `source`,
+`asOf`, `retrievedAt`, and `message`. `asOf` is omitted for an empty 1D market
+state rather than being set to today's date. Other current arrays do not carry
+a universal freshness envelope.
+
+The web UI must show delayed/partial data clearly and preserve source, as-of,
+and retrieval-time semantics. A provider outage is a degraded-data state, not
+a reason to fabricate a current price or return HTTP 500 for the entire
 dashboard.
 
 Offline acceptance uses `e2e/mock-yahoo.mjs` and `deploy/docker-compose.e2e.yml`.
@@ -251,7 +303,8 @@ quote fetch is observable without waiting for the production 60-second cache.
 from the deployment environment. They are not Vite variables, frontend
 metadata, response fields, logs, GitHub Actions secrets, or tracked files.
 Missing optional fallback keys reduce redundancy but do not prevent the API
-from starting with Yahoo as the primary provider.
+from starting with Yahoo as the primary provider. The application never enables
+Twelve Data automatically and never treats an empty key as a usable fallback.
 
 Provider priority and fallback may be changed through Settings. Market/business
 timezone cannot: it is fixed in code to `America/New_York` so historical replay,
@@ -259,8 +312,9 @@ future-date validation, plan windows, and scheduler boundaries use one rule.
 
 ## Provider tests
 
-Provider adapters are tested with recorded, sanitized fixtures or a mock HTTP
-server. Tests must cover a successful response, malformed data, timeout, 429,
-5xx, symbol-not-found, authentication failure, and fallback to the next
-provider. No automated test may depend on live Yahoo, Twelve Data, or Alpha
-Vantage network access.
+Provider adapters are tested with sanitized fixtures, mock providers, or a mock
+HTTP server. Tests cover successful intraday bars, valid empty charts, Yahoo
+pre/regular/post boundaries, New York day boundaries, timeout/429/5xx
+classification, bounded retry and fallback, market-closed days, and malformed
+data. No automated test depends on live Yahoo, Twelve Data, Alpha Vantage, a
+local database, Docker, or a deployment proxy.

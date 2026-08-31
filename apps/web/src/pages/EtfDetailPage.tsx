@@ -15,6 +15,8 @@ import { Panel } from '../components/Panel'
 const PriceChart = lazy(async () => ({ default: (await import('../components/charts/PriceChart')).PriceChart }))
 
 const ranges = ['1D', '1W', '1M', '3M', 'YTD', '1Y', '3Y', '5Y', 'ALL']
+export const INTRADAY_STALE_TIME_MS = 30_000
+export const INTRADAY_REFETCH_INTERVAL_MS = 60_000
 
 export function EtfDetailPage() {
   const { t, i18n } = useTranslation()
@@ -22,6 +24,7 @@ export function EtfDetailPage() {
   const queryClient = useQueryClient()
   const { symbol = 'VOO' } = useParams()
   const [range, setRange] = useState('1Y')
+  const isIntraday = range === '1D'
   const instrument = useQuery({ queryKey: queryKeys.instrument(symbol), queryFn: () => api.getInstrument(symbol), staleTime: 86_400_000 })
   const quote = useQuery({
     queryKey: queryKeys.quote(symbol),
@@ -32,7 +35,14 @@ export function EtfDetailPage() {
     refetchOnWindowFocus: 'always',
   })
   const metrics = useQuery({ queryKey: queryKeys.metrics(symbol), queryFn: () => api.getMetrics(symbol), staleTime: 86_400_000 })
-  const prices = useQuery({ queryKey: queryKeys.pricesRange(symbol, range), queryFn: () => api.getPrices(symbol, range), staleTime: 86_400_000 })
+  const prices = useQuery({
+    queryKey: queryKeys.pricesRange(symbol, range),
+    queryFn: () => api.getPrices(symbol, range),
+    staleTime: isIntraday ? INTRADAY_STALE_TIME_MS : 86_400_000,
+    refetchInterval: isIntraday ? INTRADAY_REFETCH_INTERVAL_MS : false,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: isIntraday ? 'always' : false,
+  })
   const syncHistory = useMutation({
     mutationFn: () => api.syncInstrument(symbol),
     onSuccess: () => { void invalidateInstrumentHistoryQueries(queryClient, symbol) },
@@ -45,9 +55,15 @@ export function EtfDetailPage() {
   const currentQuote = quote.data?.data
   const currentMetrics = metrics.data?.data
   const nav = currentQuote?.nav ?? fund.nav
-  const historyStatus = prices.data?.meta.status ?? syncHistory.data?.data.status ?? (prices.isError ? 'UNAVAILABLE' : 'STALE')
-  const historyMessage = prices.data?.meta.message ?? syncHistory.data?.data.message ?? undefined
-  const retryHistory = syncHistory.isPending ? undefined : () => syncHistory.mutate()
+  const historyStatus = isIntraday
+    ? (prices.data?.meta.status ?? (prices.isError ? 'UNAVAILABLE' : 'STALE'))
+    : (prices.data?.meta.status ?? syncHistory.data?.data.status ?? (prices.isError ? 'UNAVAILABLE' : 'STALE'))
+  const historyMessage = isIntraday
+    ? prices.data?.meta.message
+    : (prices.data?.meta.message ?? syncHistory.data?.data.message ?? undefined)
+  const retryHistory = isIntraday
+    ? (prices.isFetching ? undefined : () => { void prices.refetch() })
+    : (syncHistory.isPending ? undefined : () => syncHistory.mutate())
   const isZh = (i18n.resolvedLanguage ?? i18n.language).toLowerCase().startsWith('zh')
   const sessionLabel = quoteSessionLabel(currentQuote?.quoteSession, isZh)
   const fallbackMessage = currentQuote?.quoteSession === 'REGULAR_FALLBACK'
@@ -61,7 +77,7 @@ export function EtfDetailPage() {
     <div className="detail-hero"><div className="detail-identity"><span className="ticker-avatar ticker-avatar-large">{fund.symbol.slice(0, 2)}</span><div><div className="detail-title-row"><h1>{fund.symbol}</h1><span className="watch-star"><Star size={15} fill="currentColor" aria-hidden="true" /></span></div><p>{fund.name}</p><small>{fund.exchange} · {fund.currency} · {fund.issuer}</small></div></div><div className="detail-quote"><strong>{currentQuote ? formatMoney(currentQuote.price) : '—'}</strong><div className={currentQuote && decimal(currentQuote.change).lt(0) ? 'trend-negative' : 'trend-positive'}>{currentQuote ? `${formatSignedMoney(currentQuote.change)} ${formatSignedPercent(currentQuote.changePercent)}` : '—'}</div><small>{sessionLabel} · {marketTimeLabel} {currentQuote ? formatTime(currentQuote.marketTimestamp) : '—'} ET</small><small>{retrievedTimeLabel} {currentQuote ? formatTime(currentQuote.retrievedAt) : '—'} ET</small></div><div className="detail-actions"><button type="button" className="button button-ghost" onClick={() => { void quote.refetch(); void metrics.refetch() }}><RefreshCw size={15} />{t('common.refresh')}</button><button type="button" className="icon-button" title={t('etfs.untrack')} aria-label={t('etfs.untrack')} onClick={() => untrack.mutate()} disabled={untrack.isPending}><Trash2 size={16} /></button></div></div>
     <DataStateBanner status={currentMetrics?.dataStatus ?? metrics.data?.meta.status ?? (metrics.isError ? 'UNAVAILABLE' : 'STALE')} message={metrics.data?.meta.message} source={metrics.data?.meta.source} asOf={currentMetrics?.asOf ?? metrics.data?.meta.asOf} retrievedAt={metrics.data?.meta.retrievedAt} />
     <div className="metric-grid detail-metrics"><MetricCard label={t('etfs.oneMonth')} value={formatSignedPercent(currentMetrics?.oneMonth)} tone={currentMetrics?.oneMonth && decimal(currentMetrics.oneMonth).lt(0) ? 'negative' : 'positive'} /><MetricCard label={t('etfs.threeMonths')} value={formatSignedPercent(currentMetrics?.threeMonths)} tone={currentMetrics?.threeMonths && decimal(currentMetrics.threeMonths).lt(0) ? 'negative' : 'positive'} /><MetricCard label={t('etfs.ytd')} value={formatSignedPercent(currentMetrics?.ytd)} tone={currentMetrics?.ytd && decimal(currentMetrics.ytd).lt(0) ? 'negative' : 'positive'} /><MetricCard label={t('etfs.oneYear')} value={formatSignedPercent(currentMetrics?.oneYear)} tone={currentMetrics?.oneYear && decimal(currentMetrics.oneYear).lt(0) ? 'negative' : 'positive'} /><MetricCard label={t('etfs.threeYearCagr')} value={formatSignedPercent(currentMetrics?.threeYearCagr)} tone="accent" /><MetricCard label={t('etfs.currentDrawdown')} value={formatSignedPercent(currentMetrics?.currentDrawdown)} tone={currentMetrics?.currentDrawdown && decimal(currentMetrics.currentDrawdown).lt(0) ? 'warning' : 'positive'} /></div>
-    <div className="content-grid detail-content-grid"><Panel className="detail-chart-panel" title={t('etfs.history')} detail={t('etfs.adjustedHistory')} action={<ChartRangeTabs ranges={ranges} value={range} onChange={setRange} />}><DataStateBanner status={historyStatus} message={historyMessage} source={prices.data?.meta.source === 'FIXTURE' ? t('common.demoData') : prices.data?.meta.source} asOf={prices.data?.meta.asOf} retrievedAt={prices.data?.meta.retrievedAt} onRetry={historyStatus === 'FRESH' ? undefined : retryHistory} />{prices.isLoading ? <LoadingBlock lines={5} /> : prices.isError ? <ErrorState onRetry={() => void prices.refetch()} /> : prices.data?.data.length ? <Suspense fallback={<div className="chart-loading" aria-label={t('common.loading')} />}><PriceChart data={prices.data.data} /></Suspense> : <EmptyState title={t('common.noData')} detail={historyMessage ?? t('etfs.historyUnavailable')} action={<button type="button" className="button button-secondary button-small" onClick={() => { void syncHistory.mutate() }} disabled={syncHistory.isPending}><RefreshCw size={14} />{t('common.retry')}</button>} />}</Panel><Panel title={t('etfs.details')} detail={t('etfs.fundMetadata')}><div className="fund-detail-list"><div><span>{t('etfs.expenseRatio')}</span><strong>{fund.expenseRatio ? formatPercent(fund.expenseRatio) : '—'}</strong></div><div><span>{t('etfs.aum')}</span><strong>{fund.aum ? formatCompactMoney(fund.aum) : '—'}</strong></div><div><span>{t('etfs.dividendYield')}</span><strong>{fund.dividendYield ? formatPercent(fund.dividendYield) : '—'}</strong></div><div><span>{t('etfs.nav')}</span><strong>{nav ? formatMoney(nav) : '—'}</strong></div><div><span>{t('etfs.fiftyTwoWeekHigh')}</span><strong>{currentMetrics?.fiftyTwoWeekHigh ? formatMoney(currentMetrics.fiftyTwoWeekHigh) : '—'}</strong></div><div><span>{t('etfs.fiftyTwoWeekLow')}</span><strong>{currentMetrics?.fiftyTwoWeekLow ? formatMoney(currentMetrics.fiftyTwoWeekLow) : '—'}</strong></div><div><span>{t('etfs.maxDrawdown')}</span><strong className="text-negative">{formatSignedPercent(currentMetrics?.maxDrawdown1Y)}</strong></div><div><span>{t('etfs.dataSource')}</span><strong>{quote.data?.meta.source ?? currentQuote?.source ?? '—'}</strong></div></div><div className="fund-note"><ExternalLink size={14} /><span>{t('etfs.performanceNote')}</span></div></Panel></div>
+    <div className="content-grid detail-content-grid"><Panel className="detail-chart-panel" title={t('etfs.history')} detail={t('etfs.adjustedHistory')} action={<ChartRangeTabs ranges={ranges} value={range} onChange={setRange} />}><DataStateBanner status={historyStatus} message={historyMessage} source={prices.data?.meta.source === 'FIXTURE' ? t('common.demoData') : prices.data?.meta.source} asOf={prices.data?.meta.asOf} retrievedAt={prices.data?.meta.retrievedAt} onRetry={historyStatus === 'FRESH' ? undefined : retryHistory} />{prices.isLoading ? <LoadingBlock lines={5} /> : prices.isError ? <ErrorState onRetry={() => void prices.refetch()} /> : prices.data?.data.length ? <Suspense fallback={<div className="chart-loading" aria-label={t('common.loading')} />}><PriceChart data={prices.data.data} /></Suspense> : <EmptyState title={t('common.noData')} detail={historyMessage ?? t('etfs.historyUnavailable')} action={retryHistory ? <button type="button" className="button button-secondary button-small" onClick={retryHistory}><RefreshCw size={14} />{t('common.retry')}</button> : undefined} />}</Panel><Panel title={t('etfs.details')} detail={t('etfs.fundMetadata')}><div className="fund-detail-list"><div><span>{t('etfs.expenseRatio')}</span><strong>{fund.expenseRatio ? formatPercent(fund.expenseRatio) : '—'}</strong></div><div><span>{t('etfs.aum')}</span><strong>{fund.aum ? formatCompactMoney(fund.aum) : '—'}</strong></div><div><span>{t('etfs.dividendYield')}</span><strong>{fund.dividendYield ? formatPercent(fund.dividendYield) : '—'}</strong></div><div><span>{t('etfs.nav')}</span><strong>{nav ? formatMoney(nav) : '—'}</strong></div><div><span>{t('etfs.fiftyTwoWeekHigh')}</span><strong>{currentMetrics?.fiftyTwoWeekHigh ? formatMoney(currentMetrics.fiftyTwoWeekHigh) : '—'}</strong></div><div><span>{t('etfs.fiftyTwoWeekLow')}</span><strong>{currentMetrics?.fiftyTwoWeekLow ? formatMoney(currentMetrics.fiftyTwoWeekLow) : '—'}</strong></div><div><span>{t('etfs.maxDrawdown')}</span><strong className="text-negative">{formatSignedPercent(currentMetrics?.maxDrawdown1Y)}</strong></div><div><span>{t('etfs.dataSource')}</span><strong>{quote.data?.meta.source ?? currentQuote?.source ?? '—'}</strong></div></div><div className="fund-note"><ExternalLink size={14} /><span>{t('etfs.performanceNote')}</span></div></Panel></div>
     <Link to="/transactions" className="detail-inline-link">{t('etfs.addTransactionFor', { symbol: fund.symbol })} <ExternalLink size={14} /></Link>
   </div>
 }

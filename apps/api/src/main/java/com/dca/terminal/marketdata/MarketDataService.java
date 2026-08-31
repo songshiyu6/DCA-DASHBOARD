@@ -62,6 +62,7 @@ import static com.dca.terminal.marketdata.MarketDataDtos.SyncResponse;
 @Service
 public class MarketDataService {
     private static final Logger log = LoggerFactory.getLogger(MarketDataService.class);
+    private static final ZoneId US_MARKET_ZONE = ZoneId.of("America/New_York");
     private final InstrumentRepository instrumentRepository;
     private final PriceDailyRepository priceRepository;
     private final QuoteLatestRepository quoteRepository;
@@ -166,8 +167,6 @@ public class MarketDataService {
         if (existing.isPresent()) {
             InstrumentEntity instrument = existing.get();
             instrument.setTracked(true);
-            // Re-adding an ETF is also an explicit recovery action for an
-            // earlier failed or incomplete initial history sync.
             if (instrument.getDataStatus() != FreshnessStatus.FRESH) {
                 sync(instrument);
             }
@@ -434,17 +433,38 @@ public class MarketDataService {
     public PriceHistoryResponse prices(InstrumentEntity instrument, String range) {
         LocalDate today = LocalDate.now(clock.withZone(currentZone()));
         if ("1D".equalsIgnoreCase(range)) {
+            Instant retrievedAt = clock.instant();
+            if (!MarketCalendar.isTradingDay(today)) {
+                return new PriceHistoryResponse(List.of(), FreshnessStatus.PARTIAL, null, null, retrievedAt,
+                        "US market is closed today; no intraday bars are expected");
+            }
             try {
                 ProviderCall<List<IntradayBar>> result = callWithProvider("intraday",
-                        provider -> provider.getIntradayPrices(instrument, today, today));
-                List<PricePoint> points = result.value().stream()
+                        provider -> provider.getIntradayPrices(instrument, today, today),
+                        EmptyResultPolicy.RETURN_FIRST_EMPTY);
+                List<IntradayBar> bars = result.value().stream()
+                        .filter(bar -> bar != null && bar.timestamp() != null && bar.close() != null)
+                        .filter(bar -> today.equals(bar.timestamp().atZone(US_MARKET_ZONE).toLocalDate()))
+                        .sorted(Comparator.comparing(IntradayBar::timestamp))
+                        .toList();
+                if (bars.isEmpty()) {
+                    return new PriceHistoryResponse(List.of(), FreshnessStatus.PARTIAL, result.provider().name(),
+                            null, retrievedAt, "Current trading session has no intraday bars yet");
+                }
+                LocalDate asOf = bars.getLast().timestamp().atZone(US_MARKET_ZONE).toLocalDate();
+                List<PricePoint> points = bars.stream()
                         .map(bar -> new PricePoint(bar.timestamp().toString(), bar.close(), null)).toList();
-                return new PriceHistoryResponse(points, points.isEmpty() ? FreshnessStatus.UNAVAILABLE : FreshnessStatus.FRESH,
-                        result.provider().name(), points.isEmpty() ? null : today, clock.instant(),
-                        points.isEmpty() ? "Intraday data is unavailable" : null);
+                return new PriceHistoryResponse(points, FreshnessStatus.FRESH, result.provider().name(),
+                        asOf, retrievedAt, null);
             } catch (ProviderException exception) {
+                boolean fallbackAvailable = configuredFallbackAvailable();
+                String message = fallbackAvailable
+                        ? "Intraday data is unavailable because all configured providers failed"
+                        : "Intraday data is unavailable; no fallback provider is configured and available";
+                log.warn("intraday market data unavailable ticker={} provider={} fallbackAvailable={} reason={}",
+                        instrument.getSymbol(), exception.provider(), fallbackAvailable, exception.getMessage());
                 return new PriceHistoryResponse(List.of(), FreshnessStatus.UNAVAILABLE, exception.provider().name(),
-                        null, clock.instant(), "Intraday data is unavailable");
+                        null, retrievedAt, message);
             }
         }
         LocalDate from = rangeStart(today, range);
@@ -635,6 +655,11 @@ public class MarketDataService {
     }
 
     private <T> ProviderCall<T> callWithProvider(String operationName, Function<MarketDataProvider, T> operation) {
+        return callWithProvider(operationName, operation, EmptyResultPolicy.TRY_FALLBACK);
+    }
+
+    private <T> ProviderCall<T> callWithProvider(String operationName, Function<MarketDataProvider, T> operation,
+                                                  EmptyResultPolicy emptyResultPolicy) {
         ProviderSelection selection = providerSelection();
         List<ProviderId> order = new ArrayList<>();
         order.add(selection.primary());
@@ -657,13 +682,19 @@ public class MarketDataService {
                         emptyValue = value;
                         emptyProvider = providerId;
                         outcome = "empty";
-                        continue;
+                        if (emptyResultPolicy == EmptyResultPolicy.RETURN_FIRST_EMPTY) {
+                            return new ProviderCall<>(value, providerId);
+                        }
+                        break;
                     }
                     if (value instanceof Optional<?> optional && optional.isEmpty()) {
                         emptyValue = value;
                         emptyProvider = providerId;
                         outcome = "empty";
-                        continue;
+                        if (emptyResultPolicy == EmptyResultPolicy.RETURN_FIRST_EMPTY) {
+                            return new ProviderCall<>(value, providerId);
+                        }
+                        break;
                     }
                     outcome = value instanceof ProviderQuote quote && quote.session() == QuoteSession.REGULAR_FALLBACK
                             ? "degraded" : "success";
@@ -672,7 +703,10 @@ public class MarketDataService {
                     last = exception;
                     outcome = "error";
                     if (!exception.retryable() || attempt == providerAttempts) break;
-                    log.debug("retrying market provider={} attempt={} reason={}", providerId, attempt + 1, exception.getMessage());
+                    Duration delay = ProviderRetryBackoff.delayAfterAttempt(attempt);
+                    log.debug("retrying market provider={} operation={} nextAttempt={} delayMs={} reason={}",
+                            providerId, operationName, attempt + 1, delay.toMillis(), exception.getMessage());
+                    ProviderRetryBackoff.pause(delay);
                 } finally {
                     recordProvider(providerId, operationName, outcome, sample);
                 }
@@ -680,6 +714,13 @@ public class MarketDataService {
         }
         if (emptyProvider != null) return new ProviderCall<>(emptyValue, emptyProvider);
         throw last == null ? new ProviderException(selection.primary(), "No configured market data provider", false) : last;
+    }
+
+    private boolean configuredFallbackAvailable() {
+        ProviderSelection selection = providerSelection();
+        if (selection.fallback() == null || selection.fallback() == selection.primary()) return false;
+        MarketDataProvider fallback = providers.get(selection.fallback());
+        return fallback != null && fallback.isConfigured();
     }
 
     private <T> T timedProviderCall(ProviderId providerId, String operationName, java.util.function.Supplier<T> supplier) {
@@ -742,6 +783,11 @@ public class MarketDataService {
                         .thenComparing(entity -> entity.getId() == null ? "" : entity.getId().toString()))
                 .forEach(entity -> selected.putIfAbsent(entity.getTradeDate(), entity));
         return selected.values().stream().sorted(Comparator.comparing(PriceDailyEntity::getTradeDate)).toList();
+    }
+
+    private enum EmptyResultPolicy {
+        TRY_FALLBACK,
+        RETURN_FIRST_EMPTY
     }
 
     private record ProviderSelection(ProviderId primary, ProviderId fallback) { }

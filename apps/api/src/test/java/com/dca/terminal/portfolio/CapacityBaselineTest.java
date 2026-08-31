@@ -54,6 +54,10 @@ class CapacityBaselineTest {
         long priceRows = count("market_price_daily");
         assertEquals(INSTRUMENTS * (ChronoUnit.DAYS.between(START, END) + 1), priceRows);
 
+        // Current valuation now refreshes live quotes. Warm the one-minute quote cache first so this
+        // SQL baseline measures shared-ledger projection cost rather than first-request provider/cache setup.
+        portfolioService.currentViews();
+
         Statistics statistics = entityManagerFactory.unwrap(SessionFactory.class).getStatistics();
         statistics.setStatisticsEnabled(true);
 
@@ -94,8 +98,9 @@ class CapacityBaselineTest {
                 | transaction list | %d | %d | %d | %d |
 
                 Observation: currentViews used fewer statements than three independent current-ledger
-                rebuilds. history stayed on its own snapshot/replay path. Existing trade-date and
-                instrument-date indexes were sufficient for this generated volume; no schema change.
+                rebuilds after the live quote cache was warm. history stayed on its own snapshot/replay
+                path. Existing trade-date and instrument-date indexes were sufficient for this generated
+                volume; no schema change.
                 """.formatted(
                 INSTRUMENTS, TRANSACTIONS, priceRows, START, END, END,
                 currentViews.elapsedMs(), currentViews.statements(), currentViews.queries(), currentViews.entityLoads(),

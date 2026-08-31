@@ -70,7 +70,7 @@ export function DashboardPage() {
   const initialRefreshDone = useRef(false)
   const rawData = dashboard.data?.data
   const symbols = useMemo(() => rawData?.holdings.map((holding) => holding.symbol).filter(Boolean) ?? [], [rawData?.holdings])
-  const regularHistory = rawData?.portfolioHistory ?? []
+  const regularHistory = useMemo(() => rawData?.portfolioHistory ?? [], [rawData?.portfolioHistory])
   const livePerformanceHistory = useMemo(() => withCurrentPortfolioPoint(
     regularHistory,
     rawData?.summary.marketValue,

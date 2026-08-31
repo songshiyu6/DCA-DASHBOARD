@@ -1,17 +1,18 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQueries, useQuery } from '@tanstack/react-query'
 import { ArrowUpRight, CalendarDays, ChevronRight, CircleDollarSign, Download, RefreshCw, TrendingUp } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { annualizedTimeWeightedReturn, CHART_RANGE_OPTIONS, filterPortfolioHistory, livePerformanceSinceLastClose, portfolioRangeStartDay, withCurrentPortfolioPoint, ytdPerformance, type ChartRange } from '../lib/dashboardPerformance'
-import { decimal, decimalMax, decimalMin, formatDate, formatMoney, formatPeriod, formatShares, formatSignedMoney, formatSignedPercent, formatPercent } from '../lib/format'
+import { decimal, decimalMax, decimalMin, formatDate, formatMoney, formatPeriod, formatShares, formatSignedMoney, formatSignedPercent, formatPercent, formatTime } from '../lib/format'
 import { isInitialContributionPeriod } from '../lib/initialContributionPresentation'
 import { queryKeys } from '../lib/queryKeys'
+import { quoteSessionLabel } from '../lib/quotePresentation'
 import { DataStateBanner, EmptyState, ErrorState, LoadingBlock } from '../components/DataState'
 import { MetricCard } from '../components/MetricCard'
 import { Panel } from '../components/Panel'
-import type { Holding, RecommendationItem } from '../types'
+import type { Holding, Quote, RecommendationItem } from '../types'
 
 const PortfolioChart = lazy(async () => ({ default: (await import('../components/charts/PortfolioChart')).PortfolioChart }))
 
@@ -45,11 +46,15 @@ function NextDcaCard({ amount, period, daysRemaining, items, dataStatus, message
   </Panel>
 }
 
-function HoldingRow({ holding, onOpen }: { holding: Holding; onOpen: (symbol: string) => void }) {
-  const { t } = useTranslation()
+function HoldingRow({ holding, quote, onOpen }: { holding: Holding; quote?: Quote; onOpen: (symbol: string) => void }) {
+  const { t, i18n } = useTranslation()
+  const isZh = (i18n.resolvedLanguage ?? i18n.language).toLowerCase().startsWith('zh')
+  const quoteDetail = quote
+    ? `${quoteSessionLabel(quote.quoteSession, isZh)} · ${formatTime(quote.marketTimestamp)} ET`
+    : null
   return <button type="button" className="holding-row" onClick={() => onOpen(holding.symbol)} aria-label={t('dashboard.openHolding', { symbol: holding.symbol })}>
     <span className="holding-identity"><span className="ticker-avatar">{holding.symbol.slice(0, 1)}</span><span><strong>{holding.symbol}</strong><small>{holding.name}</small></span></span>
-    <span className="holding-price"><strong>{formatMoney(holding.price)}</strong><small className={trendClass(holding.todayPercent)}>{formatSignedPercent(holding.todayPercent)}</small></span>
+    <span className="holding-price"><strong>{formatMoney(holding.price)}</strong><small className={trendClass(holding.todayPercent)}>{formatSignedPercent(holding.todayPercent)}</small>{quoteDetail ? <small>{quoteDetail}</small> : null}</span>
     <span className="holding-shares"><strong>{formatShares(holding.shares)}</strong><small>{t('dashboard.shares')} · {t('dashboard.avg')} {formatMoney(holding.avgCost)}</small></span>
     <span className="holding-value"><strong>{formatMoney(holding.marketValue)}</strong><small>{formatPercent(holding.allocation)} {t('dashboard.allocation').toLowerCase()}</small></span>
     <span className={`holding-pnl ${trendClass(holding.unrealizedPnl)}`}><strong>{formatSignedMoney(holding.unrealizedPnl)}</strong><small>{formatSignedPercent(holding.returnPercent)}</small></span>
@@ -70,6 +75,15 @@ export function DashboardPage() {
   const initialRefreshDone = useRef(false)
   const rawData = dashboard.data?.data
   const symbols = useMemo(() => rawData?.holdings.map((holding) => holding.symbol).filter(Boolean) ?? [], [rawData?.holdings])
+  const quotes = useQueries({ queries: symbols.map((symbol) => ({
+    queryKey: queryKeys.quote(symbol),
+    queryFn: () => api.getQuote(symbol),
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: 'always' as const,
+  })) })
+  const quoteBySymbol = useMemo(() => Object.fromEntries(quotes.map((query, index) => [symbols[index], query.data?.data])), [quotes, symbols])
   const regularHistory = useMemo(() => rawData?.portfolioHistory ?? [], [rawData?.portfolioHistory])
   const livePerformanceHistory = useMemo(() => withCurrentPortfolioPoint(
     regularHistory,
@@ -171,7 +185,7 @@ export function DashboardPage() {
       </span>
     </div>
     <Panel title={t('dashboard.holdings')} detail={t('dashboard.ledgerProjection')} action={<button type="button" className="text-button" onClick={() => navigate('/transactions')}>{t('common.viewAll')} <ChevronRight size={15} /></button>} className="holdings-panel dashboard-holdings-first" flush>
-      {data.holdings.length ? <div className="holdings-list">{data.holdings.map((holding) => <HoldingRow key={holding.symbol} holding={holding} onOpen={(symbol) => navigate(`/etfs/${symbol}`)} />)}</div> : <EmptyState title={t('common.noData')} />}
+      {data.holdings.length ? <div className="holdings-list">{data.holdings.map((holding) => <HoldingRow key={holding.symbol} holding={holding} quote={quoteBySymbol[holding.symbol]} onOpen={(symbol) => navigate(`/etfs/${symbol}`)} />)}</div> : <EmptyState title={t('common.noData')} />}
     </Panel>
     <div className="content-grid dashboard-top-grid dashboard-primary-grid">
       <Panel className="chart-panel" title={portfolioGrowthLabel} detail={portfolioGrowthDetail} action={<div className="chart-toolbar"><div className="chart-legend"><span><i className="legend-dot legend-market" />{netLiqLabel}</span><span><i className="legend-dot legend-investment" />{netInvestmentLabel}</span></div><div className="chart-range-control" aria-label={t('charts.range')}>{CHART_RANGE_OPTIONS.map((range) => <button key={range} type="button" className={chartRange === range ? 'active' : ''} aria-pressed={chartRange === range} onClick={() => setChartRange(range)}>{range}</button>)}</div></div>}>

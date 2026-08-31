@@ -28,5 +28,13 @@ public final class InstrumentDtos {
             String symbol, BigDecimal price, BigDecimal previousClose, BigDecimal change,
             BigDecimal changePercent, BigDecimal bid, BigDecimal ask, Instant marketTimestamp,
             Instant retrievedAt, String source, FreshnessStatus status, QuoteSession quoteSession,
-            BigDecimal nav, LocalDate navDate) { }
+            BigDecimal nav, LocalDate navDate) {
+        public QuoteResponse(String symbol, BigDecimal price, BigDecimal previousClose, BigDecimal change,
+                             BigDecimal changePercent, BigDecimal bid, BigDecimal ask, Instant marketTimestamp,
+                             Instant retrievedAt, String source, FreshnessStatus status,
+                             BigDecimal nav, LocalDate navDate) {
+            this(symbol, price, previousClose, change, changePercent, bid, ask, marketTimestamp, retrievedAt,
+                    source, status, QuoteSession.UNKNOWN, nav, navDate);
+        }
+    }
 }

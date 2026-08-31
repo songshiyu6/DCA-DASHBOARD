@@ -39,12 +39,10 @@ import org.springframework.web.util.UriComponentsBuilder;
 
 @Component
 public class YahooFinanceProvider implements MarketDataProvider {
-    // Yahoo's chart edge currently rejects the browser-shaped UA used by the
-    // old client with HTTP 429. A minimal UA is accepted by both query hosts
-    // and still identifies this as a normal HTTP client.
     private static final String USER_AGENT = "Mozilla/5.0";
     private static final String COOKIE_BOOTSTRAP_URL = "https://fc.yahoo.com";
     private static final Duration QUOTE_SESSION_TTL = Duration.ofMinutes(45);
+    private static final ZoneId US_MARKET_ZONE = ZoneId.of("America/New_York");
     private static final Logger log = LoggerFactory.getLogger(YahooFinanceProvider.class);
     private final RestClient client;
     private final RestClient authClient;
@@ -114,9 +112,6 @@ public class YahooFinanceProvider implements MarketDataProvider {
 
     @Override
     public List<ProviderSearchResult> search(String query) {
-        // Yahoo's full search endpoint is frequently rate-limited. The
-        // autocomplete endpoint provides the same ticker directory data and
-        // is the endpoint used for the add-ETF lookup.
         JsonNode root = get("/v6/finance/autocomplete", java.util.Map.of(
                 "query", query,
                 "lang", "en-US",
@@ -154,8 +149,6 @@ public class YahooFinanceProvider implements MarketDataProvider {
             return new ProviderQuote(latest.price(), previousClose, decimal(quote, "bid"), decimal(quote, "ask"),
                     latest.timestamp(), Instant.now(), latest.session());
         } catch (ProviderException exception) {
-            // v7 quote requires Yahoo cookie/crumb auth and can change independently from the chart edge.
-            // Preserve quote availability with the regular-session chart, but expose this as an explicit degraded quote.
             log.warn("Yahoo live quote degraded ticker={} reason={} fallback=REGULAR_CHART",
                     instrument.getSymbol(), exception.getMessage());
             return regularChartQuote(instrument, QuoteSession.REGULAR_FALLBACK);
@@ -168,9 +161,6 @@ public class YahooFinanceProvider implements MarketDataProvider {
         JsonNode meta = chart.path("meta");
         BigDecimal price = decimal(meta, "regularMarketPrice");
         Instant timestamp = instant(meta, "regularMarketTime");
-        // Yahoo's previousClose is the authoritative prior regular-session close when present.
-        // chartPreviousClose instead refers to the close before the requested chart window;
-        // with range=5d it can be several sessions old and must only be a last-resort fallback.
         BigDecimal previousClose = decimal(meta, "previousClose");
         if (previousClose == null) previousClose = previousTradingClose(chart, timestamp);
         if (previousClose == null) previousClose = decimal(meta, "chartPreviousClose");
@@ -203,16 +193,20 @@ public class YahooFinanceProvider implements MarketDataProvider {
 
     @Override
     public List<IntradayBar> getIntradayPrices(InstrumentEntity instrument, LocalDate from, LocalDate to) {
-        JsonNode result = chart(instrument.getSymbol(), null, "5m", from, to.plusDays(1), "div,splits", true);
+        JsonNode result = intradayChart(instrument.getSymbol(), from, to);
         JsonNode chart = chartResult(result);
+        JsonNode meta = chart.path("meta");
         JsonNode timestamps = chart.path("timestamp");
         JsonNode quote = chart.path("indicators").path("quote").path(0);
-        ZoneId exchangeZone = exchangeZone(chart.path("meta"));
+        ZoneId exchangeZone = exchangeZone(meta);
         List<IntradayBar> bars = new ArrayList<>();
         for (int i = 0; i < timestamps.size(); i++) {
-            Instant timestamp = Instant.ofEpochSecond(timestamps.get(i).asLong());
+            JsonNode timestampNode = timestamps.get(i);
+            if (timestampNode == null || !timestampNode.isNumber()) continue;
+            Instant timestamp = Instant.ofEpochSecond(timestampNode.asLong());
             LocalDate tradeDate = timestamp.atZone(exchangeZone).toLocalDate();
             if (tradeDate.isBefore(from) || tradeDate.isAfter(to)) continue;
+            if (!withinCurrentTradingPeriods(meta, timestamp)) continue;
             BigDecimal close = decimalAt(quote.path("close"), i);
             if (close != null) {
                 bars.add(new IntradayBar(timestamp, decimalAt(quote.path("open"), i),
@@ -220,6 +214,7 @@ public class YahooFinanceProvider implements MarketDataProvider {
                         longAt(quote.path("volume"), i)));
             }
         }
+        bars.sort(Comparator.comparing(IntradayBar::timestamp));
         return bars;
     }
 
@@ -314,7 +309,6 @@ public class YahooFinanceProvider implements MarketDataProvider {
                 .max(Comparator.comparing(QuoteCandidate::timestamp).thenComparingInt(QuoteCandidate::priority))
                 .orElse(null);
         if (timestamped != null) return timestamped;
-        // Never let an untimestamped stale extended-hours field override a valid regular quote.
         return candidates.stream().filter(candidate -> candidate.priority() == 0).findFirst()
                 .orElse(candidates.isEmpty() ? null : candidates.getLast());
     }
@@ -425,6 +419,16 @@ public class YahooFinanceProvider implements MarketDataProvider {
         return result.get(0);
     }
 
+    private JsonNode intradayChart(String symbol, LocalDate from, LocalDate to) {
+        java.util.Map<String, String> params = new java.util.HashMap<>();
+        params.put("interval", "5m");
+        params.put("events", "div,splits");
+        params.put("includePrePost", "true");
+        params.put("period1", String.valueOf(from.atStartOfDay(US_MARKET_ZONE).toEpochSecond()));
+        params.put("period2", String.valueOf(to.plusDays(1).atStartOfDay(US_MARKET_ZONE).toEpochSecond()));
+        return get("/v8/finance/chart/" + symbol, params);
+    }
+
     private JsonNode chart(String symbol, String range, String interval, LocalDate from, LocalDate to) {
         return chart(symbol, range, interval, from, to, "div,splits");
     }
@@ -467,8 +471,9 @@ public class YahooFinanceProvider implements MarketDataProvider {
             }
             return body;
         } catch (RestClientResponseException exception) {
-            boolean retryable = exception.getStatusCode().value() == 429 || exception.getStatusCode().is5xxServerError();
-            throw new ProviderException(id(), "Yahoo HTTP " + exception.getStatusCode().value(), retryable, exception);
+            int status = exception.getStatusCode().value();
+            boolean retryable = status == 408 || status == 429 || exception.getStatusCode().is5xxServerError();
+            throw new ProviderException(id(), "Yahoo HTTP " + status, retryable, exception);
         } catch (ResourceAccessException exception) {
             throw new ProviderException(id(), "Yahoo request timed out or was unreachable", true, exception);
         } catch (ProviderException exception) {
@@ -476,6 +481,24 @@ public class YahooFinanceProvider implements MarketDataProvider {
         } catch (Exception exception) {
             throw new ProviderException(id(), "Yahoo response could not be decoded", false, exception);
         }
+    }
+
+    private static boolean withinCurrentTradingPeriods(JsonNode meta, Instant timestamp) {
+        JsonNode periods = meta.path("currentTradingPeriod");
+        boolean hasValidPeriod = false;
+        for (String name : List.of("pre", "regular", "post")) {
+            JsonNode period = periods.path(name);
+            JsonNode startNode = period.path("start");
+            JsonNode endNode = period.path("end");
+            if (!startNode.isNumber() || !endNode.isNumber()) continue;
+            long start = startNode.asLong();
+            long end = endNode.asLong();
+            if (end <= start) continue;
+            hasValidPeriod = true;
+            long value = timestamp.getEpochSecond();
+            if (value >= start && value < end) return true;
+        }
+        return !hasValidPeriod;
     }
 
     private static BigDecimal previousTradingClose(JsonNode chart, Instant marketTimestamp) {
@@ -509,11 +532,7 @@ public class YahooFinanceProvider implements MarketDataProvider {
         ZoneId exchangeZone = exchangeZone(chart.path("meta"));
         LocalDate marketDate = marketTimestamp.atZone(exchangeZone).toLocalDate();
         LocalDate latestTradeDate = latestTimestamp.atZone(exchangeZone).toLocalDate();
-        // Before the current session has a daily bar (for example pre-market Monday),
-        // the latest bar itself is the prior completed trading session.
         if (latestTradeDate.isBefore(marketDate)) return latestClose;
-        // During/after the session, Yahoo includes a bar for the current trading date;
-        // the immediately preceding valid bar is yesterday's regular-session close.
         return priorClose;
     }
 

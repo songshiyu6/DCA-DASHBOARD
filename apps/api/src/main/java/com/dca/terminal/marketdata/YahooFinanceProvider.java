@@ -50,6 +50,7 @@ public class YahooFinanceProvider implements MarketDataProvider {
     private final RestClient authClient;
     private final ObjectMapper objectMapper;
     private final boolean authenticatedQuoteEndpoint;
+    private final String cookieBootstrapUrl;
     private final Object quoteSessionLock = new Object();
     private volatile YahooQuoteSession quoteSession;
 
@@ -69,6 +70,18 @@ public class YahooFinanceProvider implements MarketDataProvider {
             @Value("${dca.market-data.yahoo.base-url}") String baseUrl,
             @Value("${dca.market-data.yahoo.timeout-ms:5000}") int timeoutMs,
             @Value("${dca.market-data.yahoo.proxy-url:}") String proxyUrl) {
+        this(builder, objectMapper, baseUrl, timeoutMs, proxyUrl,
+                isOfficialYahooHost(baseUrl), COOKIE_BOOTSTRAP_URL);
+    }
+
+    YahooFinanceProvider(
+            RestClient.Builder builder,
+            ObjectMapper objectMapper,
+            String baseUrl,
+            int timeoutMs,
+            String proxyUrl,
+            boolean authenticatedQuoteEndpoint,
+            String cookieBootstrapUrl) {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(timeoutMs);
         factory.setReadTimeout(timeoutMs);
@@ -84,9 +97,11 @@ public class YahooFinanceProvider implements MarketDataProvider {
                 .defaultHeader("User-Agent", USER_AGENT)
                 .defaultHeader("Accept", MediaType.ALL_VALUE)
                 .requestFactory(factory)
+                .baseUrl(baseUrl)
                 .build();
         this.objectMapper = objectMapper;
-        this.authenticatedQuoteEndpoint = isOfficialYahooHost(baseUrl);
+        this.authenticatedQuoteEndpoint = authenticatedQuoteEndpoint;
+        this.cookieBootstrapUrl = cookieBootstrapUrl;
         log.info("Yahoo market-data client initialized host={} httpVersion=HTTP_1_1 proxyConfigured={} quoteAuth={}",
                 URI.create(baseUrl).getHost(), proxy != null, authenticatedQuoteEndpoint);
     }
@@ -330,7 +345,7 @@ public class YahooFinanceProvider implements MarketDataProvider {
 
     private String fetchSessionCookie() {
         try {
-            List<String> setCookies = authClient.get().uri(COOKIE_BOOTSTRAP_URL).exchange((request, response) -> {
+            List<String> setCookies = authClient.get().uri(cookieBootstrapUrl).exchange((request, response) -> {
                 List<String> headers = response.getHeaders().get("Set-Cookie");
                 return headers == null ? List.of() : List.copyOf(headers);
             });
@@ -354,8 +369,9 @@ public class YahooFinanceProvider implements MarketDataProvider {
 
     private String fetchCrumb(String cookie) {
         try {
-            String crumb = client.get().uri("/v1/test/getcrumb")
+            String crumb = authClient.get().uri("/v1/test/getcrumb")
                     .header("Cookie", cookie)
+                    .accept(MediaType.TEXT_PLAIN, MediaType.ALL)
                     .retrieve().body(String.class);
             if (crumb == null || crumb.isBlank() || crumb.length() > 256
                     || crumb.toLowerCase().contains("too many requests") || crumb.contains("<")) {

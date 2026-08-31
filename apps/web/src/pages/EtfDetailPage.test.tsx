@@ -1,7 +1,7 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '../lib/i18n'
 import { fixtureInstruments } from '../lib/fixtures'
 import type { EtfMetrics, PricePoint, Quote } from '../types'
@@ -35,6 +35,10 @@ beforeEach(() => {
   mockedApi.getMetrics.mockResolvedValue({ data: metrics, meta: { status: 'FRESH', source: 'YAHOO' } })
   mockedApi.getPrices.mockResolvedValue({ data: prices, meta: { status: 'FRESH', source: 'YAHOO' } })
   mockedApi.syncInstrument.mockResolvedValue({ data: { symbol: 'VOO', barsSaved: 0, splitsSaved: 0, status: 'FRESH', completedAt: '2026-08-27T20:02:00Z' }, meta: { status: 'FRESH', source: 'YAHOO' } })
+})
+
+afterEach(() => {
+  focusManager.setFocused(undefined)
 })
 
 describe('ETF detail metrics', () => {
@@ -104,7 +108,10 @@ describe('ETF detail metrics', () => {
     fireEvent.click(await screen.findByRole('button', { name: '1D' }))
     expect((await screen.findAllByText('Current trading session has no intraday bars yet')).length).toBeGreaterThan(0)
 
-    fireEvent.focus(window)
+    act(() => {
+      focusManager.setFocused(false)
+      focusManager.setFocused(true)
+    })
 
     await waitFor(() => expect(intradayCalls).toBeGreaterThanOrEqual(2))
     expect(await screen.findByTestId('price-chart')).toBeInTheDocument()

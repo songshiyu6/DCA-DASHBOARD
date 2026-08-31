@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import '../lib/i18n'
 import { fixtureInstruments } from '../lib/fixtures'
 import type { EtfMetrics, PricePoint, Quote } from '../types'
-import { EtfDetailPage } from './EtfDetailPage'
+import { EtfDetailPage, INTRADAY_REFETCH_INTERVAL_MS, INTRADAY_STALE_TIME_MS } from './EtfDetailPage'
 
 const mockedApi = vi.hoisted(() => ({
   getInstrument: vi.fn(),
@@ -38,6 +38,12 @@ beforeEach(() => {
 })
 
 describe('ETF detail metrics', () => {
+  it('uses a short cache and refresh interval for 1D intraday data', () => {
+    expect(INTRADAY_STALE_TIME_MS).toBeLessThan(60_000)
+    expect(INTRADAY_STALE_TIME_MS).toBeLessThan(86_400_000)
+    expect(INTRADAY_REFETCH_INTERVAL_MS).toBe(60_000)
+  })
+
   it('renders adjusted-performance metrics, stale status, and NAV separately from market price', async () => {
     renderPage()
 

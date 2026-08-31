@@ -3,6 +3,7 @@ package com.dca.terminal.portfolio;
 import com.dca.terminal.common.DecimalMath;
 import com.dca.terminal.common.DomainException;
 import com.dca.terminal.common.FreshnessStatus;
+import com.dca.terminal.instrument.InstrumentDtos.QuoteResponse;
 import com.dca.terminal.instrument.InstrumentEntity;
 import com.dca.terminal.instrument.InstrumentRepository;
 import com.dca.terminal.marketdata.MarketDataEntities.PriceDailyEntity;
@@ -224,7 +225,7 @@ public class PortfolioService {
         Timer.Sample sample = ObservabilityMetrics.start(meterRegistry);
         try {
             LocalDate date = today();
-            Ledger ledger = ledger(date);
+            Ledger ledger = ledger(date, PriceMode.REGULAR_CLOSE);
             SummaryResponse summary = summary(ledger, date);
             PortfolioSnapshotEntity entity = snapshotRepository.findBySnapshotDate(date).orElseGet(PortfolioSnapshotEntity::new);
             entity.setSnapshotDate(date);
@@ -282,6 +283,10 @@ public class PortfolioService {
     }
 
     private Ledger ledger(LocalDate asOf) {
+        return ledger(asOf, PriceMode.LIVE);
+    }
+
+    private Ledger ledger(LocalDate asOf, PriceMode priceMode) {
         Timer.Sample sample = ObservabilityMetrics.start(meterRegistry);
         List<TransactionEntity> transactions = transactionRepository.findAllByTradeDateLessThanEqualOrderByTradeDateAscLedgerOrderAscIdAsc(asOf);
         try {
@@ -293,7 +298,9 @@ public class PortfolioService {
             Map<UUID, BigDecimal> values = new LinkedHashMap<>();
             Map<UUID, PriceAtDate> prices = new HashMap<>();
             Set<UUID> positionIds = calculation.positions().stream().map(FifoCalculator.Position::instrumentId).collect(Collectors.toSet());
-            Map<UUID, PriceAtDate> loadedPrices = loadCurrentPrices(positionIds, asOf, priority);
+            Map<UUID, PriceAtDate> loadedPrices = priceMode == PriceMode.LIVE
+                    ? loadCurrentPrices(positionIds, asOf, priority)
+                    : loadRegularClosePrices(positionIds, asOf, priority);
             BigDecimal marketValue = BigDecimal.ZERO;
             FreshnessStatus status = FreshnessStatus.FRESH;
             boolean complete = true;
@@ -313,7 +320,7 @@ public class PortfolioService {
             }
             return new Ledger(transactions, calculation, instruments, values, prices, marketValue, status, complete);
         } finally {
-            recordReplay("current", transactions.size(), sample);
+            recordReplay(priceMode == PriceMode.LIVE ? "current" : "regular-close", transactions.size(), sample);
         }
     }
 
@@ -377,10 +384,37 @@ public class PortfolioService {
         Map<UUID, QuoteLatestEntity> quotes = quoteRepository.findAllByInstrumentIdIn(instrumentIds).stream()
                 .collect(Collectors.toMap(QuoteLatestEntity::getInstrumentId, quote -> quote, (first, ignored) -> first));
         Map<UUID, List<PriceDailyEntity>> daily = historicalPrices(instrumentIds, asOf, priority);
+        Map<UUID, InstrumentEntity> instruments = new HashMap<>();
+        instrumentRepository.findAllById(instrumentIds)
+                .forEach(instrument -> instruments.put(instrument.getId(), instrument));
         Map<UUID, PriceAtDate> result = new HashMap<>();
         for (UUID instrumentId : instrumentIds) {
+            InstrumentEntity instrument = instruments.get(instrumentId);
+            if (instrument != null) {
+                try {
+                    QuoteResponse live = marketDataService.latestQuote(instrument);
+                    if (live != null && live.price() != null && live.price().signum() > 0) {
+                        FreshnessStatus status = live.status() == null ? FreshnessStatus.STALE : live.status();
+                        result.put(instrumentId, new PriceAtDate(live.price(), status, live.changePercent()));
+                        continue;
+                    }
+                } catch (RuntimeException ignored) {
+                    // Preserve the last stored quote/daily-close fallback when a refresh fails unexpectedly.
+                }
+            }
             QuoteLatestEntity quote = quotes.get(instrumentId);
             result.put(instrumentId, currentPrice(instrumentId, quote, daily.getOrDefault(instrumentId, List.of())));
+        }
+        return result;
+    }
+
+    private Map<UUID, PriceAtDate> loadRegularClosePrices(Collection<UUID> instrumentIds, LocalDate asOf,
+                                                          List<ProviderId> priority) {
+        if (instrumentIds.isEmpty()) return Map.of();
+        Map<UUID, List<PriceDailyEntity>> daily = historicalPrices(instrumentIds, asOf, priority);
+        Map<UUID, PriceAtDate> result = new HashMap<>();
+        for (UUID instrumentId : instrumentIds) {
+            result.put(instrumentId, priceAt(instrumentId, asOf, daily.getOrDefault(instrumentId, List.of())));
         }
         return result;
     }
@@ -521,6 +555,7 @@ public class PortfolioService {
 
     private LocalDate today() { return LocalDate.now(clock.withZone(zone)); }
 
+    private enum PriceMode { LIVE, REGULAR_CLOSE }
     private record PriceAtDate(BigDecimal price, FreshnessStatus status, BigDecimal changePercent) { }
     public record CurrentValuation(UUID instrumentId, BigDecimal marketValue, BigDecimal price,
                                    FreshnessStatus status) { }

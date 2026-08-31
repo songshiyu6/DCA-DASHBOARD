@@ -240,6 +240,9 @@ public class MarketDataService {
             if (quote.price() == null || quote.price().signum() <= 0) {
                 throw new ProviderException(result.provider(), "Provider returned no valid quote", false);
             }
+            QuoteSession session = quote.session() == null ? QuoteSession.UNKNOWN : quote.session();
+            FreshnessStatus quoteStatus = session == QuoteSession.REGULAR_FALLBACK
+                    ? FreshnessStatus.PARTIAL : FreshnessStatus.FRESH;
             QuoteLatestEntity entity = cached.orElseGet(QuoteLatestEntity::new);
             entity.setInstrumentId(instrument.getId());
             entity.setPrice(quote.price());
@@ -252,8 +255,13 @@ public class MarketDataService {
             entity.setMarketTimestamp(quote.marketTimestamp());
             entity.setRetrievedAt(quote.retrievedAt() == null ? now : quote.retrievedAt());
             entity.setSource(result.provider().name());
-            entity.setStatus(FreshnessStatus.FRESH);
+            entity.setQuoteSession(session);
+            entity.setStatus(quoteStatus);
             quoteRepository.save(entity);
+            if (quoteStatus != FreshnessStatus.FRESH) {
+                log.warn("market quote degraded ticker={} provider={} session={} marketTimestamp={} retrievedAt={}",
+                        instrument.getSymbol(), result.provider(), session, entity.getMarketTimestamp(), entity.getRetrievedAt());
+            }
             return toQuoteResponse(instrument, entity);
         } catch (ProviderException exception) {
             if (cached.isPresent() && cached.get().getPrice() != null) {
@@ -265,6 +273,7 @@ public class MarketDataService {
             unavailable.setInstrumentId(instrument.getId());
             unavailable.setRetrievedAt(now);
             unavailable.setSource(exception.provider().name());
+            unavailable.setQuoteSession(QuoteSession.UNKNOWN);
             unavailable.setStatus(FreshnessStatus.UNAVAILABLE);
             quoteRepository.save(unavailable);
             return toQuoteResponse(instrument, unavailable);
@@ -465,7 +474,8 @@ public class MarketDataService {
         FreshnessStatus quoteStatus = latest.map(QuoteLatestEntity::getStatus).orElse(FreshnessStatus.STALE);
         if (latest.isPresent() && latest.get().getPrice() != null) {
             quote = new ProviderQuote(latest.get().getPrice(), latest.get().getPreviousClose(), latest.get().getBid(),
-                    latest.get().getAsk(), latest.get().getMarketTimestamp(), latest.get().getRetrievedAt());
+                    latest.get().getAsk(), latest.get().getMarketTimestamp(), latest.get().getRetrievedAt(),
+                    latest.get().getQuoteSession());
         }
         MarketMetricsCalculator.Metrics result = MarketMetricsCalculator.calculate(bars, quote, today, quoteStatus);
         FreshnessStatus status = result.status() == FreshnessStatus.FRESH && !bars.isEmpty()
@@ -546,7 +556,7 @@ public class MarketDataService {
         Optional<FundNavDailyEntity> nav = navRepository.findTopByInstrumentIdOrderByNavDateDesc(instrument.getId());
         return new QuoteResponse(instrument.getSymbol(), entity.getPrice(), entity.getPreviousClose(), entity.getChange(),
                 entity.getChangePercent(), entity.getBid(), entity.getAsk(), entity.getMarketTimestamp(),
-                entity.getRetrievedAt(), entity.getSource(), entity.getStatus(),
+                entity.getRetrievedAt(), entity.getSource(), entity.getStatus(), entity.getQuoteSession(),
                 nav.map(FundNavDailyEntity::getNav).orElse(null), nav.map(FundNavDailyEntity::getNavDate).orElse(null));
     }
 
@@ -655,7 +665,8 @@ public class MarketDataService {
                         outcome = "empty";
                         continue;
                     }
-                    outcome = "success";
+                    outcome = value instanceof ProviderQuote quote && quote.session() == QuoteSession.REGULAR_FALLBACK
+                            ? "degraded" : "success";
                     return new ProviderCall<>(value, providerId);
                 } catch (ProviderException exception) {
                     last = exception;

@@ -91,6 +91,9 @@ public final class MarketDataEntities {
         @Column(length = 32)
         private String source;
         @Enumerated(EnumType.STRING)
+        @Column(name = "quote_session", nullable = false, length = 32)
+        private QuoteSession quoteSession = QuoteSession.UNKNOWN;
+        @Enumerated(EnumType.STRING)
         @Column(nullable = false)
         private com.dca.terminal.common.FreshnessStatus status;
 
@@ -114,6 +117,10 @@ public final class MarketDataEntities {
         public void setRetrievedAt(Instant retrievedAt) { this.retrievedAt = retrievedAt; }
         public String getSource() { return source; }
         public void setSource(String source) { this.source = source; }
+        public QuoteSession getQuoteSession() { return quoteSession; }
+        public void setQuoteSession(QuoteSession quoteSession) {
+            this.quoteSession = quoteSession == null ? QuoteSession.UNKNOWN : quoteSession;
+        }
         public com.dca.terminal.common.FreshnessStatus getStatus() { return status; }
         public void setStatus(com.dca.terminal.common.FreshnessStatus status) { this.status = status; }
     }

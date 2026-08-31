@@ -41,7 +41,7 @@ class YahooFinanceProviderExtendedQuoteTest {
     }
 
     @Test
-    void usesFreshestOvernightPriceForCurrentQuote() {
+    void usesFreshestTimestampedSessionForCurrentQuote() {
         long regular = Instant.parse("2026-08-28T20:00:00Z").getEpochSecond();
         long pre = Instant.parse("2026-08-31T12:00:00Z").getEpochSecond();
         long post = Instant.parse("2026-08-29T00:00:00Z").getEpochSecond();
@@ -70,9 +70,9 @@ class YahooFinanceProviderExtendedQuoteTest {
         instrument.setSymbol("VOO");
         var quote = provider.getLatestQuote(instrument);
 
-        // Pre-market is newer than the overnight tick in this fixture, so the latest timestamp wins.
         assertEquals(0, quote.price().compareTo(new java.math.BigDecimal("704.00")));
         assertEquals(Instant.ofEpochSecond(pre), quote.marketTimestamp());
+        assertEquals(QuoteSession.PRE_MARKET, quote.session());
         assertEquals(0, quote.previousClose().compareTo(new java.math.BigDecimal("698.00")));
         assertEquals("true", query(lastRequest.get(), "overnightPrice"));
     }
@@ -104,6 +104,30 @@ class YahooFinanceProviderExtendedQuoteTest {
 
         assertEquals(0, quote.price().compareTo(new java.math.BigDecimal("705.25")));
         assertEquals(Instant.ofEpochSecond(overnight), quote.marketTimestamp());
+        assertEquals(QuoteSession.OVERNIGHT, quote.session());
+    }
+
+    @Test
+    void marksRegularWhenOvernightFieldIsNotAvailable() {
+        long regular = Instant.parse("2026-08-31T20:00:00Z").getEpochSecond();
+        String body = """
+                {
+                  "quoteResponse": {"result": [{
+                    "symbol": "VOO",
+                    "regularMarketPrice": 710.00,
+                    "regularMarketTime": %d,
+                    "regularMarketPreviousClose": 700.00
+                  }], "error": null}
+                }
+                """.formatted(regular);
+        server.createContext("/v7/finance/quote", exchange -> respond(exchange, body));
+
+        InstrumentEntity instrument = new InstrumentEntity();
+        instrument.setSymbol("VOO");
+        var quote = provider.getLatestQuote(instrument);
+
+        assertEquals(QuoteSession.REGULAR, quote.session());
+        assertEquals(Instant.ofEpochSecond(regular), quote.marketTimestamp());
     }
 
     @Test
@@ -130,6 +154,7 @@ class YahooFinanceProviderExtendedQuoteTest {
 
         assertEquals(0, quote.price().compareTo(new java.math.BigDecimal("710.00")));
         assertEquals(Instant.ofEpochSecond(regular), quote.marketTimestamp());
+        assertEquals(QuoteSession.REGULAR, quote.session());
     }
 
     private void respond(HttpExchange exchange, String body) throws IOException {

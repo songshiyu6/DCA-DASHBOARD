@@ -3,6 +3,7 @@ package com.dca.terminal.instrument;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.dca.terminal.common.FreshnessStatus;
+import com.dca.terminal.marketdata.QuoteSession;
 import java.time.LocalDate;
 import jakarta.validation.constraints.NotBlank;
 import java.math.BigDecimal;
@@ -26,5 +27,6 @@ public final class InstrumentDtos {
     public record QuoteResponse(
             String symbol, BigDecimal price, BigDecimal previousClose, BigDecimal change,
             BigDecimal changePercent, BigDecimal bid, BigDecimal ask, Instant marketTimestamp,
-            Instant retrievedAt, String source, FreshnessStatus status, BigDecimal nav, LocalDate navDate) { }
+            Instant retrievedAt, String source, FreshnessStatus status, QuoteSession quoteSession,
+            BigDecimal nav, LocalDate navDate) { }
 }

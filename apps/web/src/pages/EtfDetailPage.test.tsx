@@ -59,4 +59,48 @@ describe('ETF detail metrics', () => {
 
     await waitFor(() => expect(mockedApi.syncInstrument).toHaveBeenCalledWith('VOO'))
   })
+
+  it('retries 1D directly instead of running the daily history sync', async () => {
+    mockedApi.getPrices.mockImplementation((_symbol: string, requestedRange: string) => Promise.resolve(
+      requestedRange === '1D'
+        ? { data: [], meta: { status: 'PARTIAL', source: 'YAHOO', message: 'Current trading session has no intraday bars yet' } }
+        : { data: [{ date: '2026-08-26', close: '618', adjustedClose: '618' }], meta: { status: 'FRESH', source: 'YAHOO' } },
+    ))
+
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: '1D' }))
+    expect((await screen.findAllByText('Current trading session has no intraday bars yet')).length).toBeGreaterThan(0)
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Retry/i })[0])
+
+    await waitFor(() => expect(mockedApi.getPrices).toHaveBeenCalledWith('VOO', '1D'))
+    await waitFor(() => expect(mockedApi.getPrices.mock.calls.filter((call) => call[1] === '1D').length).toBeGreaterThanOrEqual(2))
+    expect(mockedApi.syncInstrument).not.toHaveBeenCalled()
+  })
+
+  it('can refresh an overnight empty 1D result on focus and show pre-market bars', async () => {
+    let intradayCalls = 0
+    mockedApi.getPrices.mockImplementation((_symbol: string, requestedRange: string) => {
+      if (requestedRange !== '1D') {
+        return Promise.resolve({ data: [{ date: '2026-08-26', close: '618', adjustedClose: '618' }], meta: { status: 'FRESH', source: 'YAHOO' } })
+      }
+      intradayCalls += 1
+      if (intradayCalls === 1) {
+        return Promise.resolve({ data: [], meta: { status: 'PARTIAL', source: 'YAHOO', message: 'Current trading session has no intraday bars yet' } })
+      }
+      return Promise.resolve({
+        data: [{ date: '2026-08-31T08:05:00Z', close: '619.50' }],
+        meta: { status: 'FRESH', source: 'YAHOO', asOf: '2026-08-31', retrievedAt: '2026-08-31T08:06:00Z' },
+      })
+    })
+
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: '1D' }))
+    expect((await screen.findAllByText('Current trading session has no intraday bars yet')).length).toBeGreaterThan(0)
+
+    fireEvent.focus(window)
+
+    await waitFor(() => expect(intradayCalls).toBeGreaterThanOrEqual(2))
+    expect(await screen.findByTestId('price-chart')).toBeInTheDocument()
+  })
 })

@@ -12,7 +12,12 @@ public final class ProviderModels {
                                        InstrumentType type) { }
 
     public record ProviderQuote(BigDecimal price, BigDecimal previousClose, BigDecimal bid, BigDecimal ask,
-                                Instant marketTimestamp, Instant retrievedAt) { }
+                                Instant marketTimestamp, Instant retrievedAt, QuoteSession session) {
+        public ProviderQuote(BigDecimal price, BigDecimal previousClose, BigDecimal bid, BigDecimal ask,
+                             Instant marketTimestamp, Instant retrievedAt) {
+            this(price, previousClose, bid, ask, marketTimestamp, retrievedAt, QuoteSession.UNKNOWN);
+        }
+    }
 
     public record PriceBar(LocalDate tradeDate, BigDecimal open, BigDecimal high, BigDecimal low,
                            BigDecimal close, BigDecimal adjustedClose, Long volume) { }

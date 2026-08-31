@@ -131,23 +131,23 @@ public class YahooFinanceProvider implements MarketDataProvider {
             if (previousClose == null) previousClose = decimal(quote, "previousClose");
             if (previousClose == null) {
                 try {
-                    previousClose = regularChartQuote(instrument).previousClose();
+                    previousClose = regularChartQuote(instrument, QuoteSession.REGULAR).previousClose();
                 } catch (ProviderException ignored) {
                     // A current live price remains useful even if the prior regular close is temporarily unavailable.
                 }
             }
             return new ProviderQuote(latest.price(), previousClose, decimal(quote, "bid"), decimal(quote, "ask"),
-                    latest.timestamp(), Instant.now());
+                    latest.timestamp(), Instant.now(), latest.session());
         } catch (ProviderException exception) {
             // v7 quote requires Yahoo cookie/crumb auth and can change independently from the chart edge.
-            // Preserve quote availability with the regular-session chart if that authenticated endpoint is down.
-            log.debug("Yahoo live/extended quote unavailable ticker={} reason={}; falling back to regular chart quote",
+            // Preserve quote availability with the regular-session chart, but expose this as an explicit degraded quote.
+            log.warn("Yahoo live quote degraded ticker={} reason={} fallback=REGULAR_CHART",
                     instrument.getSymbol(), exception.getMessage());
-            return regularChartQuote(instrument);
+            return regularChartQuote(instrument, QuoteSession.REGULAR_FALLBACK);
         }
     }
 
-    private ProviderQuote regularChartQuote(InstrumentEntity instrument) {
+    private ProviderQuote regularChartQuote(InstrumentEntity instrument, QuoteSession session) {
         JsonNode result = chart(instrument.getSymbol(), "5d", "1d", null, null);
         JsonNode chart = chartResult(result);
         JsonNode meta = chart.path("meta");
@@ -163,7 +163,7 @@ public class YahooFinanceProvider implements MarketDataProvider {
             throw new ProviderException(id(), "Yahoo returned no valid regular market price", false);
         }
         return new ProviderQuote(price, previousClose, decimal(meta, "bid"), decimal(meta, "ask"),
-                timestamp, Instant.now());
+                timestamp, Instant.now(), session == null ? QuoteSession.REGULAR : session);
     }
 
     @Override
@@ -273,6 +273,7 @@ public class YahooFinanceProvider implements MarketDataProvider {
                 root = get("/v7/finance/quote", params, session.cookie());
             } catch (ProviderException exception) {
                 if (!isAuthFailure(exception)) throw exception;
+                log.warn("Yahoo quote authentication rejected reason={}; refreshing quote session", exception.getMessage());
                 clearQuoteSession();
                 session = quoteSession();
                 params.put("crumb", session.crumb());
@@ -288,11 +289,11 @@ public class YahooFinanceProvider implements MarketDataProvider {
 
     private QuoteCandidate latestCandidate(JsonNode quote) {
         List<QuoteCandidate> candidates = new ArrayList<>();
-        addCandidate(candidates, quote, "regularMarketPrice", "regularMarketTime", 0);
-        addCandidate(candidates, quote, "preMarketPrice", "preMarketTime", 1);
-        addCandidate(candidates, quote, "extendedMarketPrice", "extendedMarketTime", 2);
-        addCandidate(candidates, quote, "postMarketPrice", "postMarketTime", 3);
-        addCandidate(candidates, quote, "overnightMarketPrice", "overnightMarketTime", 4);
+        addCandidate(candidates, quote, "regularMarketPrice", "regularMarketTime", 0, QuoteSession.REGULAR);
+        addCandidate(candidates, quote, "preMarketPrice", "preMarketTime", 1, QuoteSession.PRE_MARKET);
+        addCandidate(candidates, quote, "extendedMarketPrice", "extendedMarketTime", 2, QuoteSession.EXTENDED);
+        addCandidate(candidates, quote, "postMarketPrice", "postMarketTime", 3, QuoteSession.POST_MARKET);
+        addCandidate(candidates, quote, "overnightMarketPrice", "overnightMarketTime", 4, QuoteSession.OVERNIGHT);
         QuoteCandidate timestamped = candidates.stream()
                 .filter(candidate -> candidate.timestamp() != null)
                 .max(Comparator.comparing(QuoteCandidate::timestamp).thenComparingInt(QuoteCandidate::priority))
@@ -304,10 +305,10 @@ public class YahooFinanceProvider implements MarketDataProvider {
     }
 
     private static void addCandidate(List<QuoteCandidate> candidates, JsonNode quote,
-                                     String priceField, String timeField, int priority) {
+                                     String priceField, String timeField, int priority, QuoteSession session) {
         BigDecimal price = decimal(quote, priceField);
         if (price == null || price.signum() <= 0) return;
-        candidates.add(new QuoteCandidate(price, instant(quote, timeField), priority));
+        candidates.add(new QuoteCandidate(price, instant(quote, timeField), priority, session));
     }
 
     private YahooQuoteSession quoteSession() {
@@ -322,6 +323,7 @@ public class YahooFinanceProvider implements MarketDataProvider {
             String crumb = fetchCrumb(cookie);
             YahooQuoteSession refreshed = new YahooQuoteSession(cookie, crumb, now.plus(QUOTE_SESSION_TTL));
             quoteSession = refreshed;
+            log.debug("Yahoo quote session initialized ttlMinutes={}", QUOTE_SESSION_TTL.toMinutes());
             return refreshed;
         }
     }
@@ -551,6 +553,6 @@ public class YahooFinanceProvider implements MarketDataProvider {
         }
     }
 
-    private record QuoteCandidate(BigDecimal price, Instant timestamp, int priority) { }
+    private record QuoteCandidate(BigDecimal price, Instant timestamp, int priority, QuoteSession session) { }
     private record YahooQuoteSession(String cookie, String crumb, Instant expiresAt) { }
 }

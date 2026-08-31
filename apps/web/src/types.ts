@@ -1,4 +1,5 @@
 export type DataStatus = 'FRESH' | 'STALE' | 'PARTIAL' | 'UNAVAILABLE' | 'INSUFFICIENT_HISTORY'
+export type QuoteSession = 'REGULAR' | 'PRE_MARKET' | 'EXTENDED' | 'POST_MARKET' | 'OVERNIGHT' | 'REGULAR_FALLBACK' | 'UNKNOWN'
 
 export interface DataMeta {
   status: DataStatus
@@ -41,6 +42,7 @@ export interface Quote {
   retrievedAt: string
   source: string
   status?: DataStatus
+  quoteSession?: QuoteSession
   nav?: string | null
   navDate?: string | null
 }

@@ -37,7 +37,7 @@ class YahooFinanceProviderQuoteTest {
     }
 
     @Test
-    void usesPriorTradingSessionInsteadOfChartWindowBaselineForDailyChange() {
+    void marksRegularChartAsDegradedWhenLiveQuoteEndpointFails() {
         long aug26 = Instant.parse("2026-08-26T20:00:00Z").getEpochSecond();
         long aug27 = Instant.parse("2026-08-27T20:00:00Z").getEpochSecond();
         long aug28 = Instant.parse("2026-08-28T20:00:00Z").getEpochSecond();
@@ -66,6 +66,8 @@ class YahooFinanceProviderQuoteTest {
 
         assertEquals(0, quote.price().compareTo(new java.math.BigDecimal("707.24")));
         assertEquals(0, quote.previousClose().compareTo(new java.math.BigDecimal("708.75")));
+        assertEquals(QuoteSession.REGULAR_FALLBACK, quote.session());
+        assertEquals(Instant.ofEpochSecond(aug28), quote.marketTimestamp());
     }
 
     private static void respond(HttpExchange exchange, String body) throws IOException {

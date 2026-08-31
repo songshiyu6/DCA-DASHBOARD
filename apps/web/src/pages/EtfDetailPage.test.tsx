@@ -78,7 +78,7 @@ describe('ETF detail metrics', () => {
     ))
 
     renderPage()
-    fireEvent.click(await screen.findByRole('button', { name: '1D' }))
+    fireEvent.click(await screen.findByRole('tab', { name: '1D' }))
     expect((await screen.findAllByText('Current trading session has no intraday bars yet')).length).toBeGreaterThan(0)
 
     fireEvent.click(screen.getAllByRole('button', { name: /Retry/i })[0])
@@ -105,7 +105,7 @@ describe('ETF detail metrics', () => {
     })
 
     renderPage()
-    fireEvent.click(await screen.findByRole('button', { name: '1D' }))
+    fireEvent.click(await screen.findByRole('tab', { name: '1D' }))
     expect((await screen.findAllByText('Current trading session has no intraday bars yet')).length).toBeGreaterThan(0)
 
     act(() => {

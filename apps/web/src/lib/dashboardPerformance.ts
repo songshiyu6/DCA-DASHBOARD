@@ -80,6 +80,21 @@ export function latestDayPerformance(history: PortfolioHistoryPoint[]): PeriodPe
   return { pnl: pnl.toString(), returnRate: pnl.div(openingValue).toString() }
 }
 
+export function livePerformanceSinceLastClose(
+  history: PortfolioHistoryPoint[],
+  marketValue: string | undefined,
+  netInvested: string | undefined,
+): PeriodPerformance {
+  if (!marketValue || !netInvested) return { pnl: null, returnRate: null }
+  const previous = validPoints(history).at(-1)
+  if (!previous) return { pnl: null, returnRate: null }
+  const openingValue = decimal(previous.marketValue)
+  if (openingValue.lte(0)) return { pnl: null, returnRate: null }
+  const externalFlow = decimal(netInvested).minus(previous.netInvested)
+  const pnl = decimal(marketValue).minus(openingValue).minus(externalFlow)
+  return { pnl: pnl.toString(), returnRate: pnl.div(openingValue).toString() }
+}
+
 export function timeWeightedReturn(history: PortfolioHistoryPoint[], startDay?: string): string | null {
   const points = validPoints(history)
   if (!points.length) return null

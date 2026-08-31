@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { annualizedTimeWeightedReturn, CHART_RANGE_OPTIONS, filterPortfolioHistory, latestDayPerformance, portfolioRangeStartDay, timeWeightedReturn, withCurrentPortfolioPoint, ytdPerformance, ytdTimeWeightedReturn } from './dashboardPerformance'
+import { annualizedTimeWeightedReturn, CHART_RANGE_OPTIONS, filterPortfolioHistory, latestDayPerformance, livePerformanceSinceLastClose, portfolioRangeStartDay, timeWeightedReturn, withCurrentPortfolioPoint, ytdPerformance, ytdTimeWeightedReturn } from './dashboardPerformance'
 import type { PortfolioHistoryPoint } from '../types'
 
 const point = (date: string, marketValue: string, netInvested: string): PortfolioHistoryPoint => ({ date, marketValue, netInvested, dataStatus: 'FRESH' })
@@ -13,6 +13,18 @@ describe('dashboard performance', () => {
 
     expect(Number(result.pnl)).toBeCloseTo(100, 8)
     expect(Number(result.returnRate)).toBeCloseTo(0.1, 8)
+  })
+
+  it('measures live session profit from the last regular close without replacing that close', () => {
+    const history = [
+      point('2026-08-27', '1000', '1000'),
+      point('2026-08-28', '1010', '1000'),
+    ]
+    const result = livePerformanceSinceLastClose(history, '1040', '1010')
+
+    expect(Number(result.pnl)).toBeCloseTo(20, 8)
+    expect(Number(result.returnRate)).toBeCloseTo(20 / 1010, 8)
+    expect(history.at(-1)?.marketValue).toBe('1010')
   })
 
   it('calculates time-weighted return without treating later contributions as performance', () => {

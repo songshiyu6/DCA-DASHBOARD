@@ -159,8 +159,11 @@ class ObservabilityMetricsTest {
         transactionService.preview(new MockMultipartFile("file", "transactions.csv", "text/csv",
                 "date,type,symbol,quantity,price,fee\n2026-08-01,BUY,VOO,1,100,0\n2026-08-01,BUY,VOO,1.0,100.00,0\n".getBytes()));
 
-        assertEquals(2, registry.find(ObservabilityMetrics.PORTFOLIO_REPLAY).tag("mode", "current").timer().count());
-        assertEquals(2, registry.find(ObservabilityMetrics.PORTFOLIO_REPLAY_TRANSACTIONS).tag("mode", "current")
+        assertEquals(1, registry.find(ObservabilityMetrics.PORTFOLIO_REPLAY).tag("mode", "current").timer().count());
+        assertEquals(1, registry.find(ObservabilityMetrics.PORTFOLIO_REPLAY_TRANSACTIONS).tag("mode", "current")
+                .summary().count());
+        assertEquals(1, registry.find(ObservabilityMetrics.PORTFOLIO_REPLAY).tag("mode", "regular-close").timer().count());
+        assertEquals(1, registry.find(ObservabilityMetrics.PORTFOLIO_REPLAY_TRANSACTIONS).tag("mode", "regular-close")
                 .summary().count());
         assertEquals(1, registry.find(ObservabilityMetrics.SNAPSHOT_REBUILD).timer().count());
         assertEquals(1, registry.find(ObservabilityMetrics.SNAPSHOT_INVALIDATE).tag("mode", "from").timer().count());

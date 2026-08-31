@@ -4,7 +4,7 @@ import { ArrowUpRight, CalendarDays, ChevronRight, CircleDollarSign, Download, R
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
-import { annualizedTimeWeightedReturn, CHART_RANGE_OPTIONS, filterPortfolioHistory, latestDayPerformance, portfolioRangeStartDay, withCurrentPortfolioPoint, ytdPerformance, type ChartRange } from '../lib/dashboardPerformance'
+import { annualizedTimeWeightedReturn, CHART_RANGE_OPTIONS, filterPortfolioHistory, livePerformanceSinceLastClose, portfolioRangeStartDay, withCurrentPortfolioPoint, ytdPerformance, type ChartRange } from '../lib/dashboardPerformance'
 import { decimal, decimalMax, decimalMin, formatDate, formatMoney, formatPeriod, formatShares, formatSignedMoney, formatSignedPercent, formatPercent } from '../lib/format'
 import { isInitialContributionPeriod } from '../lib/initialContributionPresentation'
 import { queryKeys } from '../lib/queryKeys'
@@ -70,19 +70,21 @@ export function DashboardPage() {
   const initialRefreshDone = useRef(false)
   const rawData = dashboard.data?.data
   const symbols = useMemo(() => rawData?.holdings.map((holding) => holding.symbol).filter(Boolean) ?? [], [rawData?.holdings])
-  const currentHistory = useMemo(() => withCurrentPortfolioPoint(
-    rawData?.portfolioHistory ?? [],
+  const regularHistory = useMemo(() => rawData?.portfolioHistory ?? [], [rawData?.portfolioHistory])
+  const livePerformanceHistory = useMemo(() => withCurrentPortfolioPoint(
+    regularHistory,
     rawData?.summary.marketValue,
     rawData?.summary.netInvested,
     dashboard.data?.meta.retrievedAt,
     dashboard.data?.meta.status ?? 'STALE',
-  ), [rawData?.portfolioHistory, rawData?.summary.marketValue, rawData?.summary.netInvested, dashboard.data?.meta.retrievedAt, dashboard.data?.meta.status])
-  const visibleHistory = useMemo(() => filterPortfolioHistory(currentHistory, chartRange), [currentHistory, chartRange])
-  const cagr = useMemo(() => annualizedTimeWeightedReturn(currentHistory), [currentHistory])
-  const chartRangeEnd = currentHistory.at(-1)?.date.slice(0, 10)
+  ), [regularHistory, rawData?.summary.marketValue, rawData?.summary.netInvested, dashboard.data?.meta.retrievedAt, dashboard.data?.meta.status])
+  const visibleHistory = useMemo(() => filterPortfolioHistory(regularHistory, chartRange), [regularHistory, chartRange])
+  const cagr = useMemo(() => annualizedTimeWeightedReturn(regularHistory), [regularHistory])
+  const chartRangeEnd = regularHistory.at(-1)?.date.slice(0, 10)
   const chartRangeStart = chartRangeEnd ? portfolioRangeStartDay(chartRangeEnd, chartRange) ?? undefined : undefined
-  const today = useMemo(() => latestDayPerformance(currentHistory), [currentHistory])
-  const ytd = useMemo(() => ytdPerformance(currentHistory), [currentHistory])
+  const today = useMemo(() => livePerformanceSinceLastClose(regularHistory, rawData?.summary.marketValue, rawData?.summary.netInvested), [regularHistory, rawData?.summary.marketValue, rawData?.summary.netInvested])
+  const regularYtd = useMemo(() => ytdPerformance(regularHistory), [regularHistory])
+  const liveYtd = useMemo(() => ytdPerformance(livePerformanceHistory), [livePerformanceHistory])
   const isZh = (i18n.resolvedLanguage ?? i18n.language).toLowerCase().startsWith('zh')
   const portfolioLabel = isZh ? '投资组合' : 'Portfolio'
   const portfolioOverviewLabel = isZh ? '投资组合总览' : 'Portfolio overview'
@@ -148,9 +150,9 @@ export function DashboardPage() {
   const cumulativeReturn = summary.totalPnl !== null && decimal(summary.netInvested).gt(0)
     ? decimal(summary.totalPnl).div(summary.netInvested).toString()
     : null
-  const ytdPnl = currentHistory.length && currentHistory[0].date.slice(0, 4) === currentHistory[currentHistory.length - 1].date.slice(0, 4)
+  const ytdPnl = liveYtd.pnl ?? (regularHistory.length && regularHistory[0].date.slice(0, 4) === regularHistory[regularHistory.length - 1].date.slice(0, 4)
     ? summary.totalPnl
-    : ytd.pnl
+    : null)
   const showInitialProgress = Boolean(progress && initialPeriod && progress.months.some((month) => isInitialContributionPeriod(month.period, month.status, activePlan?.startDate, initialPrincipal, month.executed)))
   return <div className="page dashboard-page dashboard-page-v2">
     <div className="page-intro dashboard-intro"><div><span className="page-eyebrow">{portfolioOverviewLabel}</span><h1>{t('dashboard.title')}</h1><p>{t('dashboard.subtitle')}</p></div><div className="page-actions"><button type="button" className="button button-ghost" onClick={() => void refreshMarket()} disabled={marketRefreshing || dashboard.isFetching}><RefreshCw size={15} className={marketRefreshing ? 'spin-icon' : undefined} />{marketRefreshing || dashboard.isFetching ? t('common.loading') : t('common.refresh')}</button><button type="button" className="button button-secondary" onClick={() => { exportDashboard(data) }}><Download size={15} />{t('common.export')}</button></div></div>
@@ -159,7 +161,7 @@ export function DashboardPage() {
       <MetricCard label={portfolioLabel} value={formatMoney(summary.marketValue)} detail={t('dashboard.trackedEtfs', { count: data.holdings.length })} icon={CircleDollarSign} tone="accent" />
       <MetricCard label={`${t('common.today')} ${pnlLabel}`} value={formatSignedMoney(today.pnl)} detail={formatSignedPercent(today.returnRate)} icon={TrendingUp} tone={trendClass(today.pnl) === 'trend-negative' ? 'negative' : 'positive'} />
       <MetricCard label={`${t('dashboard.sinceInception')} ${pnlLabel}`} value={formatSignedMoney(summary.totalPnl)} detail={formatSignedPercent(cumulativeReturn)} icon={TrendingUp} tone={trendClass(summary.totalPnl) === 'trend-negative' ? 'negative' : 'positive'} />
-      <MetricCard label={`YTD ${pnlLabel}`} value={formatSignedMoney(ytdPnl)} detail={formatSignedPercent(ytd.returnRate)} icon={ArrowUpRight} tone={trendClass(ytdPnl) === 'trend-negative' ? 'negative' : 'positive'} />
+      <MetricCard label={`YTD ${pnlLabel}`} value={formatSignedMoney(ytdPnl)} detail={formatSignedPercent(regularYtd.returnRate)} icon={ArrowUpRight} tone={trendClass(ytdPnl) === 'trend-negative' ? 'negative' : 'positive'} />
     </div>
     <div className="capital-summary-strip capital-summary-strip-overview" aria-label={`${costLabel}, CAGR, XIRR`}>
       <span className="capital-cost-block"><small>{costLabel}</small><strong>{formatMoney(summary.costBasis)}</strong></span>

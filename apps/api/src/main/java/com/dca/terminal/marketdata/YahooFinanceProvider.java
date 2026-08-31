@@ -11,27 +11,30 @@ import com.dca.terminal.marketdata.ProviderModels.SplitEvent;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
+import java.net.InetSocketAddress;
+import java.net.Proxy;
+import java.net.URI;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
-import java.net.InetSocketAddress;
-import java.net.URI;
-import java.net.Proxy;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.MediaType;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.MediaType;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
-import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.util.UriComponentsBuilder;
 
 @Component
@@ -40,9 +43,15 @@ public class YahooFinanceProvider implements MarketDataProvider {
     // old client with HTTP 429. A minimal UA is accepted by both query hosts
     // and still identifies this as a normal HTTP client.
     private static final String USER_AGENT = "Mozilla/5.0";
+    private static final String COOKIE_BOOTSTRAP_URL = "https://fc.yahoo.com";
+    private static final Duration QUOTE_SESSION_TTL = Duration.ofMinutes(45);
     private static final Logger log = LoggerFactory.getLogger(YahooFinanceProvider.class);
     private final RestClient client;
+    private final RestClient authClient;
     private final ObjectMapper objectMapper;
+    private final boolean authenticatedQuoteEndpoint;
+    private final Object quoteSessionLock = new Object();
+    private volatile YahooQuoteSession quoteSession;
 
     /** Keeps direct provider construction compatible with unit tests and small integrations. */
     public YahooFinanceProvider(
@@ -71,9 +80,15 @@ public class YahooFinanceProvider implements MarketDataProvider {
                 .requestFactory(factory)
                 .baseUrl(baseUrl)
                 .build();
+        this.authClient = RestClient.builder()
+                .defaultHeader("User-Agent", USER_AGENT)
+                .defaultHeader("Accept", MediaType.ALL_VALUE)
+                .requestFactory(factory)
+                .build();
         this.objectMapper = objectMapper;
-        log.info("Yahoo market-data client initialized host={} httpVersion=HTTP_1_1 proxyConfigured={}",
-                URI.create(baseUrl).getHost(), proxy != null);
+        this.authenticatedQuoteEndpoint = isOfficialYahooHost(baseUrl);
+        log.info("Yahoo market-data client initialized host={} httpVersion=HTTP_1_1 proxyConfigured={} quoteAuth={}",
+                URI.create(baseUrl).getHost(), proxy != null, authenticatedQuoteEndpoint);
     }
 
     @Override
@@ -106,6 +121,33 @@ public class YahooFinanceProvider implements MarketDataProvider {
 
     @Override
     public ProviderQuote getLatestQuote(InstrumentEntity instrument) {
+        try {
+            JsonNode quote = quoteResult(instrument.getSymbol());
+            QuoteCandidate latest = latestCandidate(quote);
+            if (latest == null) {
+                throw new ProviderException(id(), "Yahoo returned no valid live quote", false);
+            }
+            BigDecimal previousClose = decimal(quote, "regularMarketPreviousClose");
+            if (previousClose == null) previousClose = decimal(quote, "previousClose");
+            if (previousClose == null) {
+                try {
+                    previousClose = regularChartQuote(instrument).previousClose();
+                } catch (ProviderException ignored) {
+                    // A current live price remains useful even if the prior regular close is temporarily unavailable.
+                }
+            }
+            return new ProviderQuote(latest.price(), previousClose, decimal(quote, "bid"), decimal(quote, "ask"),
+                    latest.timestamp(), Instant.now());
+        } catch (ProviderException exception) {
+            // v7 quote requires Yahoo cookie/crumb auth and can change independently from the chart edge.
+            // Preserve quote availability with the regular-session chart if that authenticated endpoint is down.
+            log.debug("Yahoo live/extended quote unavailable ticker={} reason={}; falling back to regular chart quote",
+                    instrument.getSymbol(), exception.getMessage());
+            return regularChartQuote(instrument);
+        }
+    }
+
+    private ProviderQuote regularChartQuote(InstrumentEntity instrument) {
         JsonNode result = chart(instrument.getSymbol(), "5d", "1d", null, null);
         JsonNode chart = chartResult(result);
         JsonNode meta = chart.path("meta");
@@ -121,7 +163,7 @@ public class YahooFinanceProvider implements MarketDataProvider {
             throw new ProviderException(id(), "Yahoo returned no valid regular market price", false);
         }
         return new ProviderQuote(price, previousClose, decimal(meta, "bid"), decimal(meta, "ask"),
-                        timestamp, Instant.now());
+                timestamp, Instant.now());
     }
 
     @Override
@@ -146,7 +188,7 @@ public class YahooFinanceProvider implements MarketDataProvider {
 
     @Override
     public List<IntradayBar> getIntradayPrices(InstrumentEntity instrument, LocalDate from, LocalDate to) {
-        JsonNode result = chart(instrument.getSymbol(), null, "5m", from, to.plusDays(1));
+        JsonNode result = chart(instrument.getSymbol(), null, "5m", from, to.plusDays(1), "div,splits", true);
         JsonNode chart = chartResult(result);
         JsonNode timestamps = chart.path("timestamp");
         JsonNode quote = chart.path("indicators").path("quote").path(0);
@@ -216,6 +258,147 @@ public class YahooFinanceProvider implements MarketDataProvider {
         return events;
     }
 
+    private JsonNode quoteResult(String symbol) {
+        java.util.Map<String, String> params = new java.util.HashMap<>();
+        params.put("symbols", symbol);
+        params.put("formatted", "false");
+        params.put("overnightPrice", "true");
+        JsonNode root;
+        if (!authenticatedQuoteEndpoint) {
+            root = get("/v7/finance/quote", params);
+        } else {
+            YahooQuoteSession session = quoteSession();
+            params.put("crumb", session.crumb());
+            try {
+                root = get("/v7/finance/quote", params, session.cookie());
+            } catch (ProviderException exception) {
+                if (!isAuthFailure(exception)) throw exception;
+                clearQuoteSession();
+                session = quoteSession();
+                params.put("crumb", session.crumb());
+                root = get("/v7/finance/quote", params, session.cookie());
+            }
+        }
+        JsonNode results = root.path("quoteResponse").path("result");
+        if (!results.isArray() || results.isEmpty() || !results.get(0).isObject()) {
+            throw new ProviderException(id(), "Yahoo returned an empty live quote", false);
+        }
+        return results.get(0);
+    }
+
+    private QuoteCandidate latestCandidate(JsonNode quote) {
+        List<QuoteCandidate> candidates = new ArrayList<>();
+        addCandidate(candidates, quote, "regularMarketPrice", "regularMarketTime", 0);
+        addCandidate(candidates, quote, "preMarketPrice", "preMarketTime", 1);
+        addCandidate(candidates, quote, "extendedMarketPrice", "extendedMarketTime", 2);
+        addCandidate(candidates, quote, "postMarketPrice", "postMarketTime", 3);
+        addCandidate(candidates, quote, "overnightMarketPrice", "overnightMarketTime", 4);
+        QuoteCandidate timestamped = candidates.stream()
+                .filter(candidate -> candidate.timestamp() != null)
+                .max(Comparator.comparing(QuoteCandidate::timestamp).thenComparingInt(QuoteCandidate::priority))
+                .orElse(null);
+        if (timestamped != null) return timestamped;
+        // Never let an untimestamped stale extended-hours field override a valid regular quote.
+        return candidates.stream().filter(candidate -> candidate.priority() == 0).findFirst()
+                .orElse(candidates.isEmpty() ? null : candidates.getLast());
+    }
+
+    private static void addCandidate(List<QuoteCandidate> candidates, JsonNode quote,
+                                     String priceField, String timeField, int priority) {
+        BigDecimal price = decimal(quote, priceField);
+        if (price == null || price.signum() <= 0) return;
+        candidates.add(new QuoteCandidate(price, instant(quote, timeField), priority));
+    }
+
+    private YahooQuoteSession quoteSession() {
+        YahooQuoteSession existing = quoteSession;
+        Instant now = Instant.now();
+        if (existing != null && existing.expiresAt().isAfter(now)) return existing;
+        synchronized (quoteSessionLock) {
+            existing = quoteSession;
+            now = Instant.now();
+            if (existing != null && existing.expiresAt().isAfter(now)) return existing;
+            String cookie = fetchSessionCookie();
+            String crumb = fetchCrumb(cookie);
+            YahooQuoteSession refreshed = new YahooQuoteSession(cookie, crumb, now.plus(QUOTE_SESSION_TTL));
+            quoteSession = refreshed;
+            return refreshed;
+        }
+    }
+
+    private String fetchSessionCookie() {
+        try {
+            List<String> setCookies = authClient.get().uri(COOKIE_BOOTSTRAP_URL).exchange((request, response) -> {
+                List<String> headers = response.getHeaders().get("Set-Cookie");
+                return headers == null ? List.of() : List.copyOf(headers);
+            });
+            String cookie = setCookies.stream()
+                    .map(YahooFinanceProvider::cookiePair)
+                    .filter(value -> !value.isBlank())
+                    .distinct()
+                    .collect(Collectors.joining("; "));
+            if (cookie.isBlank()) {
+                throw new ProviderException(id(), "Yahoo quote session cookie was unavailable", true);
+            }
+            return cookie;
+        } catch (ResourceAccessException exception) {
+            throw new ProviderException(id(), "Yahoo quote session bootstrap was unreachable", true, exception);
+        } catch (ProviderException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new ProviderException(id(), "Yahoo quote session could not be created", true, exception);
+        }
+    }
+
+    private String fetchCrumb(String cookie) {
+        try {
+            String crumb = client.get().uri("/v1/test/getcrumb")
+                    .header("Cookie", cookie)
+                    .retrieve().body(String.class);
+            if (crumb == null || crumb.isBlank() || crumb.length() > 256
+                    || crumb.toLowerCase().contains("too many requests") || crumb.contains("<")) {
+                throw new ProviderException(id(), "Yahoo returned an invalid quote crumb", true);
+            }
+            return crumb.trim();
+        } catch (RestClientResponseException exception) {
+            boolean retryable = exception.getStatusCode().value() == 429 || exception.getStatusCode().is5xxServerError();
+            throw new ProviderException(id(), "Yahoo crumb HTTP " + exception.getStatusCode().value(), retryable, exception);
+        } catch (ResourceAccessException exception) {
+            throw new ProviderException(id(), "Yahoo quote crumb request was unreachable", true, exception);
+        } catch (ProviderException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new ProviderException(id(), "Yahoo quote crumb could not be decoded", true, exception);
+        }
+    }
+
+    private void clearQuoteSession() {
+        synchronized (quoteSessionLock) {
+            quoteSession = null;
+        }
+    }
+
+    private static boolean isAuthFailure(ProviderException exception) {
+        String message = exception.getMessage();
+        return message != null && (message.contains("401") || message.contains("403"));
+    }
+
+    private static String cookiePair(String setCookie) {
+        if (setCookie == null) return "";
+        int separator = setCookie.indexOf(';');
+        return (separator < 0 ? setCookie : setCookie.substring(0, separator)).trim();
+    }
+
+    private static boolean isOfficialYahooHost(String baseUrl) {
+        try {
+            String host = URI.create(baseUrl).getHost();
+            return host != null && (host.equalsIgnoreCase("yahoo.com")
+                    || host.toLowerCase().endsWith(".yahoo.com"));
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
     private JsonNode chartResult(JsonNode root) {
         JsonNode result = root.path("chart").path("result");
         if (!result.isArray() || result.size() == 0 || !result.get(0).isObject()) {
@@ -229,9 +412,15 @@ public class YahooFinanceProvider implements MarketDataProvider {
     }
 
     private JsonNode chart(String symbol, String range, String interval, LocalDate from, LocalDate to, String events) {
+        return chart(symbol, range, interval, from, to, events, false);
+    }
+
+    private JsonNode chart(String symbol, String range, String interval, LocalDate from, LocalDate to,
+                           String events, boolean includePrePost) {
         java.util.Map<String, String> params = new java.util.HashMap<>();
         params.put("interval", interval);
         params.put("events", events);
+        if (includePrePost) params.put("includePrePost", "true");
         if (range != null) {
             params.put("range", range);
         } else {
@@ -242,12 +431,20 @@ public class YahooFinanceProvider implements MarketDataProvider {
     }
 
     private JsonNode get(String path, java.util.Map<String, String> params) {
+        return get(path, params, null);
+    }
+
+    private JsonNode get(String path, java.util.Map<String, String> params, String cookie) {
         try {
             UriComponentsBuilder uri = UriComponentsBuilder.fromPath(path);
             params.forEach(uri::queryParam);
             URI requestUri = uri.build().encode().toUri();
-            JsonNode body = client.get().uri(requestUri).retrieve().body(JsonNode.class);
-            if (body == null || body.path("chart").path("error").isObject()) {
+            RestClient.RequestHeadersSpec<?> request = client.get().uri(requestUri);
+            if (cookie != null && !cookie.isBlank()) request.header("Cookie", cookie);
+            JsonNode body = request.retrieve().body(JsonNode.class);
+            if (body == null
+                    || body.path("chart").path("error").isObject()
+                    || body.path("quoteResponse").path("error").isObject()) {
                 throw new ProviderException(id(), "Yahoo returned an empty or invalid response", false);
             }
             return body;
@@ -353,4 +550,7 @@ public class YahooFinanceProvider implements MarketDataProvider {
             return ZoneOffset.UTC;
         }
     }
+
+    private record QuoteCandidate(BigDecimal price, Instant timestamp, int priority) { }
+    private record YahooQuoteSession(String cookie, String crumb, Instant expiresAt) { }
 }

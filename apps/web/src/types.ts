@@ -226,7 +226,6 @@ export interface ContributionBatch {
 }
 
 export interface ContributionBucket {
-  plannedPrincipal: string | null
   principal: string
   value: string | null
   pnl: string | null
@@ -241,6 +240,7 @@ export interface UnclassifiedBuy {
   tradeDate: string
   symbol: string
   principal: string
+  eligibleForInitial: boolean
 }
 
 export interface ContributionAnalysis {
@@ -249,9 +249,42 @@ export interface ContributionAnalysis {
   dca: ContributionBucket
   unclassifiedAmount: string
   unclassifiedBuys: UnclassifiedBuy[]
+  unclassifiedScope: 'ACCOUNT'
   batches: ContributionBatch[]
   dataStatus: DataStatus
   asOf: string
+}
+
+export type ContributionClassification = 'INITIAL' | 'UNPLANNED'
+
+export interface ContributionClassificationItem {
+  transactionId: string
+  classification: ContributionClassification
+}
+
+export interface ContributionClassificationError {
+  code: string
+  message: string
+}
+
+export interface ContributionClassificationPreviewItem extends ContributionClassificationItem {
+  tradeDate: string | null
+  symbol: string | null
+  principal: string | null
+  valid: boolean
+  errors: ContributionClassificationError[]
+}
+
+export interface ContributionClassificationPreview {
+  previewHash: string | null
+  valid: boolean
+  items: ContributionClassificationPreviewItem[]
+}
+
+export interface ContributionClassificationCommit {
+  batchId: string
+  transactionIds: string[]
+  analysis: ContributionAnalysis
 }
 
 export interface NextDca {

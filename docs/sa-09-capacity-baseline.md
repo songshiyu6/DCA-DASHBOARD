@@ -1,5 +1,9 @@
 # SA-09 capacity baseline
 
+> Historical H2 capacity evidence for the SA-09 commit only. It is not a
+> current PostgreSQL production benchmark; see
+> [`next-development-plan.md`](./next-development-plan.md) for follow-up work.
+
 Generated data, not a real account. No speculative index or cache was added.
 
 Measured in `CapacityBaselineTest` on H2 (`application-test`), Java 21, after 9A shared current ledger projection.

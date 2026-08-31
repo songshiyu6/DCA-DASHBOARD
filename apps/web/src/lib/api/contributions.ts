@@ -1,4 +1,4 @@
-import type { ContributionAnalysis, ContributionBatch, ContributionBucket, ContributionType, DataStatus, UnclassifiedBuy } from '../../types'
+import type { ContributionAnalysis, ContributionBatch, ContributionBucket, ContributionClassificationCommit, ContributionClassificationItem, ContributionClassificationPreview, ContributionType, DataStatus, UnclassifiedBuy } from '../../types'
 import { apiMeta, request, type ApiResponse } from './transport'
 import { normalizeResult } from './normalize'
 
@@ -29,7 +29,6 @@ function contributionType(value: unknown): ContributionType {
 function normalizeBucket(value: unknown): ContributionBucket {
   const body = isRecord(value) ? value : {}
   return {
-    plannedPrincipal: nullableString(body.plannedPrincipal),
     principal: stringValue(body.principal),
     value: nullableString(body.value),
     pnl: nullableString(body.pnl),
@@ -61,6 +60,7 @@ function normalizeUnclassified(value: unknown): UnclassifiedBuy | null {
     tradeDate: typeof value.tradeDate === 'string' ? value.tradeDate : '',
     symbol: typeof value.symbol === 'string' ? value.symbol : '',
     principal: stringValue(value.principal),
+    eligibleForInitial: value.eligibleForInitial === true,
   }
 }
 
@@ -76,9 +76,45 @@ export function normalizeContributionAnalysis(value: unknown): ContributionAnaly
     dca: normalizeBucket(body.dca),
     unclassifiedAmount: stringValue(body.unclassifiedAmount),
     unclassifiedBuys,
+    unclassifiedScope: 'ACCOUNT',
     batches,
     dataStatus: status(body.dataStatus),
     asOf: typeof body.asOf === 'string' ? body.asOf : '',
+  }
+}
+
+function normalizeClassificationPreview(value: unknown): ContributionClassificationPreview {
+  const body = isRecord(value) ? value : {}
+  const items = Array.isArray(body.items) ? body.items.flatMap((item) => {
+    if (!isRecord(item) || typeof item.transactionId !== 'string') return []
+    const classification = item.classification === 'INITIAL' ? 'INITIAL' as const : 'UNPLANNED' as const
+    const errors = Array.isArray(item.errors) ? item.errors.flatMap((error) => {
+      if (!isRecord(error) || typeof error.code !== 'string' || typeof error.message !== 'string') return []
+      return [{ code: error.code, message: error.message }]
+    }) : []
+    return [{
+      transactionId: item.transactionId,
+      classification,
+      tradeDate: typeof item.tradeDate === 'string' ? item.tradeDate : null,
+      symbol: typeof item.symbol === 'string' ? item.symbol : null,
+      principal: nullableString(item.principal),
+      valid: item.valid === true,
+      errors,
+    }]
+  }) : []
+  return {
+    previewHash: typeof body.previewHash === 'string' ? body.previewHash : null,
+    valid: body.valid === true,
+    items,
+  }
+}
+
+function normalizeClassificationCommit(value: unknown): ContributionClassificationCommit {
+  const body = isRecord(value) ? value : {}
+  return {
+    batchId: typeof body.batchId === 'string' ? body.batchId : '',
+    transactionIds: Array.isArray(body.transactionIds) ? body.transactionIds.filter((id): id is string => typeof id === 'string') : [],
+    analysis: normalizeContributionAnalysis(body.analysis),
   }
 }
 
@@ -88,22 +124,20 @@ export const contributionsApi = {
     normalizeContributionAnalysis,
     apiMeta(),
   ),
-  updateInitialCapital: async (planId: string, amount: string | null): ApiResponse<ContributionAnalysis> => normalizeResult(
-    await request<unknown>(`/plans/${encodeURIComponent(planId)}/initial-capital`, {
-      method: 'PUT',
-      body: JSON.stringify({ amount }),
+  previewContributionClassifications: async (planId: string, items: ContributionClassificationItem[]): ApiResponse<ContributionClassificationPreview> => normalizeResult(
+    await request<unknown>(`/plans/${encodeURIComponent(planId)}/contribution-classifications/preview`, {
+      method: 'POST',
+      body: JSON.stringify({ items }),
     }),
-    normalizeContributionAnalysis,
+    normalizeClassificationPreview,
     apiMeta(),
   ),
-  classifyInitialContribution: async (planId: string, transactionId: string): ApiResponse<ContributionAnalysis> => normalizeResult(
-    await request<unknown>(`/plans/${encodeURIComponent(planId)}/contributions/${encodeURIComponent(transactionId)}/initial`, { method: 'PUT' }),
-    normalizeContributionAnalysis,
-    apiMeta(),
-  ),
-  unclassifyInitialContribution: async (planId: string, transactionId: string): ApiResponse<ContributionAnalysis> => normalizeResult(
-    await request<unknown>(`/plans/${encodeURIComponent(planId)}/contributions/${encodeURIComponent(transactionId)}/initial`, { method: 'DELETE' }),
-    normalizeContributionAnalysis,
+  commitContributionClassifications: async (planId: string, previewHash: string, items: ContributionClassificationItem[]): ApiResponse<ContributionClassificationCommit> => normalizeResult(
+    await request<unknown>(`/plans/${encodeURIComponent(planId)}/contribution-classifications/commit`, {
+      method: 'POST',
+      body: JSON.stringify({ previewHash, items }),
+    }),
+    normalizeClassificationCommit,
     apiMeta(),
   ),
 }

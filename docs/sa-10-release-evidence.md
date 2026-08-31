@@ -1,5 +1,9 @@
 # SA-10 release evidence
 
+> Historical release evidence for the commit recorded below. It predates
+> `V014`-`V017`, the Contributions workspace, and later live-valuation changes; use
+> [`agent-handoff.md`](./agent-handoff.md) for current evidence.
+
 ```text
 工作包：SA-10
 分支：agent/10-release-integration

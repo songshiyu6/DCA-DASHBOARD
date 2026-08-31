@@ -4,7 +4,9 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -30,6 +32,14 @@ public interface TransactionRepository extends JpaRepository<TransactionEntity, 
     boolean existsByImportFingerprint(String fingerprint);
     boolean existsByContributionTypeAndContributionPlanIdAndTradeDateBetween(
             ContributionType contributionType, UUID contributionPlanId, LocalDate from, LocalDate to);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select tx from TransactionEntity tx
+            join fetch tx.instrument
+            where tx.id in :ids
+            """)
+    List<TransactionEntity> findAllByIdInForUpdate(@Param("ids") List<UUID> ids);
 
     @Query(value = "SELECT nextval('transaction_ledger_order_seq')", nativeQuery = true)
     long nextLedgerOrder();

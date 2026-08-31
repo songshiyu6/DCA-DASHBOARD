@@ -1,4 +1,4 @@
-import type { ApiResult, AppSettings, ContributionAnalysis, ContributionBatch, DashboardData, EtfMetrics, Instrument, InstrumentSyncResult, InvestmentPlan, PlanCycle, PricePoint, Quote, Recommendation, Session, Transaction, TransactionCsvRow, TransactionImportCommit, TransactionImportPreview, TransactionInput } from '../../types'
+import type { ApiResult, AppSettings, ContributionAnalysis, ContributionBatch, ContributionClassificationCommit, ContributionClassificationItem, ContributionClassificationPreview, DashboardData, EtfMetrics, Instrument, InstrumentSyncResult, InvestmentPlan, PlanCycle, PricePoint, Quote, Recommendation, Session, Transaction, TransactionCsvRow, TransactionImportCommit, TransactionImportPreview, TransactionInput } from '../../types'
 import {
   createFixturePlan,
   createFixtureTransaction,
@@ -30,8 +30,8 @@ import { decimal } from '../format'
 
 const fixtureMeta = { status: 'STALE' as const, source: 'FIXTURE', message: 'Demo data only. This workspace is not connected to the API.' }
 const DEMO_TODAY = '2026-08-27'
-let demoInitialCapital: string | null = '18000.00'
 const demoInitialTransactions = new Set<string>()
+const demoUnplannedTransactions = new Set<string>()
 
 function localImportPreview(csv: string): ApiResult<TransactionImportPreview> {
   const parsed = parseTransactionCsv(csv)
@@ -99,7 +99,7 @@ function demoContributionAnalysis(): ApiResult<ContributionAnalysis> {
     rows.push(transaction)
     dcaGroups.set(period, rows)
   }
-  const unclassified = transactions.filter((transaction) => transaction.transactionType === 'BUY' && !transaction.planCycleId && !demoInitialTransactions.has(transaction.id))
+  const unclassified = transactions.filter((transaction) => transaction.transactionType === 'BUY' && !transaction.planCycleId && !demoInitialTransactions.has(transaction.id) && !demoUnplannedTransactions.has(transaction.id))
   const initialBatch = batchFromTransactions('INITIAL', null, initialTransactions)
   const dcaBatches = [...dcaGroups.entries()].map(([period, rows]) => batchFromTransactions('DCA', period, rows)).sort((left, right) => (right.period ?? '').localeCompare(left.period ?? ''))
   const dcaPrincipal = dcaBatches.reduce((sum, batch) => sum.plus(batch.principal), decimal(0))
@@ -110,16 +110,42 @@ function demoContributionAnalysis(): ApiResult<ContributionAnalysis> {
   return {
     data: {
       totalInvested: decimal(initialBatch.principal).plus(dcaPrincipal).toString(),
-      initial: { plannedPrincipal: demoInitialCapital, principal: initialBatch.principal, value: initialBatch.value, pnl: initialBatch.pnl, returnRate: initialBatch.returnRate, averageMarketDays: initialBatch.averageMarketDays, batchCount: decimal(initialBatch.principal).gt(0) ? 1 : 0, dataStatus: 'STALE' },
-      dca: { plannedPrincipal: null, principal: dcaPrincipal.toString(), value: dcaPrincipal.toString(), pnl: '0', returnRate: dcaPrincipal.gt(0) ? '0' : null, averageMarketDays: dcaAverageDays, batchCount: dcaBatches.length, dataStatus: 'STALE' },
+      initial: { principal: initialBatch.principal, value: initialBatch.value, pnl: initialBatch.pnl, returnRate: initialBatch.returnRate, averageMarketDays: initialBatch.averageMarketDays, batchCount: decimal(initialBatch.principal).gt(0) ? 1 : 0, dataStatus: 'STALE' },
+      dca: { principal: dcaPrincipal.toString(), value: dcaPrincipal.toString(), pnl: '0', returnRate: dcaPrincipal.gt(0) ? '0' : null, averageMarketDays: dcaAverageDays, batchCount: dcaBatches.length, dataStatus: 'STALE' },
       unclassifiedAmount: unclassifiedAmount.toString(),
-      unclassifiedBuys: unclassified.map((transaction) => ({ transactionId: transaction.id, tradeDate: transaction.tradeDate, symbol: transaction.instrumentSymbol, principal: buyPrincipal(transaction) })),
+      unclassifiedBuys: unclassified.map((transaction) => ({ transactionId: transaction.id, tradeDate: transaction.tradeDate, symbol: transaction.instrumentSymbol, principal: buyPrincipal(transaction), eligibleForInitial: transaction.tradeDate === getFixturePlan('core-plan').data.startDate })),
+      unclassifiedScope: 'ACCOUNT',
       batches,
       dataStatus: 'STALE',
       asOf: DEMO_TODAY,
     },
     meta: fixtureMeta,
   }
+}
+
+function demoClassificationPreview(items: ContributionClassificationItem[]): ApiResult<ContributionClassificationPreview> {
+  const transactions = new Map(getFixtureTransactions().data.map((transaction) => [transaction.id, transaction]))
+  const plan = getFixturePlan('core-plan').data
+  const previewItems = items.map((item) => {
+    const transaction = transactions.get(item.transactionId)
+    const errors = !transaction
+      ? [{ code: 'TRANSACTION_NOT_FOUND', message: 'Transaction not found' }]
+      : transaction.transactionType !== 'BUY' || transaction.planCycleId || demoInitialTransactions.has(transaction.id) || demoUnplannedTransactions.has(transaction.id)
+        ? [{ code: 'CONTRIBUTION_ALREADY_CLASSIFIED', message: 'Transaction cannot be classified' }]
+        : item.classification === 'INITIAL' && transaction.tradeDate !== plan.startDate
+          ? [{ code: 'INITIAL_CONTRIBUTION_START_DATE_ONLY', message: 'Initial capital is only allowed on the investment plan start date' }]
+          : []
+    return {
+      ...item,
+      tradeDate: transaction?.tradeDate ?? null,
+      symbol: transaction?.instrumentSymbol ?? null,
+      principal: transaction ? buyPrincipal(transaction) : null,
+      valid: errors.length === 0,
+      errors,
+    }
+  })
+  const valid = previewItems.every((item) => item.valid)
+  return { data: { previewHash: valid ? JSON.stringify(items) : null, valid, items: previewItems }, meta: fixtureMeta }
 }
 
 export const demoApi = {
@@ -161,17 +187,18 @@ export const demoApi = {
     return { ...result, data: normalizeRecommendation(result.data) }
   },
   getContributionAnalysis: async (_id: string): Promise<ApiResult<ContributionAnalysis>> => demoContributionAnalysis(),
-  updateInitialCapital: async (_id: string, amount: string | null): Promise<ApiResult<ContributionAnalysis>> => {
-    demoInitialCapital = amount
-    return demoContributionAnalysis()
-  },
-  classifyInitialContribution: async (_id: string, transactionId: string): Promise<ApiResult<ContributionAnalysis>> => {
-    demoInitialTransactions.add(transactionId)
-    return demoContributionAnalysis()
-  },
-  unclassifyInitialContribution: async (_id: string, transactionId: string): Promise<ApiResult<ContributionAnalysis>> => {
-    demoInitialTransactions.delete(transactionId)
-    return demoContributionAnalysis()
+  previewContributionClassifications: async (_id: string, items: ContributionClassificationItem[]): Promise<ApiResult<ContributionClassificationPreview>> => demoClassificationPreview(items),
+  commitContributionClassifications: async (_id: string, previewHash: string, items: ContributionClassificationItem[]): Promise<ApiResult<ContributionClassificationCommit>> => {
+    const preview = demoClassificationPreview(items)
+    if (!preview.data.valid || preview.data.previewHash !== previewHash) throw new Error('Contribution classification preview is stale')
+    for (const item of items) {
+      if (item.classification === 'INITIAL') demoInitialTransactions.add(item.transactionId)
+      else demoUnplannedTransactions.add(item.transactionId)
+    }
+    return {
+      data: { batchId: `demo-${Date.now()}`, transactionIds: items.map((item) => item.transactionId), analysis: demoContributionAnalysis().data },
+      meta: fixtureMeta,
+    }
   },
   getTransactions: async (): Promise<ApiResult<Transaction[]>> => getFixtureTransactions(),
   createTransaction: async (input: TransactionInput): Promise<ApiResult<Transaction>> => createFixtureTransaction(input),

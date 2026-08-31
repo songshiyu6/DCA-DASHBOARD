@@ -10,6 +10,14 @@ function jsonResponse(body: unknown, status = 200): Response {
   } as Response
 }
 
+function rawJsonResponse(body: string, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    text: async () => body,
+  } as Response
+}
+
 async function loadApi() {
   vi.resetModules()
   return import('./api')
@@ -33,6 +41,24 @@ afterEach(() => {
 })
 
 describe('API contract adapter', () => {
+  it('preserves NUMERIC(20,6) and NUMERIC(20,8) strings from raw JSON through normalizers', async () => {
+    const money = '99999999999999.123456'
+    const quantity = '999999999999.12345678'
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(rawJsonResponse(`{"totalInvested":"${money}","initial":{"principal":"${money}","value":"${money}","pnl":"0.000000","returnRate":"0","averageMarketDays":0,"batchCount":1,"dataStatus":"FRESH"},"dca":{"principal":"0.000000","value":"0.000000","pnl":"0.000000","averageMarketDays":0,"batchCount":0,"dataStatus":"FRESH"},"unclassifiedAmount":"0.000000","unclassifiedBuys":[],"unclassifiedScope":"ACCOUNT","batches":[],"dataStatus":"FRESH","asOf":"2026-08-31"}`))
+      .mockResolvedValueOnce(rawJsonResponse(`[{"id":"txn-1","instrumentSymbol":"VOO","transactionType":"BUY","tradeDate":"2026-08-31","quantity":"${quantity}","unitPrice":"${money}","amount":null,"fee":"0.000000","currency":"USD"}]`))
+    vi.stubGlobal('fetch', fetchMock)
+    const { api } = await loadApi()
+
+    const contribution = await api.getContributionAnalysis('plan-1')
+    const transactions = await api.getTransactions()
+
+    expect(contribution.data.totalInvested).toBe(money)
+    expect(contribution.data.initial.principal).toBe(money)
+    expect(transactions.data[0].quantity).toBe(quantity)
+    expect(transactions.data[0].unitPrice).toBe(money)
+  })
+
   it('normalizes data and top-level freshness metadata without coercing decimal strings', async () => {
     const { normalizeApiResponse } = await loadApi()
     const result = normalizeApiResponse<{ marketValue: string }>({ data: { marketValue: '28421.62' }, dataStatus: 'STALE', asOf: '2026-08-27', source: 'YAHOO' }, { status: 'FRESH', source: 'API' })

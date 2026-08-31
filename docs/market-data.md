@@ -1,4 +1,4 @@
-# DCA Terminal v1 Market Data
+# DCA Terminal Market Data
 
 ## Provider boundary
 
@@ -20,7 +20,7 @@ interface MarketDataProvider {
 }
 ```
 
-The registry resolves an ordered chain. The configured v1 default order is:
+The registry resolves an ordered chain. The current configured default order is:
 
 ```text
 Yahoo Finance -> Twelve Data (when configured) -> canonical identity catalog
@@ -34,7 +34,7 @@ parsing stays inside each adapter. Yahoo symbol search uses its
 `/v6/finance/autocomplete` directory endpoint and accepts only results whose
 provider type is `ETF`; the older `/v1/finance/search` endpoint is not used
 because it is frequently rate-limited. Twelve Data is a live optional fallback
-when its key is configured, while Alpha Vantage remains limited to its v1
+when its key is configured, while Alpha Vantage remains limited to its current
 profile capability.
 
 Yahoo requests accept the optional `YAHOO_PROXY_URL` deployment setting. This
@@ -96,8 +96,8 @@ transaction or dividend.
 
 | Data | Storage | Cache/retention |
 | --- | --- | --- |
-| Latest quote | `market_quote_latest` | Caffeine, 60 seconds; includes price, previous close, change, bid/ask, source, and freshness |
-| 1D five-minute bars | Provider response | Caffeine, 60 seconds; no permanent intraday table in v1 |
+| Latest quote | `market_quote_latest` | Caffeine, 60 seconds; current price may be regular, pre-market, extended, post-market, or overnight, selected by newest valid timestamp; includes prior regular close, change, bid/ask, source, and freshness |
+| 1D five-minute bars | Provider response | Caffeine, 60 seconds; no permanent intraday table in the current schema |
 | ETF profile | Instrument/profile columns | Caffeine, 24 hours |
 | Daily OHLCV | `market_price_daily` | Permanent local cache, incrementally updated |
 | NAV | `fund_nav_daily` | Permanent local cache, incrementally updated |
@@ -108,9 +108,20 @@ bars and stores the normalized result. Later jobs request only the range after
 the last successful stored trade date through the current date. Upserts are
 idempotent on `(instrument_id, trade_date, source)`.
 
-The quote cache is process-local Caffeine. It is intentionally not Redis in
-v1. A cache miss may call the configured provider chain; no permanent
-intraday store is maintained.
+The quote cache is process-local Caffeine. It is intentionally not Redis in the
+current design. A cache miss may call the configured provider chain; no permanent
+intraday store is maintained. Yahoo quote selection compares timestamped
+`regularMarketPrice`, `preMarketPrice`, `extendedMarketPrice`, `postMarketPrice`,
+and `overnightMarketPrice` candidates and uses the newest valid observation.
+An untimestamped extended-hours field never overrides a timestamped regular
+quote. If the authenticated live quote edge fails, the provider falls back to
+the regular-session chart quote rather than fabricating an extended price.
+
+Current portfolio summary, holdings, allocation and contribution valuation use
+the latest stored/refreshed quote. Historical snapshots, chart series, YTD/TWR
+and other close-based replay continue to use regular-session daily closes. The
+displayed live P/L may therefore move outside regular hours while close-based
+performance remains stable until the next regular close.
 
 ## Synchronization
 
@@ -133,7 +144,7 @@ usable while a synchronization job is running.
 
 `POST /api/v1/instruments/{symbol}/sync/full` is an operator-triggered repair
 operation for the bounded local history. It always requests `today.minusYears(5)`
-through `today`, using the application market-data timezone; callers cannot
+through `today`, using the fixed `America/New_York` business zone; callers cannot
 extend that range. It uses the same configured provider priority, bounded retry
 count, and fallback policy as the incremental sync.
 
@@ -174,7 +185,7 @@ Before running a resync against a deployment with user data:
    verify Flyway, health, row counts, and metrics before serving traffic. Never
    use `docker compose down -v` as part of this recovery.
 
-#### Verified acceptance deployment state
+#### Historical acceptance evidence
 
 On 2026-08-28, the coordinator's read-only acceptance check against
 `dca-terminal-acceptance-postgres-1` (PostgreSQL 18.6) found 1,255
@@ -185,6 +196,10 @@ immediate data migration or resync. No destructive update is justified, and
 the source of a historical value must not be inferred from equality with raw
 `close`; the backup/full-resync procedure above remains the repair path for a
 future or unknown deployment state.
+
+This paragraph is a dated evidence snapshot, not the current runtime contract.
+Do not reuse its row counts, dates, container name, or freshness result without
+probing the target deployment again.
 
 ## Normalization rules
 
@@ -217,7 +232,7 @@ Quote responses expose `retrievedAt`, `source`, and `status`; metrics expose
 `asOf` and `dataStatus`; portfolio summary exposes `asOf` and `dataStatus`.
 Instrument identity responses also expose the persisted latest daily-history
 status, so a newly confirmed ETF with a failed initial sync is visible as
-degraded instead of looking complete. Other v1 arrays do not carry a universal
+degraded instead of looking complete. Other current arrays do not carry a universal
 freshness envelope.
 The web UI must show delayed data clearly, for example "Data delayed; last
 update 2026-08-26 16:00 ET". A provider outage is a degraded-data state, not a
@@ -237,6 +252,10 @@ from the deployment environment. They are not Vite variables, frontend
 metadata, response fields, logs, GitHub Actions secrets, or tracked files.
 Missing optional fallback keys reduce redundancy but do not prevent the API
 from starting with Yahoo as the primary provider.
+
+Provider priority and fallback may be changed through Settings. Market/business
+timezone cannot: it is fixed in code to `America/New_York` so historical replay,
+future-date validation, plan windows, and scheduler boundaries use one rule.
 
 ## Provider tests
 

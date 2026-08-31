@@ -1,5 +1,9 @@
 # SA-06 E2E acceptance report
 
+> Historical evidence for the SA-06 commit only. For the current code and
+> roadmap, use [`agent-handoff.md`](./agent-handoff.md) and
+> [`next-development-plan.md`](./next-development-plan.md).
+
 ```text
 工作包：SA-06
 分支：agent/06-e2e-acceptance

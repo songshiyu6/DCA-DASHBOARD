@@ -10,20 +10,22 @@ import { ContributionsPage } from './ContributionsPage'
 const mockedApi = vi.hoisted(() => ({
   getPlans: vi.fn(),
   getContributionAnalysis: vi.fn(),
-  classifyInitialContribution: vi.fn(),
+  previewContributionClassifications: vi.fn(),
+  commitContributionClassifications: vi.fn(),
 }))
 
 vi.mock('../lib/api', () => ({ api: mockedApi }))
 
 const analysis = {
   totalInvested: '52000',
-  initial: { plannedPrincipal: '50000', principal: '50000', value: '53850', pnl: '3850', returnRate: '0.077', averageMarketDays: 92, batchCount: 1, dataStatus: 'FRESH' },
-  dca: { plannedPrincipal: null, principal: '2000', value: '2106', pnl: '106', returnRate: '0.053', averageMarketDays: 59, batchCount: 1, dataStatus: 'FRESH' },
+  initial: { principal: '50000', value: '53850', pnl: '3850', returnRate: '0.077', averageMarketDays: 92, batchCount: 1, dataStatus: 'FRESH' },
+  dca: { principal: '2000', value: '2106', pnl: '106', returnRate: '0.053', averageMarketDays: 59, batchCount: 1, dataStatus: 'FRESH' },
   unclassifiedAmount: '1600',
   unclassifiedBuys: [
-    { transactionId: 'opening-buy', tradeDate: '2026-01-01', symbol: 'VOO', principal: '800' },
-    { transactionId: 'legacy-buy', tradeDate: '2026-06-01', symbol: 'QQQ', principal: '800' },
+    { transactionId: 'opening-buy', tradeDate: '2026-01-01', symbol: 'VOO', principal: '800', eligibleForInitial: true },
+    { transactionId: 'legacy-buy', tradeDate: '2026-06-01', symbol: 'QQQ', principal: '800', eligibleForInitial: false },
   ],
+  unclassifiedScope: 'ACCOUNT',
   batches: [
     { type: 'INITIAL', period: null, principal: '50000', value: '53850', pnl: '3850', returnRate: '0.077', averageMarketDays: 92, dataStatus: 'FRESH' },
     { type: 'DCA', period: '2026-07', principal: '2000', value: '2106', pnl: '106', returnRate: '0.053', averageMarketDays: 59, dataStatus: 'FRESH' },
@@ -41,7 +43,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockedApi.getPlans.mockResolvedValue({ data: [fixturePlan], meta: { status: 'FRESH', source: 'API' } })
   mockedApi.getContributionAnalysis.mockResolvedValue({ data: analysis, meta: { status: 'FRESH', source: 'API' } })
-  mockedApi.classifyInitialContribution.mockResolvedValue({ data: { ...analysis, unclassifiedAmount: '800', unclassifiedBuys: [analysis.unclassifiedBuys[1]] }, meta: { status: 'FRESH', source: 'API' } })
+  mockedApi.previewContributionClassifications.mockResolvedValue({ data: { previewHash: 'preview-1', valid: true, items: [{ transactionId: 'opening-buy', classification: 'INITIAL', tradeDate: '2026-01-01', symbol: 'VOO', principal: '800', valid: true, errors: [] }] }, meta: { status: 'FRESH', source: 'API' } })
+  mockedApi.commitContributionClassifications.mockResolvedValue({ data: { batchId: 'batch-1', transactionIds: ['opening-buy'], analysis: { ...analysis, unclassifiedAmount: '800', unclassifiedBuys: [analysis.unclassifiedBuys[1]] } }, meta: { status: 'FRESH', source: 'API' } })
 })
 
 describe('contribution analysis', () => {
@@ -56,13 +59,24 @@ describe('contribution analysis', () => {
     expect(screen.getAllByText('92 days').length).toBeGreaterThan(0)
   })
 
-  it('only allows an opening-day unlinked buy to become initial capital', async () => {
+  it('previews and confirms a mixed bulk classification instead of writing each row immediately', async () => {
     const user = userEvent.setup()
     renderPage()
 
-    const markInitial = await screen.findByRole('button', { name: 'Mark as initial' })
-    expect(screen.getByRole('button', { name: 'Not start date' })).toBeDisabled()
-    await user.click(markInitial)
-    await waitFor(() => expect(mockedApi.classifyInitialContribution).toHaveBeenCalledWith('core-plan', 'opening-buy'))
+    await user.click(await screen.findByRole('checkbox', { name: 'Select VOO 2026-01-01' }))
+    await user.click(screen.getByRole('button', { name: 'Preview 1 changes' }))
+    await waitFor(() => expect(mockedApi.previewContributionClassifications).toHaveBeenCalledWith('core-plan', [{ transactionId: 'opening-buy', classification: 'INITIAL' }]))
+    expect(mockedApi.commitContributionClassifications).not.toHaveBeenCalled()
+    await user.click(await screen.findByRole('button', { name: 'Confirm atomic commit' }))
+    await waitFor(() => expect(mockedApi.commitContributionClassifications).toHaveBeenCalledWith('core-plan', 'preview-1', [{ transactionId: 'opening-buy', classification: 'INITIAL' }]))
+  })
+
+  it('defaults non-opening rows to outside-plan and labels the queue as account-wide', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    expect(await screen.findByText(/account-wide queue/)).toBeInTheDocument()
+    await user.click(screen.getByRole('checkbox', { name: 'Select QQQ 2026-06-01' }))
+    expect(screen.getByRole('combobox', { name: 'QQQ 2026-06-01 classification' })).toHaveValue('UNPLANNED')
   })
 })

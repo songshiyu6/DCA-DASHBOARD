@@ -1,4 +1,4 @@
-# DCA Terminal v1
+# DCA Terminal
 
 Personal ETF investing and DCA execution dashboard.
 
@@ -12,14 +12,18 @@ DCA Terminal is a focused single-user terminal for long-term US ETF investors:
   fractional shares;
 - current holdings calculated from transactions with split-aware FIFO lots;
 - monthly budget and target allocation plans with frozen plan cycles;
-- actual-versus-planned DCA progress and contribution-first recommendations.
+- actual-versus-planned DCA progress and contribution-first recommendations;
+- explicit `INITIAL`, `DCA`, and `UNPLANNED` BUY classification, with initial
+  capital separated from recurring DCA; and
+- contribution-batch analysis for principal, current value, cumulative P/L,
+  cumulative ROI, and cost-weighted days invested.
 
 Transactions are the source of truth. Holdings, portfolio values, allocation,
 P/L, XIRR, cycle execution, and daily snapshots are calculated projections.
 There is no editable holdings state and no portfolio update endpoint.
 
 This is not a broker, order-entry tool, trading chart clone, research product,
-or financial advice service. v1 deliberately excludes broker APIs, options,
+or financial advice service. The current product deliberately excludes broker APIs, options,
 individual-stock research, cryptocurrency, news, AI advice, price prediction,
 WebSocket ticks, Level 2, technical indicators, multi-user SaaS, social
 features, paper trading, backtesting, multi-currency assets, and tax
@@ -44,7 +48,9 @@ calculation.
 │   ├── api.md
 │   ├── market-data.md
 │   ├── calculations.md
-│   └── operations-runbook.md
+│   ├── operations-runbook.md
+│   ├── agent-handoff.md
+│   └── next-development-plan.md
 ├── .github/workflows/ci.yml
 └── README.md
 ```
@@ -65,9 +71,9 @@ For the full Compose stack:
   `deploy/.env`.
 
 For local app development, use the versions declared by the app projects. The
-expected baseline is Node.js 22 for the web app and Java 21 for the API. The
-host Java version does not need to be Java 21 when Docker or the Gradle wrapper
-is used.
+expected baseline is Node.js 22 for the web app and Java 21 for the API. Docker
+provides its own build JDK, but the Gradle wrapper does not: direct
+`./gradlew`/`bootRun` commands still require a Java 21 `JAVA_HOME` and `PATH`.
 
 ## Configuration
 
@@ -79,8 +85,10 @@ ${EDITOR:-vi} deploy/.env
 ```
 
 Set at least `APP_DOMAIN`, `CADDY_EMAIL`, `POSTGRES_PASSWORD`, and
-`APP_PASSWORD_HASH`. The password hash is supplied by the application
-implementation; do not put a plaintext password in Git. If a bcrypt hash
+`APP_PASSWORD_HASH`. The current application uses Spring's
+`BCryptPasswordEncoder`, so this value must be a BCrypt hash; Argon2id and
+delegating `{id}` prefixes are not accepted by the current code. Generate it
+outside the repository and do not put a plaintext password in Git. If the hash
 contains `$`, quote the value in `deploy/.env`, for example
 `APP_PASSWORD_HASH='$2b$...'`, because the backup scripts source that file.
 
@@ -98,11 +106,12 @@ storage, and shows a persistent `Demo data` warning. Do not use a demo build
 for a real account. `apps/web/Dockerfile` rejects any mode other than `live`
 or `demo`.
 
-The default timezone and market schedule are `America/New_York`; database
-timestamps remain UTC. `APP_TIMEZONE` configures the application and is also
-used as the container `TZ`. `VITE_API_BASE_URL=/api/v1` keeps the production
-web app same-origin behind Caddy. Compose defaults PostgreSQL to
-`postgres:18.6-alpine`.
+Business dates, plan execution windows, and the market-data scheduler use the
+fixed `America/New_York` zone; database timestamps remain UTC. There is no
+runtime timezone setting and no `APP_TIMEZONE` input. The container `TZ` value
+is an operating-system/logging concern and does not change business-date
+semantics. `VITE_API_BASE_URL=/api/v1` keeps the production web app same-origin
+behind Caddy. Compose defaults PostgreSQL to `postgres:18.6-alpine`.
 
 ## PostgreSQL major-version upgrades
 
@@ -190,12 +199,23 @@ requests. It performs:
 
 The CI job does not use repository secrets and does not call live market-data
 providers. Provider tests must use mock HTTP responses. Flyway is the only
-schema source; the current chain is `V001`–`V013`. `V013` adds a ledger-order
-sequence and cannot be undone by rolling back the application image.
+schema source; the current chain is `V001`–`V017`. `V013` adds the atomic
+ledger-order sequence, `V014` adds PostgreSQL-backed HTTP sessions, `V015`
+removes the obsolete timezone setting, and `V016` adds contribution source and
+plan attribution fields. `V017` backfills deterministic cycle-linked legacy
+BUYs, enforces contribution-source combinations, and adds classification audit
+storage. These are forward migrations and cannot be undone by rolling back only
+the application image.
+
+Current account valuations prefer the newest valid timestamped regular,
+pre-market, extended, post-market, or overnight quote. Historical portfolio
+charts, snapshots, YTD, and TWR remain regular-close based, so an after-hours
+move changes live value/P&L without rewriting close-based performance history.
 
 The required financial unit-test surface is documented in
 `docs/calculations.md` and includes YTD, CAGR, drawdown, split, FIFO, P/L,
-XIRR, cycle status, allocation, and recommendation rounding.
+XIRR, cycle status, allocation, recommendation rounding, initial-capital cycle
+behavior, and contribution-batch attribution.
 
 Run the same checks locally once app files are present:
 
@@ -214,8 +234,8 @@ worktree that contains `apps/api/build`; copy the local Gradle output into the
 API image context and the healthcheck can fail. A root `.dockerignore`
 excludes `build` and `node_modules`.
 
-The web project currently does not define a `lint` script; CI runs lint only if
-one is added later.
+The web project defines an ESLint-based `lint` script. CI runs lint, typecheck,
+tests, and the production build as separate steps.
 
 ## Deployment
 
@@ -245,6 +265,12 @@ Before first public exposure, verify that `/api/health` responds, the API
 healthcheck is healthy, Caddy has issued the expected certificate, and the
 application login works. Provider outages must leave the dashboard available
 with `STALE`, `PARTIAL`, or `UNAVAILABLE` data status.
+
+HTTP sessions are stored in PostgreSQL. An API container restart therefore
+does not normally sign the user out when the same database and cookie settings
+remain in use; logout deletes the server-side session. Backup/restore includes
+the session tables, so operators must explicitly decide whether restored
+sessions should remain valid before reopening access.
 
 ## Backups and restore
 
@@ -293,13 +319,22 @@ The implementation must preserve these rules:
    primary state.
 2. Market price and ETF NAV are separate facts and separate tables. Never use
    market price as NAV.
-3. All financial values use decimal/`BigDecimal` types; never use `double` for
-   money, shares, weights, or rates.
+3. Backend and database financial values use `BigDecimal`/`NUMERIC`; do not
+   introduce Java `double` or floating-point database columns. Financial
+   response values are plain decimal JSON strings, and frontend calculations
+   use `decimal.js-light`. Counts and calendar-day values remain JSON numbers.
 4. Historical data is persisted locally and updated incrementally. Performance
    uses adjusted close where documented; portfolio valuation uses raw market
    close and historical transaction replay.
 5. Provider access goes through a registry with bounded retry and fallback;
    API keys never reach the frontend.
+6. Initial capital and recurring DCA are transaction classifications, not a
+   second cash ledger. Only actual classified BUY transactions contribute to
+   contribution totals; unclassified and `UNPLANNED` buys remain visible but do
+   not silently enter plan analytics.
+7. Legacy BUY classification is a two-phase operation: preview first, then
+   commit the exact preview hash atomically. Every committed row is recorded in
+   the contribution-classification audit table.
 
 Detailed contracts and formulas live in:
 
@@ -307,3 +342,4 @@ Detailed contracts and formulas live in:
 - [API](docs/api.md)
 - [Market data](docs/market-data.md)
 - [Calculations](docs/calculations.md)
+- [Current state and next development plan](docs/next-development-plan.md)

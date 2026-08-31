@@ -1,9 +1,12 @@
-# DCA Terminal v1 Calculation Rules
+# DCA Terminal Calculation Rules
 
 This document is the source of truth for financial calculation behavior. All
 rules use exact decimal arithmetic (`BigDecimal` in Java and `NUMERIC` in
 PostgreSQL). Intermediate calculations use a high precision context; values
 are rounded only at the documented display or cash-allocation boundary.
+Frontend formulas use `decimal.js-light` after normalization. Financial API
+responses are plain decimal strings; regressions cover the full allowed
+`NUMERIC(20,6/8)` boundaries from raw JSON through the Web normalizers.
 
 ## Time and price conventions
 
@@ -99,7 +102,7 @@ drawdown[t] = adjustedClose[t] / runningPeak[t] - 1
 maxDrawdown1Y = min(drawdown[t])
 ```
 
-The v1 UI does not claim an all-history maximum drawdown field unless the
+The current UI does not claim an all-history maximum drawdown field unless the
 requested range is explicitly extended in a later version.
 
 ## Split-aware ledger and FIFO
@@ -185,6 +188,38 @@ the previous valid EOD close for continuity only when it marks the snapshot
 `PARTIAL` and records the missing instruments. It must not carry a price before
 the instrument's first available bar.
 
+## Dashboard time-weighted performance
+
+Dashboard Today, YTD, and annualized portfolio performance are calculated in
+the web client from the API's portfolio-history projection plus the current
+summary point. For adjacent valid points, external flow is the change in
+`netInvested`:
+
+```text
+external flow[t] = netInvested[t] - netInvested[t-1]
+period factor[t] = (marketValue[t] - external flow[t]) / marketValue[t-1]
+TWR              = product(period factor) - 1
+```
+
+Today's P/L is `current market value - prior market value - external flow`.
+YTD uses the last point before January 1 when one exists; when the portfolio
+started during the current year, YTD P/L is current market value minus current
+net invested. The annualized display uses the complete available history:
+
+```text
+annualized TWR = product(period factor) ^ (365.2425 / elapsed days) - 1
+```
+
+The first valid point contributes `marketValue / netInvested` when both are
+positive. Missing market-value points are excluded. For a non-annualized range,
+a segment with a non-positive opening or adjusted ending value is skipped; the
+result is null when no valid segment remains. The annualized calculation is
+stricter: it requires at least two dated points, a positive first value and net
+investment, a positive adjusted ending value for every included segment, and a
+positive total factor. An invalid date range or any failed annualized condition
+returns null rather than a fabricated zero. This time-weighted display is
+distinct from account XIRR below.
+
 ## XIRR / personal return
 
 XIRR uses dated cash flows and the 365-day year basis:
@@ -205,7 +240,7 @@ NPV(r) = sum(CF_i / (1 + r)^((d_i - d_0) / 365))
 
 The implementation brackets roots over a deterministic bounded probe range and
 solves the selected sign-changing interval with bisection. If multiple roots
-exist, v1 selects the root whose interval midpoint has the smallest absolute
+exist, the current service selects the root whose interval midpoint has the smallest absolute
 rate, then the lower interval as a deterministic tie-breaker. This is a product
 convention, not a claim that XIRR is globally unique. If cash flows do not
 contain both positive and negative values, no bracket is found, or the result
@@ -263,6 +298,66 @@ Upcoming cycles are excluded from the denominator. Annual contribution
 progress can show the actual amount above the annual planned amount while the
 rate remains understandable.
 
+An actual `INITIAL` BUY changes the opening-month DCA presentation. If that
+plan month has initial capital and no linked DCA execution, its DCA cycle is
+reported as `SKIPPED` with effective planned amount zero. The API rejects a DCA
+BUY linked to that month. A plan start month with no actual initial-capital BUY
+uses the ordinary status rules above.
+
+## Contribution-batch analysis
+
+Contribution batches attribute actual BUY lots to one plan without creating a
+new fact source:
+
+- `INITIAL`: a BUY explicitly linked to the requested plan as initial capital;
+- `DCA`: a BUY linked to one of the requested plan's cycles, grouped by the
+  cycle's `YYYY-MM` period;
+- `UNPLANNED` or unclassified: visible to the user but excluded from plan
+  contribution totals and batches.
+
+The principal of each attributed BUY includes its execution fee:
+
+```text
+batch principal += quantity * unit price + buy fee
+```
+
+Global instrument FIFO order is preserved across all sources. A SELL therefore
+consumes the oldest open lot even when that crosses from initial capital into a
+later DCA batch. Sell fees are allocated pro rata across the consumed shares:
+
+```text
+attributed realized P/L = allocated net sell proceeds - consumed lot cost
+```
+
+Splits change the quantity of each attributed open lot but not its total cost.
+At the analysis date, an open lot contributes:
+
+```text
+open value = split-adjusted open quantity * current usable price
+open P/L   = open value - open lot cost
+batch P/L  = realized P/L + open P/L
+batch value = principal + batch P/L
+batch cumulative ROI = batch P/L / principal
+```
+
+ROI is cumulative and deliberately not annualized. DIVIDEND and standalone FEE
+transactions are currently excluded from batch P/L. If any open attributed lot
+lacks a usable current price, its batch and aggregate bucket return null for
+value/P&L/ROI and use `PARTIAL` status instead of treating the price as zero.
+
+`averageMarketDays` is a cost-weighted count of calendar days, despite the UI's
+short label "market age". Closed lot cost is weighted through the sell date;
+open lot cost is weighted through the analysis date:
+
+```text
+average days = sum(lot cost * calendar days held) / total batch principal
+```
+
+Actual `initial.principal`, total invested, holdings, and cycle behavior derive
+only from classified transactions. The old nullable
+`investment_plan.initial_capital` column is retained for database compatibility
+but is no longer mapped or exposed by the application.
+
 ## Contribution-first recommendation
 
 For contribution `C`, current total portfolio value `V`, current value of
@@ -297,4 +392,6 @@ Display formatting is separate from calculation precision:
 Raw decimal values remain available in API responses and database rows. Unit
 tests must cover YTD boundary dates, missing trading days, adjusted versus raw
 prices, split quantities, FIFO partial sells, fees, XIRR invalid roots,
-weight tolerance, cycle status, and recommendation sum/overweight behavior.
+weight tolerance, cycle status, recommendation sum/overweight behavior,
+initial/DCA lot attribution, contribution FIFO sells, missing contribution
+prices, and the initial-capital opening-month rule.

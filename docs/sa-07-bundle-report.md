@@ -1,5 +1,8 @@
 # SA-07 Bundle Report
 
+> Historical bundle evidence for the SA-07 commit only. Current build sizes and
+> risks are summarized in [`agent-handoff.md`](./agent-handoff.md).
+
 Date: 2026-08-28
 
 ## Baseline Measurement

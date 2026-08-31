@@ -1,5 +1,9 @@
 # SA-09 工作包报告（6.3）
 
+> 本文是 SA-09 特定提交的历史证据，不代表当前代码全量状态。当前结论与后续工作见
+> [`agent-handoff.md`](./agent-handoff.md) 和
+> [`next-development-plan.md`](./next-development-plan.md)。
+
 工作包：SA-09
 分支：agent/09-observability-performance
 提交：576d7a61b1637f427ce97f3437c8c5e7c1136395

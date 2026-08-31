@@ -4,8 +4,9 @@
 
 ## 0. 安全边界
 
-- 生产使用 `APP_SECURITY_ENABLED=true`、`APP_COOKIE_SECURE=true`、HTTPS 和 `APP_PASSWORD_HASH`。`APP_PASSWORD_HASH` 使用批准的 secret manager 注入；不要把明文密码或 hash 提交到仓库。
-- `APP_LOGIN_MAX_ATTEMPTS` 和 `APP_LOGIN_THROTTLE_WINDOW_SECONDS` 控制同一用户名与来源地址的登录失败窗口。成功登录会清除该窗口，过期窗口会被淘汰。当前 `deploy/docker-compose.yml` 未把这两个变量传入 API 容器时，容器使用 `application.yml` 的默认值 5/900。
+- 生产使用 `APP_SECURITY_ENABLED=true`、`APP_COOKIE_SECURE=true`、HTTPS 和 `APP_PASSWORD_HASH`。当前代码只注册 `BCryptPasswordEncoder`，因此该值必须是 BCrypt hash，不接受 Argon2id 或 delegating `{id}` 格式。Hash 使用批准的 secret manager 注入；不要把明文密码或 hash 提交到仓库。
+- `APP_LOGIN_MAX_ATTEMPTS` 和 `APP_LOGIN_THROTTLE_WINDOW_SECONDS` 控制同一用户名与来源地址的登录失败窗口。成功登录会清除该窗口，过期窗口会被淘汰；canonical Compose 已把这两个变量透传给 API 容器，缺省值仍是 5/900。
+- HTTP session 由 Spring Session 持久化在 PostgreSQL 中。API 容器重启通常不会注销现有用户；logout 会删除服务端 session。数据库备份也会包含 session，因此 restore 后必须明确决定是保留还是统一失效旧 session。
 - smoke 只能使用临时数据库、临时 Docker volume 和临时测试凭据。不得把 `DCA_ENV_FILE` 指向生产 `.env`，不得把 smoke 指向生产 volume。
 - 执行 curl 时不要使用 `--verbose`，不要打印 response headers/body、cookie、CSRF token 或密码。脚本把这些内容写入权限为 `0700` 的临时目录并在退出时删除。
 - 当前 compose 的 `postgres_data` 使用 PostgreSQL 18+ 的版本化数据目录。PostgreSQL major 变更必须走 dump/restore，不能把旧 major 的数据目录直接挂到新 major。
@@ -37,18 +38,19 @@
    docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
    ```
 
-5. 用一次性临时密码运行部署 smoke。密码通过交互输入，不写入脚本、文档或 shell 命令行；不要在 smoke 失败时打印临时目录内容。
+5. 用与当前 `APP_PASSWORD_HASH` 匹配的登录密码运行部署 smoke。`deploy/.env` 不会自动把变量导出到当前 shell，因此显式输入非敏感的 base URL/username，并通过隐藏交互读取密码。不要把密码写入脚本、文档或 shell 命令行，也不要在 smoke 失败时打印临时目录内容。
 
    ```bash
+   read -r DCA_SMOKE_BASE_URL
+   read -r DCA_SMOKE_USERNAME
    read -r -s DCA_SMOKE_PASSWORD
    printf '\n' >&2
-   export DCA_SMOKE_PASSWORD
-   DCA_SMOKE_BASE_URL="https://${APP_DOMAIN}" \
-   DCA_SMOKE_USERNAME="${APP_USERNAME}" \
-   DCA_SMOKE_EXPECT_SECURE_COOKIES=1 \
-   bash deploy/scripts/smoke-deployment.sh
-   unset DCA_SMOKE_PASSWORD
+   export DCA_SMOKE_BASE_URL DCA_SMOKE_USERNAME DCA_SMOKE_PASSWORD
+   DCA_SMOKE_EXPECT_SECURE_COOKIES=1 bash deploy/scripts/smoke-deployment.sh
+   unset DCA_SMOKE_BASE_URL DCA_SMOKE_USERNAME DCA_SMOKE_PASSWORD
    ```
+
+   例如 base URL 输入 `https://invest.example.com`，不要附加 `/api`。正式 HTTPS 部署保持 `DCA_SMOKE_EXPECT_SECURE_COOKIES=1`。
 
    成功标准是 Caddy `/`、API health、未登录 session、CSRF bootstrap、login、settings、dashboard 和 logout 全部通过，且 logout 后旧 session/CSRF mutation 被拒绝。局域网 HTTP 预览只能显式设置 `DCA_SMOKE_EXPECT_SECURE_COOKIES=0` 并使用与之匹配的 `APP_COOKIE_SECURE=false`；不能把这种配置用于公网。
 
@@ -80,6 +82,23 @@
    ```
 
 3. Flyway migration 是前进式的。升级前保存经过验证的备份；不要编辑或删除已经应用的 migration，也不要把旧应用直接用于不兼容的新 schema。
+
+4. 升级到当前代码时，Flyway 应到 `V017`。除常规 dashboard smoke 外，至少确认：交易响应包含 contribution source 字段，投入分析页面可读取活动计划，初始资金月不会同时接受 DCA 交易，未归类 BUY 能先 preview 再 commit，audit endpoint 可读取对应批次。不要通过直接更新持仓或手工改 snapshot 来修复这些投影。
+
+   用只读组合计数检查 legacy/非法 attribution，不输出 symbol、金额或 notes：
+
+   ```sql
+   SELECT transaction_type,
+          contribution_type,
+          plan_cycle_id IS NOT NULL AS has_cycle,
+          contribution_plan_id IS NOT NULL AS has_contribution_plan,
+          count(*) AS rows
+   FROM investment_transaction
+   GROUP BY transaction_type, contribution_type, has_cycle, has_contribution_plan
+   ORDER BY transaction_type, contribution_type, has_cycle, has_contribution_plan;
+   ```
+
+   `V017` 会把 cycle-linked/null-type BUY 确定性回填为 DCA，然后审计其余 source/type/link 组合；发现非法行时 migration 会列出最多 20 个 transaction ID 并终止，不会猜测修复。应先恢复到升级前备份，在隔离环境按交易事实修正后重试。不得编辑已应用的 `V016` 或 `V017`。
 
 ## 3. Backup verification
 
@@ -117,7 +136,7 @@ stat -c '%a %n' -- "$latest_backup"
    cp -- deploy/.env "$upgrade_env"
    chmod 600 "$upgrade_env"
    NEW_PROJECT=dca-terminal-pg-major-upgrade
-   NEW_POSTGRES_IMAGE=postgres:19.0-alpine
+   NEW_POSTGRES_IMAGE='postgres:<approved-version>-alpine'
    sed -i \
      -e "s/^COMPOSE_PROJECT_NAME=.*/COMPOSE_PROJECT_NAME=${NEW_PROJECT}/" \
      -e "s#^POSTGRES_IMAGE=.*#POSTGRES_IMAGE=${NEW_POSTGRES_IMAGE}#" \
@@ -154,13 +173,21 @@ DCA_ENV_FILE=deploy/.env deploy/scripts/restore-postgres.sh --confirm "$BACKUP_F
 "${compose[@]}" ps
 ```
 
-恢复后依次确认 API health、最新 Flyway version、关键关联数据和 portfolio 总计，再运行部署 smoke。验证未完成前不要删除旧 volume、safety backup 或原始 dump。需要可重复的全流程验证时，在没有生产 `.env`、volume 或 provider key 的环境运行：
+恢复后依次确认 API health、最新 Flyway version、关键关联数据、contribution attribution 和 portfolio 总计，再运行部署 smoke。验证未完成前不要删除旧 volume、safety backup 或原始 dump。需要可重复的全流程验证时，在没有生产 `.env`、volume 或 provider key 的环境运行：
 
 ```bash
 bash deploy/scripts/backup-restore-smoke.sh
 ```
 
 该脚本会在两个独立临时 Compose project 中真实执行 PostgreSQL 18.6 dump、gzip 校验、新 volume restore、Flyway 启动校验和关联数据断言，不调用 market provider。
+
+Restore 会一并恢复 `SPRING_SESSION` 和 `SPRING_SESSION_ATTRIBUTES`。如果恢复点较旧、访问边界已变化，或不能证明原 session 应继续有效，在维护窗口、API 停止状态下清除它们，再重新登录：
+
+```sql
+TRUNCATE TABLE spring_session_attributes, spring_session;
+```
+
+这只失效登录 session，不删除交易、计划、行情或投资组合数据。执行前仍需确认目标数据库和维护窗口，不能把该语句指向未确认的实例。
 
 ## 6. Full market-history resync
 
@@ -176,7 +203,7 @@ curl --silent --show-error --fail \
   --output "$RESYNC_RESPONSE"
 ```
 
-检查返回的 status/source/asOf/retrievedAt 和数据库行数；provider 不可达时应保留明确的 unavailable/stale 状态并重试，不得把失败伪装成新鲜数据。
+检查返回的 `status`、`barsSaved`、`splitsSaved`、`completedAt`、可选 `message` 和数据库行数；另从受影响行情行核对实际 `source`。Provider 不可达时应保留明确的 unavailable/stale 状态并重试，不得把失败伪装成新鲜数据。
 
 ## 7. Application image rollback
 
@@ -195,10 +222,10 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
 ## 8. 何时不能回滚 schema
 
 - 不编辑、删除或重排已经发布的 Flyway migration，不执行“向下 migration”来配合旧应用。
-- 当前最新已发布 migration 是 `V013__add_transaction_ledger_order_sequence.sql`。它新增 sequence 并为 `investment_transaction.ledger_order` 设置 default，属于前进式变更。已经应用到 `V013` 的数据库不能靠检出更早的应用镜像“撤掉”该 sequence。
+- 当前最新 migration 是 `V017__enforce_contribution_source_contract.sql`。`V013` 增加 ledger-order sequence，`V014` 增加持久 HTTP session 表，`V015` 删除旧 timezone setting，`V016` 增加 contribution 字段，`V017` 回填确定性 legacy DCA、增加跨字段 CHECK/partial index 和 classification audit table，并把旧 initial-capital 列标为兼容废弃。已经应用这些 migration 的数据库不能靠检出更早镜像“撤掉”变更。
 - 新 migration 已改变列含义、约束、索引、关联关系或删除数据时，schema 不能靠旧镜像回滚。
 - 优先发布向前兼容的修复 migration；若数据已损坏或必须回到历史状态，使用已验证 dump/restore 到隔离 volume，再以匹配的应用版本验收。
-- 任何恢复或迁移都要记录 Flyway version、transaction/plan/price/snapshot 关联行和 portfolio 关键总计，避免只凭页面是否打开判断成功。
+- 任何恢复或迁移都要记录 Flyway version、transaction/plan/contribution/price/snapshot 关联行和 portfolio 关键总计，避免只凭页面是否打开判断成功。
 
 ## 9. 浏览器兼容与 headers 审计
 

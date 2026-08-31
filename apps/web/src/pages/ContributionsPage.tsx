@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Layers3, WalletCards } from 'lucide-react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { DataStateBanner, EmptyState, ErrorState, LoadingBlock } from '../components/DataState'
@@ -8,7 +9,7 @@ import { StatusBadge } from '../components/StatusBadge'
 import { api } from '../lib/api'
 import { decimal, formatDate, formatMoney, formatPeriod, formatSignedMoney, formatSignedPercent } from '../lib/format'
 import { queryKeys } from '../lib/queryKeys'
-import type { ContributionBucket } from '../types'
+import type { ContributionBucket, ContributionClassification, ContributionClassificationItem } from '../types'
 
 function trendClass(value: string | null | undefined): string {
   if (!value || decimal(value).isZero()) return 'trend-flat'
@@ -32,6 +33,7 @@ export function ContributionsPage() {
   const { i18n } = useTranslation()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const [selections, setSelections] = useState<Record<string, ContributionClassification>>({})
   const isZh = (i18n.resolvedLanguage ?? i18n.language).toLowerCase().startsWith('zh')
   const plans = useQuery({ queryKey: queryKeys.plans, queryFn: api.getPlans })
   const plan = plans.data?.data.find((candidate) => candidate.status === 'ACTIVE')
@@ -40,13 +42,34 @@ export function ContributionsPage() {
     queryFn: () => api.getContributionAnalysis(plan?.id ?? ''),
     enabled: Boolean(plan),
   })
-  const classify = useMutation({
-    mutationFn: (transactionId: string) => api.classifyInitialContribution(plan?.id ?? '', transactionId),
+  const selectedItems: ContributionClassificationItem[] = Object.entries(selections)
+    .map(([transactionId, classification]) => ({ transactionId, classification }))
+  const preview = useMutation({
+    mutationFn: () => api.previewContributionClassifications(plan?.id ?? '', selectedItems),
+  })
+  const commit = useMutation({
+    mutationFn: () => api.commitContributionClassifications(
+      plan?.id ?? '',
+      preview.data?.data.previewHash ?? '',
+      selectedItems,
+    ),
     onSuccess: (result) => {
       if (!plan) return
-      queryClient.setQueryData(queryKeys.contributionAnalysis(plan.id), result)
+      queryClient.setQueryData(queryKeys.contributionAnalysis(plan.id), { data: result.data.analysis, meta: result.meta })
+      setSelections({})
+      preview.reset()
     },
   })
+
+  function setSelected(transactionId: string, classification?: ContributionClassification) {
+    setSelections((current) => {
+      const next = { ...current }
+      if (classification) next[transactionId] = classification
+      else delete next[transactionId]
+      return next
+    })
+    preview.reset()
+  }
 
   if (plans.isLoading) return <div className="page"><LoadingBlock lines={8} /></div>
   if (plans.isError) return <div className="page"><ErrorState onRetry={() => void plans.refetch()} /></div>
@@ -70,13 +93,20 @@ export function ContributionsPage() {
       <SummaryPanel title={isZh ? '定投资金' : 'DCA capital'} bucket={data.dca} isZh={isZh} detail={isZh ? `${data.dca.batchCount} 个实际投入月份` : `${data.dca.batchCount} funded months`} />
     </div>
 
-    {decimal(data.unclassifiedAmount).gt(0) ? <Panel title={isZh ? '未归类买入' : 'Unclassified buys'} detail={isZh ? `${formatMoney(data.unclassifiedAmount)} 尚未计入初始资金或定投资金` : `${formatMoney(data.unclassifiedAmount)} is not assigned to initial capital or DCA`} className="contribution-unclassified-panel">
-      <p className="contribution-help">{isZh ? `只有投资计划开始日 ${plan.startDate} 的 BUY 才能归为初始资金；其他日期不会允许补记为初始资金。` : `Only BUYs on the investment plan start date (${plan.startDate}) can be marked as initial capital.`}</p>
+    {decimal(data.unclassifiedAmount).gt(0) ? <Panel title={isZh ? '未归类买入' : 'Unclassified buys'} detail={isZh ? `${formatMoney(data.unclassifiedAmount)} 的账户级队列，尚未计入任何投入批次` : `${formatMoney(data.unclassifiedAmount)} account-wide queue, not included in contribution batches`} className="contribution-unclassified-panel">
+      <p className="contribution-help">{isZh ? `此队列属于整个账户，不会自动归给当前计划。只有计划开始日 ${plan.startDate} 的 BUY 可以归为初始资金；其他记录可明确标记为计划外。所有变更必须先预览再确认。` : `This queue is account-wide and is never assigned to the active plan automatically. Only BUYs on ${plan.startDate} can become initial capital; other rows can be marked outside plan. Every change requires preview and confirmation.`}</p>
       <div className="unclassified-list">{data.unclassifiedBuys.map((item) => {
-        const canClassifyInitial = item.tradeDate === plan.startDate
-        return <div className="unclassified-row" key={item.transactionId}><span><strong>{item.symbol}</strong><small>{formatDate(item.tradeDate)}</small></span><strong>{formatMoney(item.principal)}</strong><button type="button" className="button button-ghost button-small" disabled={classify.isPending || !canClassifyInitial} title={!canClassifyInitial ? (isZh ? `仅 ${plan.startDate} 可归为初始资金` : `Initial capital is only allowed on ${plan.startDate}`) : undefined} onClick={() => classify.mutate(item.transactionId)}>{canClassifyInitial ? (isZh ? '归为初始资金' : 'Mark as initial') : (isZh ? '非开始日' : 'Not start date')}</button></div>
+        const selected = selections[item.transactionId]
+        return <div className="unclassified-row" key={item.transactionId}>
+          <label className="classification-select-row"><input type="checkbox" checked={Boolean(selected)} aria-label={isZh ? `选择 ${item.symbol} ${item.tradeDate}` : `Select ${item.symbol} ${item.tradeDate}`} onChange={(event) => setSelected(item.transactionId, event.target.checked ? (item.eligibleForInitial ? 'INITIAL' : 'UNPLANNED') : undefined)} /><span><strong>{item.symbol}</strong><small>{formatDate(item.tradeDate)}</small></span></label>
+          <strong>{formatMoney(item.principal)}</strong>
+          <select aria-label={isZh ? `${item.symbol} ${item.tradeDate} 归类方式` : `${item.symbol} ${item.tradeDate} classification`} value={selected ?? (item.eligibleForInitial ? 'INITIAL' : 'UNPLANNED')} disabled={!selected || preview.isPending || commit.isPending} onChange={(event) => setSelected(item.transactionId, event.target.value as ContributionClassification)}><option value="INITIAL" disabled={!item.eligibleForInitial}>{isZh ? '初始资金' : 'Initial capital'}</option><option value="UNPLANNED">{isZh ? '计划外' : 'Outside plan'}</option></select>
+        </div>
       })}</div>
-      {classify.error instanceof Error ? <p className="form-alert" role="alert">{classify.error.message}</p> : null}
+      <div className="classification-actions"><button type="button" className="button button-secondary" disabled={selectedItems.length === 0 || preview.isPending || commit.isPending} onClick={() => preview.mutate()}>{preview.isPending ? (isZh ? '校验中…' : 'Validating…') : (isZh ? `预览 ${selectedItems.length} 项变更` : `Preview ${selectedItems.length} changes`)}</button>{preview.data?.data.valid && preview.data.data.previewHash ? <button type="button" className="button button-primary" disabled={commit.isPending} onClick={() => commit.mutate()}>{commit.isPending ? (isZh ? '提交中…' : 'Committing…') : (isZh ? '确认并原子提交' : 'Confirm atomic commit')}</button> : null}</div>
+      {preview.data ? <div className={`classification-preview ${preview.data.data.valid ? 'classification-preview-valid' : 'classification-preview-invalid'}`} role="status"><strong>{preview.data.data.valid ? (isZh ? `${preview.data.data.items.length} 项校验通过，等待确认。` : `${preview.data.data.items.length} changes validated. Confirm to commit.`) : (isZh ? '预览未通过，没有写入任何数据。' : 'Preview failed. No data was written.')}</strong>{preview.data.data.items.flatMap((item) => item.errors).map((error, index) => <small key={`${error.code}-${index}`}>{error.code}: {error.message}</small>)}</div> : null}
+      {preview.error instanceof Error ? <p className="form-alert" role="alert">{preview.error.message}</p> : null}
+      {commit.error instanceof Error ? <p className="form-alert" role="alert">{commit.error.message}</p> : null}
     </Panel> : null}
 
     <Panel title={isZh ? '投入批次' : 'Contribution batches'} detail={isZh ? '收益率为累计 ROI，不做年化；股息暂不计入。' : 'Returns are cumulative ROI, not annualized. Dividends are excluded for now.'} className="contribution-batches-panel" flush>

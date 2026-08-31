@@ -68,13 +68,13 @@ class ContributionAnalysisServiceTest {
         ContributionDtos.ContributionAnalysisResponse result = service.analyze(planId);
 
         assertThat(result.totalInvested()).isEqualByComparingTo("2000.000000");
-        assertThat(result.initial().plannedPrincipal()).isEqualByComparingTo("5000.000000");
         assertThat(result.initial().principal()).isEqualByComparingTo("1000.000000");
         assertThat(result.initial().pnl()).isEqualByComparingTo("100.000000");
         assertThat(result.initial().returnRate()).isEqualByComparingTo("0.1");
         assertThat(result.initial().averageMarketDays()).isEqualTo(62);
         assertThat(result.dca().principal()).isEqualByComparingTo("1000.000000");
         assertThat(result.dca().averageMarketDays()).isEqualTo(31);
+        assertThat(result.unclassifiedScope()).isEqualTo("ACCOUNT");
         assertThat(result.batches()).extracting(ContributionDtos.ContributionBatchResponse::period)
                 .containsExactly(null, "2026-08");
     }
@@ -120,7 +120,6 @@ class ContributionAnalysisServiceTest {
         ReflectionTestUtils.setField(value, "id", planId);
         value.setName("Core");
         value.setMonthlyBudget(new BigDecimal("1000"));
-        value.setInitialCapital(new BigDecimal("5000"));
         value.setStartDate(LocalDate.of(2026, 1, 1));
         return value;
     }

@@ -72,53 +72,6 @@ public class ContributionAnalysisService {
         this.zone = zone;
     }
 
-    @Transactional
-    public void setInitialCapital(UUID planId, BigDecimal amount) {
-        InvestmentPlanEntity plan = getPlan(planId);
-        if (amount != null && amount.signum() < 0) {
-            throw new DomainException(HttpStatus.BAD_REQUEST, "INVALID_INITIAL_CAPITAL",
-                    "Initial capital cannot be negative");
-        }
-        plan.setInitialCapital(DecimalMath.money(amount));
-        planRepository.saveAndFlush(plan);
-    }
-
-    @Transactional
-    public void classifyInitial(UUID planId, UUID transactionId) {
-        getPlan(planId);
-        TransactionEntity transaction = getTransaction(transactionId);
-        if (transaction.getTransactionType() != TransactionType.BUY) {
-            throw new DomainException(HttpStatus.BAD_REQUEST, "INITIAL_CONTRIBUTION_REQUIRES_BUY",
-                    "Only BUY transactions can be classified as initial capital");
-        }
-        if (transaction.getPlanCycleId() != null) {
-            throw new DomainException(HttpStatus.CONFLICT, "DCA_CONTRIBUTION_ALREADY_CLASSIFIED",
-                    "A BUY linked to a DCA cycle cannot also be initial capital");
-        }
-        if (transaction.getContributionType() == ContributionType.INITIAL
-                && transaction.getContributionPlanId() != null
-                && !planId.equals(transaction.getContributionPlanId())) {
-            throw new DomainException(HttpStatus.CONFLICT, "CONTRIBUTION_ALREADY_CLASSIFIED",
-                    "The transaction is already initial capital for another plan");
-        }
-        transaction.setContributionType(ContributionType.INITIAL);
-        transaction.setContributionPlanId(planId);
-        transactionRepository.saveAndFlush(transaction);
-    }
-
-    @Transactional
-    public void unclassifyInitial(UUID planId, UUID transactionId) {
-        TransactionEntity transaction = getTransaction(transactionId);
-        if (transaction.getContributionType() != ContributionType.INITIAL
-                || !planId.equals(transaction.getContributionPlanId())) {
-            throw new DomainException(HttpStatus.CONFLICT, "CONTRIBUTION_NOT_INITIAL",
-                    "The transaction is not initial capital for this plan");
-        }
-        transaction.setContributionType(null);
-        transaction.setContributionPlanId(null);
-        transactionRepository.saveAndFlush(transaction);
-    }
-
     @Transactional(readOnly = true)
     public ContributionAnalysisResponse analyze(UUID planId) {
         InvestmentPlanEntity plan = getPlan(planId);
@@ -150,7 +103,8 @@ public class ContributionAnalysisService {
                     if (isUnclassifiedBuy(transaction)) {
                         unclassifiedAmount = unclassifiedAmount.add(cost, MC);
                         unclassified.add(new UnclassifiedBuy(transaction.getId(), transaction.getTradeDate(),
-                                transaction.getInstrument().getSymbol(), DecimalMath.money(cost)));
+                                transaction.getInstrument().getSymbol(), DecimalMath.money(cost),
+                                transaction.getTradeDate().equals(plan.getStartDate())));
                     }
                 }
                 case SELL -> applySell(transaction, instrumentLots, accumulators);
@@ -205,22 +159,18 @@ public class ContributionAnalysisService {
         List<BatchAccumulator> dcaMembers = ordered.stream()
                 .filter(entry -> entry.getKey().type == ContributionType.DCA)
                 .map(Map.Entry::getValue).toList();
-        ContributionBucketResponse initial = toBucket(plan.getInitialCapital(), initialMembers);
-        ContributionBucketResponse dca = toBucket(null, dcaMembers);
+        ContributionBucketResponse initial = toBucket(initialMembers);
+        ContributionBucketResponse dca = toBucket(dcaMembers);
         BigDecimal totalInvested = initial.principal().add(dca.principal(), MC);
         FreshnessStatus dataStatus = combineStatus(initial.dataStatus(), dca.dataStatus());
         return new ContributionAnalysisResponse(DecimalMath.money(totalInvested), initial, dca,
-                DecimalMath.money(unclassifiedAmount), List.copyOf(unclassified), batches, dataStatus, asOf);
+                DecimalMath.money(unclassifiedAmount), List.copyOf(unclassified), "ACCOUNT", batches,
+                dataStatus, asOf);
     }
 
     private InvestmentPlanEntity getPlan(UUID planId) {
         return planRepository.findById(planId)
                 .orElseThrow(() -> new DomainException(HttpStatus.NOT_FOUND, "PLAN_NOT_FOUND", "Investment plan not found"));
-    }
-
-    private TransactionEntity getTransaction(UUID transactionId) {
-        return transactionRepository.findById(transactionId)
-                .orElseThrow(() -> new DomainException(HttpStatus.NOT_FOUND, "TRANSACTION_NOT_FOUND", "Transaction not found"));
     }
 
     private BigDecimal buyCost(TransactionEntity transaction) {
@@ -329,7 +279,7 @@ public class ContributionAnalysisService {
                 DecimalMath.money(value), DecimalMath.money(pnl), returnRate, averageMarketDays(batch), batch.dataStatus);
     }
 
-    private ContributionBucketResponse toBucket(BigDecimal plannedPrincipal, List<BatchAccumulator> members) {
+    private ContributionBucketResponse toBucket(List<BatchAccumulator> members) {
         BigDecimal principal = members.stream().map(member -> member.principal)
                 .reduce(BigDecimal.ZERO, (left, right) -> left.add(right, MC));
         BigDecimal weightedDays = members.stream().map(member -> member.weightedMarketDays)
@@ -345,8 +295,8 @@ public class ContributionAnalysisService {
         int marketDays = principal.signum() == 0 ? 0
                 : weightedDays.divide(principal, MC).setScale(0, RoundingMode.HALF_UP).intValue();
         int batchCount = (int) members.stream().filter(member -> member.principal.signum() > 0).count();
-        return new ContributionBucketResponse(DecimalMath.money(plannedPrincipal), DecimalMath.money(principal),
-                DecimalMath.money(value), DecimalMath.money(pnl), returnRate, marketDays, batchCount, status);
+        return new ContributionBucketResponse(DecimalMath.money(principal), DecimalMath.money(value),
+                DecimalMath.money(pnl), returnRate, marketDays, batchCount, status);
     }
 
     private int averageMarketDays(BatchAccumulator batch) {

@@ -38,9 +38,16 @@
 
 .contribution-help { color: var(--text-muted); font-size: 12px; line-height: 1.6; margin-bottom: 12px; }
 .unclassified-list { border-top: 1px solid var(--line-subtle); }
-.unclassified-row { align-items: center; border-bottom: 1px solid var(--line-subtle); display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr) auto auto; padding: 11px 0; }
-.unclassified-row > span { display: flex; flex-direction: column; gap: 2px; }
+.unclassified-row { align-items: center; border-bottom: 1px solid var(--line-subtle); display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr) auto minmax(130px, auto); padding: 11px 0; }
+.classification-select-row { align-items: center; display: flex; gap: 10px; min-width: 0; }
+.classification-select-row > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .unclassified-row > strong { font-family: 'DM Mono', monospace; font-size: 12px; }
+.unclassified-row select { min-height: 34px; min-width: 130px; }
+.classification-actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; padding-top: 14px; }
+.classification-preview { border-left: 3px solid var(--line-strong); display: flex; flex-direction: column; gap: 4px; margin-top: 12px; padding: 8px 10px; }
+.classification-preview-valid { border-left-color: var(--positive); }
+.classification-preview-invalid { border-left-color: var(--negative); }
+.classification-preview small { color: var(--text-muted); }
 .button-small { min-height: 30px; padding: 0 10px; }
 
 .contribution-table th:nth-child(n + 2),

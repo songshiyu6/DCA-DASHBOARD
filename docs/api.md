@@ -172,10 +172,34 @@ The daily prices endpoint returns an envelope whose `data` array contains
 `date`, `close`, and `adjustedClose` plus `dataStatus`, `source`, `asOf`, and
 `retrievedAt`. Daily dates are `YYYY-MM-DD`; the `1D` provider series uses UTC
 timestamp strings and may omit `adjustedClose`, so clients use `close` for chart
-display in that case. Supported ranges are `1W`, `1M`, `3M`, `YTD`,
-`1Y`, `3Y`, `5Y`, and `ALL`; the default is `1Y`. The `1D` series is not
-persisted as a permanent intraday store. A failed request returns
-`dataStatus: "UNAVAILABLE"`, never an empty-array `FRESH` response.
+display in that case. Supported persisted-history ranges are `1W`, `1M`, `3M`,
+`YTD`, `1Y`, `3Y`, `5Y`, and `ALL`; the default is `1Y`.
+
+`range=1D` is a separate on-demand intraday contract and is never persisted as
+a permanent five-minute store. Yahoo v8 chart supplies pre-market, regular, and
+post-market bars; Yahoo v7 may separately supply a single overnight quote. The
+API does not turn that quote into synthetic bars and does not return a previous
+trading day's bars as today's `FRESH` series.
+
+For `range=1D`:
+
+- current New York trading day with current pre/regular/post bars returns
+  `dataStatus: "FRESH"`, the actual provider `source`, `asOf` equal to the New
+  York trade date of the newest returned bar, and the bars in `data`;
+- a valid provider response with no current-session bars, including overnight
+  before pre-market, returns `dataStatus: "PARTIAL"`, the provider `source`, an
+  empty `data` array, no `asOf`, and a message such as `Current trading session
+  has no intraday bars yet`;
+- weekends and observed US market holidays return `PARTIAL`, empty `data`, no
+  `source`/`asOf`, a market-closed message, and do not call a provider;
+- HTTP 429/5xx/timeout provider failures use bounded retries. If a distinct
+  configured fallback succeeds, its actual provider is returned as `source`;
+  otherwise the response is `UNAVAILABLE` with no `asOf` and an explicit
+  message. A persisted `fallbackProvider=NONE` means no fallback is attempted.
+
+Thus a provider error, a successful empty chart, and a closed market are not
+collapsed into the same generic empty success. `retrievedAt` always describes
+when the API produced the response; it is not a substitute for `asOf`.
 
 The sync response has this shape:
 
@@ -201,31 +225,34 @@ checked-in restore script if validation requires rollback.
 Metrics that require adjusted-close endpoints (`oneMonth`, `threeMonths`,
 `ytd`, `oneYear`, `threeYearCagr`, `currentDrawdown`, and `maxDrawdown1Y`) are
 unset when a required adjusted value is missing. Those properties are omitted
-on the wire; the web client
-normalizes an omitted or explicit null value to its missing display `--`, never
-to `0%`. The response carries `dataStatus: "PARTIAL"` or
-`"INSUFFICIENT_HISTORY"`. The 52-week high and low continue to use raw high and
-low.
+on the wire; the web client normalizes an omitted or explicit null value to its
+missing display `--`, never to `0%`. The response carries
+`dataStatus: "PARTIAL"` or `"INSUFFICIENT_HISTORY"`. The 52-week high and low
+continue to use raw high and low.
 
 The current default live provider is Yahoo Finance. Twelve Data provides live
 search, quote, daily/intraday history, profile, and split capabilities when its
-server-side key is configured. Alpha Vantage provides the optional ETF profile
-capability. A provider key is never sent to the browser.
+server-side key is configured and Settings selects it as primary/fallback.
+Alpha Vantage provides the optional ETF profile capability. A provider key is
+never sent to the browser, and an empty Twelve Data key is never treated as a
+usable fallback.
 
 Yahoo latest-quote selection uses the newest valid timestamped candidate among
 regular, pre-market, extended, post-market, and overnight prices. Current
 portfolio and contribution valuation may therefore move outside regular hours.
 The quote's comparison baseline remains the previous regular close; historical
-snapshots, charts, YTD, and TWR continue to use regular-session daily closes.
-If Yahoo's authenticated quote edge is unavailable, the adapter falls back to
-the regular-session chart quote.
+snapshots, daily charts, YTD, and TWR continue to use regular-session daily
+closes. If Yahoo's authenticated quote edge is unavailable, the adapter falls
+back to the regular-session chart quote and marks that quote as degraded. The
+1D chart path is independent of this quote-authentication/fallback behavior.
 
-Yahoo's chart edge may return HTTP 429 for browser-shaped User-Agent strings.
-The adapter uses a minimal `Mozilla/5.0` User-Agent and keeps the bounded retry
-and fallback policy above. A provider outage never creates placeholder bars:
-the instrument remains visible with `UNAVAILABLE` or
-`INSUFFICIENT_HISTORY`, the sync endpoint returns a status/message, and the
-ETF detail view exposes a manual retry action.
+Yahoo chart HTTP 408/429/5xx and timeout failures are retryable with a small
+bounded exponential backoff before an actually configured fallback is tried. A
+valid empty current-session chart is not retried as though it were HTTP 429.
+No retry/fallback path logs provider API keys, Yahoo cookies/crumbs, or
+authorization headers. The ETF detail view refreshes 1D directly with a short
+cache policy; its Retry action does not run daily-history sync as a substitute
+for the intraday endpoint.
 
 ## Transactions
 
@@ -330,9 +357,8 @@ date,type,symbol,quantity,price,fee
 ```
 
 Optional columns are `amount`, `planCycleId` (or `plan_cycle_id`), and `notes`.
-Preview returns
-`batchId`, row counts, and a row-by-row validation result. Commit accepts the
-`batchId` and the CSV rows as JSON:
+Preview returns `batchId`, row counts, and a row-by-row validation result. Commit
+accepts the `batchId` and the CSV rows as JSON:
 
 ```json
 {
@@ -686,7 +712,8 @@ Provider values are `YAHOO`, `TWELVE_DATA`, `ALPHA_VANTAGE`, or `NONE` for
 the fallback. Themes are `SYSTEM`, `LIGHT`, and `DARK`. Base currency,
 business timezone, and provider keys are not updated by this endpoint. The
 business timezone is fixed to `America/New_York`; provider keys and password
-hashes are never returned.
+hashes are never returned. `fallbackProvider: "NONE"` is authoritative: the
+API does not infer or enable Twelve Data from an environment placeholder.
 
 ## Errors
 

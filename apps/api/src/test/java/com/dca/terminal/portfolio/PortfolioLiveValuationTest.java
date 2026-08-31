@@ -46,8 +46,9 @@ class PortfolioLiveValuationTest {
                 new BigDecimal("0.13636364"), null, null, NOW, NOW, "YAHOO",
                 FreshnessStatus.FRESH, null, null));
 
-        PortfolioDtos.SummaryResponse summary = fixture.service.summary();
-        PortfolioDtos.HoldingResponse holding = fixture.service.holdings().getFirst();
+        PortfolioService.CurrentViews views = fixture.service.currentViews();
+        PortfolioDtos.SummaryResponse summary = views.summary();
+        PortfolioDtos.HoldingResponse holding = views.holdings().getFirst();
 
         assertDecimal("125", summary.marketValue());
         assertDecimal("25", summary.unrealizedPnl());

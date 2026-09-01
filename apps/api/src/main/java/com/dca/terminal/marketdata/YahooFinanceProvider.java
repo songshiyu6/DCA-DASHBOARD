@@ -4,6 +4,8 @@ import com.dca.terminal.instrument.InstrumentEntity;
 import com.dca.terminal.instrument.InstrumentType;
 import com.dca.terminal.marketdata.ProviderModels.EtfProfile;
 import com.dca.terminal.marketdata.ProviderModels.IntradayBar;
+import com.dca.terminal.marketdata.ProviderModels.IntradayResult;
+import com.dca.terminal.marketdata.ProviderModels.IntradaySession;
 import com.dca.terminal.marketdata.ProviderModels.PriceBar;
 import com.dca.terminal.marketdata.ProviderModels.ProviderQuote;
 import com.dca.terminal.marketdata.ProviderModels.ProviderSearchResult;
@@ -14,9 +16,11 @@ import java.math.BigDecimal;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
 import java.net.URI;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -43,12 +47,14 @@ public class YahooFinanceProvider implements MarketDataProvider {
     private static final String COOKIE_BOOTSTRAP_URL = "https://fc.yahoo.com";
     private static final Duration QUOTE_SESSION_TTL = Duration.ofMinutes(45);
     private static final ZoneId US_MARKET_ZONE = ZoneId.of("America/New_York");
+    private static final LocalTime REGULAR_OPEN = LocalTime.of(9, 30);
     private static final Logger log = LoggerFactory.getLogger(YahooFinanceProvider.class);
     private final RestClient client;
     private final RestClient authClient;
     private final ObjectMapper objectMapper;
     private final boolean authenticatedQuoteEndpoint;
     private final String cookieBootstrapUrl;
+    private final Clock clock;
     private final Object quoteSessionLock = new Object();
     private volatile YahooQuoteSession quoteSession;
 
@@ -58,7 +64,17 @@ public class YahooFinanceProvider implements MarketDataProvider {
             ObjectMapper objectMapper,
             @Value("${dca.market-data.yahoo.base-url}") String baseUrl,
             @Value("${dca.market-data.yahoo.timeout-ms:5000}") int timeoutMs) {
-        this(builder, objectMapper, baseUrl, timeoutMs, "");
+        this(builder, objectMapper, baseUrl, timeoutMs, "", Clock.systemUTC());
+    }
+
+    /** Keeps direct provider construction with an explicit proxy compatible with existing tests. */
+    public YahooFinanceProvider(
+            RestClient.Builder builder,
+            ObjectMapper objectMapper,
+            String baseUrl,
+            int timeoutMs,
+            String proxyUrl) {
+        this(builder, objectMapper, baseUrl, timeoutMs, proxyUrl, Clock.systemUTC());
     }
 
     @Autowired
@@ -67,9 +83,10 @@ public class YahooFinanceProvider implements MarketDataProvider {
             ObjectMapper objectMapper,
             @Value("${dca.market-data.yahoo.base-url}") String baseUrl,
             @Value("${dca.market-data.yahoo.timeout-ms:5000}") int timeoutMs,
-            @Value("${dca.market-data.yahoo.proxy-url:}") String proxyUrl) {
+            @Value("${dca.market-data.yahoo.proxy-url:}") String proxyUrl,
+            Clock clock) {
         this(builder, objectMapper, baseUrl, timeoutMs, proxyUrl,
-                isOfficialYahooHost(baseUrl), COOKIE_BOOTSTRAP_URL);
+                isOfficialYahooHost(baseUrl), COOKIE_BOOTSTRAP_URL, clock);
     }
 
     YahooFinanceProvider(
@@ -80,6 +97,19 @@ public class YahooFinanceProvider implements MarketDataProvider {
             String proxyUrl,
             boolean authenticatedQuoteEndpoint,
             String cookieBootstrapUrl) {
+        this(builder, objectMapper, baseUrl, timeoutMs, proxyUrl,
+                authenticatedQuoteEndpoint, cookieBootstrapUrl, Clock.systemUTC());
+    }
+
+    YahooFinanceProvider(
+            RestClient.Builder builder,
+            ObjectMapper objectMapper,
+            String baseUrl,
+            int timeoutMs,
+            String proxyUrl,
+            boolean authenticatedQuoteEndpoint,
+            String cookieBootstrapUrl,
+            Clock clock) {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(timeoutMs);
         factory.setReadTimeout(timeoutMs);
@@ -100,6 +130,7 @@ public class YahooFinanceProvider implements MarketDataProvider {
         this.objectMapper = objectMapper;
         this.authenticatedQuoteEndpoint = authenticatedQuoteEndpoint;
         this.cookieBootstrapUrl = cookieBootstrapUrl;
+        this.clock = clock == null ? Clock.systemUTC() : clock;
         log.info("Yahoo market-data client initialized host={} httpVersion=HTTP_1_1 proxyConfigured={} quoteAuth={}",
                 URI.create(baseUrl).getHost(), proxy != null, authenticatedQuoteEndpoint);
     }
@@ -193,29 +224,81 @@ public class YahooFinanceProvider implements MarketDataProvider {
 
     @Override
     public List<IntradayBar> getIntradayPrices(InstrumentEntity instrument, LocalDate from, LocalDate to) {
+        IntradayResult result = getIntradayResult(instrument, from, to);
+        if (result.bars().isEmpty() && shouldEscalateEmptyIntraday(result, to, clock.instant())) {
+            throw new ProviderException(id(), intradayEmptyReason(result), true);
+        }
+        return result.bars();
+    }
+
+    @Override
+    public IntradayResult getIntradayResult(InstrumentEntity instrument, LocalDate from, LocalDate to) {
         JsonNode result = intradayChart(instrument.getSymbol(), from, to);
         JsonNode chart = chartResult(result);
         JsonNode meta = chart.path("meta");
         JsonNode timestamps = chart.path("timestamp");
         JsonNode quote = chart.path("indicators").path("quote").path(0);
         ZoneId exchangeZone = exchangeZone(meta);
+        IntradaySession session = intradaySession(meta, exchangeZone);
+        int rawTimestampCount = timestamps.isArray() ? timestamps.size() : 0;
+        int dateMatchedCount = 0;
+        int tradingPeriodMatchedCount = 0;
+        int nonNullCloseCount = 0;
         List<IntradayBar> bars = new ArrayList<>();
-        for (int i = 0; i < timestamps.size(); i++) {
+        for (int i = 0; i < rawTimestampCount; i++) {
             JsonNode timestampNode = timestamps.get(i);
             if (timestampNode == null || !timestampNode.isNumber()) continue;
             Instant timestamp = Instant.ofEpochSecond(timestampNode.asLong());
             LocalDate tradeDate = timestamp.atZone(exchangeZone).toLocalDate();
             if (tradeDate.isBefore(from) || tradeDate.isAfter(to)) continue;
+            dateMatchedCount++;
             if (!withinCurrentTradingPeriods(meta, timestamp)) continue;
+            tradingPeriodMatchedCount++;
             BigDecimal close = decimalAt(quote.path("close"), i);
-            if (close != null) {
-                bars.add(new IntradayBar(timestamp, decimalAt(quote.path("open"), i),
-                        decimalAt(quote.path("high"), i), decimalAt(quote.path("low"), i), close,
-                        longAt(quote.path("volume"), i)));
-            }
+            if (close == null) continue;
+            nonNullCloseCount++;
+            bars.add(new IntradayBar(timestamp, decimalAt(quote.path("open"), i),
+                    decimalAt(quote.path("high"), i), decimalAt(quote.path("low"), i), close,
+                    longAt(quote.path("volume"), i)));
         }
         bars.sort(Comparator.comparing(IntradayBar::timestamp));
-        return bars;
+        IntradayResult diagnostics = new IntradayResult(bars, rawTimestampCount, dateMatchedCount,
+                tradingPeriodMatchedCount, nonNullCloseCount, session);
+        log.info("Yahoo intraday diagnostics ticker={} from={} to={} rawTimestamps={} dateMatched={} periodMatched={} closeMatched={} finalBars={} exchangeTimezone={} preStart={} preEnd={} regularStart={} regularEnd={} postStart={} postEnd={}",
+                instrument.getSymbol(), from, to, rawTimestampCount, dateMatchedCount, tradingPeriodMatchedCount,
+                nonNullCloseCount, bars.size(), session.exchangeTimezoneName(), session.preStart(), session.preEnd(),
+                session.regularStart(), session.regularEnd(), session.postStart(), session.postEnd());
+        return diagnostics;
+    }
+
+    private static boolean shouldEscalateEmptyIntraday(IntradayResult result, LocalDate requestedDate, Instant now) {
+        if (result == null || !result.bars().isEmpty()) return false;
+        IntradaySession session = result.session();
+        Instant regularStart = session == null ? null : session.regularStart();
+        if (regularStart == null) {
+            regularStart = requestedDate.atTime(REGULAR_OPEN).atZone(US_MARKET_ZONE).toInstant();
+        }
+        if (now.isBefore(regularStart)) return false;
+        return result.rawTimestampCount() == 0
+                || result.dateMatchedCount() == 0
+                || result.tradingPeriodMatchedCount() == 0
+                || result.nonNullCloseCount() == 0;
+    }
+
+    private static String intradayEmptyReason(IntradayResult result) {
+        if (result.rawTimestampCount() == 0) {
+            return "Yahoo returned no intraday timestamps after the regular session started";
+        }
+        if (result.dateMatchedCount() == 0) {
+            return "Yahoo intraday timestamps did not match the requested New York trading date";
+        }
+        if (result.tradingPeriodMatchedCount() == 0) {
+            return "Yahoo intraday timestamps did not match declared trading periods";
+        }
+        if (result.nonNullCloseCount() == 0) {
+            return "Yahoo intraday timestamps had no usable close after the regular session started";
+        }
+        return "Yahoo intraday response contained no usable current-session bars";
     }
 
     @Override
@@ -501,6 +584,18 @@ public class YahooFinanceProvider implements MarketDataProvider {
         return !hasValidPeriod;
     }
 
+    private static IntradaySession intradaySession(JsonNode meta, ZoneId exchangeZone) {
+        return new IntradaySession(exchangeZone.getId(),
+                periodInstant(meta, "pre", "start"), periodInstant(meta, "pre", "end"),
+                periodInstant(meta, "regular", "start"), periodInstant(meta, "regular", "end"),
+                periodInstant(meta, "post", "start"), periodInstant(meta, "post", "end"));
+    }
+
+    private static Instant periodInstant(JsonNode meta, String periodName, String fieldName) {
+        JsonNode value = meta.path("currentTradingPeriod").path(periodName).path(fieldName);
+        return value.isNumber() ? Instant.ofEpochSecond(value.asLong()) : null;
+    }
+
     private static BigDecimal previousTradingClose(JsonNode chart, Instant marketTimestamp) {
         JsonNode timestamps = chart.path("timestamp");
         JsonNode closes = chart.path("indicators").path("quote").path(0).path("close");
@@ -580,11 +675,11 @@ public class YahooFinanceProvider implements MarketDataProvider {
     }
 
     private static ZoneId exchangeZone(JsonNode node) {
-        String name = text(node, "exchangeTimezoneName", "UTC");
+        String name = text(node, "exchangeTimezoneName", US_MARKET_ZONE.getId());
         try {
             return ZoneId.of(name);
         } catch (RuntimeException ignored) {
-            return ZoneOffset.UTC;
+            return US_MARKET_ZONE;
         }
     }
 

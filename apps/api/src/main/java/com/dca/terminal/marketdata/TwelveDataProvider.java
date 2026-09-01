@@ -13,9 +13,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.net.URI;
+import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
@@ -47,15 +49,19 @@ import org.springframework.web.util.UriComponentsBuilder;
 public class TwelveDataProvider implements MarketDataProvider {
     private static final String DEFAULT_BASE_URL = "https://api.twelvedata.com";
     private static final String EXCHANGE_ZONE = "America/New_York";
+    private static final ZoneId EXCHANGE_ZONE_ID = ZoneId.of(EXCHANGE_ZONE);
+    private static final LocalTime REGULAR_OPEN = LocalTime.of(9, 30);
     private static final int DEFAULT_TIMEOUT_MS = 5_000;
 
     private final RestClient client;
     private final ObjectMapper objectMapper;
     private final String apiKey;
+    private final Clock clock;
 
     /** Keeps direct provider construction compatible with the original adapter stub. */
     public TwelveDataProvider(String apiKey) {
-        this(RestClient.builder(), new ObjectMapper(), apiKey, DEFAULT_BASE_URL, DEFAULT_TIMEOUT_MS, false);
+        this(RestClient.builder(), new ObjectMapper(), apiKey, DEFAULT_BASE_URL, DEFAULT_TIMEOUT_MS, false,
+                Clock.systemUTC());
     }
 
     @Autowired
@@ -64,12 +70,18 @@ public class TwelveDataProvider implements MarketDataProvider {
             ObjectMapper objectMapper,
             @Value("${dca.market-data.twelve-data.api-key:}") String apiKey,
             @Value("${dca.market-data.twelve-data.base-url:https://api.twelvedata.com}") String baseUrl,
-            @Value("${dca.market-data.twelve-data.timeout-ms:5000}") int timeoutMs) {
-        this(builder, objectMapper, apiKey, baseUrl, timeoutMs, false);
+            @Value("${dca.market-data.twelve-data.timeout-ms:5000}") int timeoutMs,
+            Clock clock) {
+        this(builder, objectMapper, apiKey, baseUrl, timeoutMs, false, clock);
     }
 
     TwelveDataProvider(RestClient.Builder builder, ObjectMapper objectMapper, String apiKey,
                        String baseUrl, int timeoutMs, boolean testConstructor) {
+        this(builder, objectMapper, apiKey, baseUrl, timeoutMs, testConstructor, Clock.systemUTC());
+    }
+
+    TwelveDataProvider(RestClient.Builder builder, ObjectMapper objectMapper, String apiKey,
+                       String baseUrl, int timeoutMs, boolean testConstructor, Clock clock) {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         int effectiveTimeout = timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS;
         factory.setConnectTimeout(effectiveTimeout);
@@ -77,6 +89,7 @@ public class TwelveDataProvider implements MarketDataProvider {
         this.client = builder.requestFactory(factory).baseUrl(normalizeBaseUrl(baseUrl)).build();
         this.objectMapper = objectMapper;
         this.apiKey = apiKey == null ? "" : apiKey.trim();
+        this.clock = clock == null ? Clock.systemUTC() : clock;
     }
 
     @Override
@@ -167,7 +180,9 @@ public class TwelveDataProvider implements MarketDataProvider {
         String symbol = symbolOf(instrument);
         JsonNode root = get("/time_series", timeSeriesParams(symbol, from, to, "5min", "none"));
         JsonNode values = root.path("values");
-        if (!values.isArray()) return List.of();
+        if (!values.isArray()) {
+            return emptyIntradayOrThrow(symbol, to);
+        }
 
         ZoneId zone = exchangeZone(root.path("meta"));
         List<IntradayBar> bars = new ArrayList<>();
@@ -182,7 +197,25 @@ public class TwelveDataProvider implements MarketDataProvider {
                     decimal(value, "low"), close, longValue(value, "volume")));
         }
         bars.sort(Comparator.comparing(IntradayBar::timestamp));
+        if (bars.isEmpty()) return emptyIntradayOrThrow(symbol, to);
         return bars;
+    }
+
+    private List<IntradayBar> emptyIntradayOrThrow(String symbol, LocalDate requestedDate) {
+        if (currentRegularSessionStarted(requestedDate, clock.instant())) {
+            throw new ProviderException(id(),
+                    "Twelve Data returned no usable intraday bars after the regular session started for " + symbol,
+                    true);
+        }
+        return List.of();
+    }
+
+    static boolean currentRegularSessionStarted(LocalDate requestedDate, Instant now) {
+        if (requestedDate == null || now == null) return false;
+        LocalDate currentDate = now.atZone(EXCHANGE_ZONE_ID).toLocalDate();
+        if (!requestedDate.equals(currentDate)) return false;
+        Instant regularStart = requestedDate.atTime(REGULAR_OPEN).atZone(EXCHANGE_ZONE_ID).toInstant();
+        return !now.isBefore(regularStart);
     }
 
     @Override

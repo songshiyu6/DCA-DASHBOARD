@@ -126,7 +126,7 @@ boundaries:
 - `auth`: single-user session authentication, CSRF, and login throttling.
 - `instrument`: tracked ETF identity and profile metadata.
 - `marketdata`: provider SPI, registry, fallback, cache, ingestion, on-demand
-  intraday retrieval, and data freshness.
+  intraday retrieval, provider-session diagnostics, and data freshness.
 - `transaction`: validation, CRUD, CSV import, duplicate detection, and
   transaction-to-cycle suggestions.
 - `portfolio`: split-aware FIFO replay, holdings, P/L, XIRR, allocation, and
@@ -167,15 +167,28 @@ expanded into synthetic five-minute bars, and missing current-day intraday bars
 must not cause a previous trading day's series to be relabeled as today. The 1D
 API filters provider timestamps by `America/New_York` trade date and, when Yahoo
 supplies `currentTradingPeriod`, by the declared pre/regular/post boundaries.
+Those boundaries are `[start,end)`. If Yahoo omits or supplies an invalid
+`exchangeTimezoneName` for the US ETF intraday chart, normalization uses
+`America/New_York` rather than UTC so late post-market bars are not dropped only
+because the UTC calendar date has advanced.
 
-The 1D API has explicit market-state semantics. A current trading day with no
-bars yet returns `PARTIAL`, an empty array, no `asOf`, and the provider source.
-Weekends and observed US market holidays return `PARTIAL` without calling a
-provider and without an `asOf`. Provider failure after bounded retries returns
-`UNAVAILABLE` unless a distinct configured fallback succeeds; a fallback result
-reports the fallback provider as its real source. A persisted
-`fallbackProvider=NONE` is authoritative and never causes Twelve Data to be
-automatically enabled.
+Yahoo intraday parsing also returns an internal diagnostic result alongside the
+normalized bars. The internal value records raw timestamp count, requested-date
+match count, trading-period match count, non-null-close count, final bar count,
+and pre/regular/post session boundaries. It is used for classification and safe
+logging only; it is not persisted and is not exposed as public API data.
+
+The 1D API has explicit market-state semantics. Before the regular session
+starts, a valid empty primary result may represent an honest not-yet-populated
+current-session state and remains `PARTIAL`, with no `asOf`; it is not replaced
+by fabricated or previous-day data. Once regular trading has started, an empty
+Yahoo response or an unusable response whose raw timestamps/closes do not yield
+current-session bars is promoted to a retryable provider failure. The normal
+bounded retry chain then runs and may use a distinct configured fallback. A
+successful fallback reports its own provider as `source`; exhausting the chain
+returns `UNAVAILABLE`. Weekends and observed US market holidays remain
+`PARTIAL` without provider I/O. A persisted `fallbackProvider=NONE` is
+authoritative and never causes Twelve Data to be automatically enabled.
 
 ## Persistent model
 
@@ -298,12 +311,15 @@ requests; the scheduler's trigger and all business-date decisions remain fixed
 to New York exchange time.
 
 For an ETF detail 1D request, market-calendar closure is checked before provider
-I/O. On a trading day, a valid empty provider response is returned once as
-`PARTIAL` and is not treated as a transient error. Retryable provider errors use
-a bounded exponential backoff and then the configured fallback, if one actually
-exists. The web treats 1D as live data: short stale time, visible 60-second
-refresh, focus refetch, and a Retry action that refetches 1D directly. The daily
-history sync action remains specific to persisted daily history.
+I/O. On a trading day before regular open, a valid empty primary result remains
+`PARTIAL` and is returned without rapid retries. Once regular trading has
+started, Yahoo empty/unusable responses are classified from the raw/date/period/
+close diagnostic counts and enter the bounded retry/fallback path instead of
+being mislabeled as "not started yet". Retryable HTTP/provider errors use the
+same bounded exponential backoff. The web treats 1D as live data: short stale
+time, visible 60-second refresh, focus refetch, and a Retry action that refetches
+1D directly. The daily history sync action remains specific to persisted daily
+history.
 
 ### Transactions
 
@@ -362,7 +378,9 @@ not appear in React environment variables, API responses, logs, or Git. The
 tracked `deploy/.env.example` contains placeholders only. The real
 `deploy/.env` and generated `deploy/backups/` directory are ignored. Provider
 retry logs must likewise exclude API keys, Yahoo cookies/crumbs, and
-Authorization headers.
+Authorization headers. Intraday diagnostics are limited to provider/session
+metadata and counts; no raw response body or secret-bearing request metadata is
+logged.
 
 Spring Actuator provides the internal health check consumed by Compose. The
 public API health endpoint must return a minimal status and must not expose
@@ -376,13 +394,17 @@ the operational commands in the root README.
 
 ## Failure behavior
 
-Provider failure, valid empty market data, and market closure are separate
-states. For 1D intraday data, a provider 429/5xx/timeout is retried with bounded
-backoff and may use an explicitly configured fallback. A successful empty
-current-session response is `PARTIAL`, not `UNAVAILABLE`, and does not trigger
-rapid retries or fallback. Weekend/holiday closure is also `PARTIAL` but is
-identified as market closure and causes no provider request. An empty 1D state
-has no `asOf`; it is never labeled today merely because it was retrieved today.
+Provider failure, valid empty market data, post-open unusable market data, and
+market closure are separate states. For 1D intraday data, a provider
+408/429/5xx/timeout is retried with bounded backoff and may use an explicitly
+configured fallback. A genuinely empty response before regular open may remain
+`PARTIAL`; it does not trigger provider switching merely to create a chart.
+After regular open, an empty Yahoo response, all-null closes, or normalization
+that removes all raw timestamps from the requested current session is a
+retryable provider anomaly. If the configured chain cannot produce real bars,
+the result is `UNAVAILABLE`. Weekend/holiday closure is `PARTIAL`, is identified
+as market closure, and causes no provider request. An empty 1D state has no
+`asOf`; it is never labeled today merely because it was retrieved today.
 
 Existing persisted prices remain visible with their `asOf`/`retrievedAt` times
 when the relevant endpoint contract permits it. Missing prices disable
@@ -392,4 +414,7 @@ or a fabricated zero return. A failure in all configured market-data providers
 must not turn the dashboard into HTTP 500.
 
 The API emits structured logs/metrics with provider, operation, outcome,
-status, and bounded retry metadata. Secrets and full credentials are excluded.
+status, and bounded retry metadata. Yahoo intraday logs additionally include
+raw timestamp, date-match, trading-period-match, non-null-close, and final-bar
+counts plus non-secret session boundaries. Secrets and full credentials are
+excluded.

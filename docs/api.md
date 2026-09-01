@@ -186,20 +186,35 @@ For `range=1D`:
 - current New York trading day with current pre/regular/post bars returns
   `dataStatus: "FRESH"`, the actual provider `source`, `asOf` equal to the New
   York trade date of the newest returned bar, and the bars in `data`;
-- a valid provider response with no current-session bars, including overnight
-  before pre-market, returns `dataStatus: "PARTIAL"`, the provider `source`, an
-  empty `data` array, no `asOf`, and a message such as `Current trading session
-  has no intraday bars yet`;
+- a genuinely empty Yahoo response before the regular session starts remains
+  `dataStatus: "PARTIAL"`, uses Yahoo as `source`, has empty `data`, no `asOf`,
+  and may say `Current trading session has no intraday bars yet`;
+- once the regular session has started, an empty Yahoo chart, an all-null-close
+  chart, or an intraday response whose raw timestamps are eliminated by the
+  requested New York date / declared trading-period normalization is treated as
+  an abnormal provider result rather than a generic "not open yet" state. It
+  enters the same bounded retry/fallback path as a retryable provider failure;
+- if that post-open anomaly exhausts retries and no usable fallback produces
+  honest bars, the response is `UNAVAILABLE`, not `FRESH` and not a relabeled
+  previous-day series;
 - weekends and observed US market holidays return `PARTIAL`, empty `data`, no
   `source`/`asOf`, a market-closed message, and do not call a provider;
-- HTTP 429/5xx/timeout provider failures use bounded retries. If a distinct
+- HTTP 408/429/5xx/timeout provider failures use bounded retries. If a distinct
   configured fallback succeeds, its actual provider is returned as `source`;
   otherwise the response is `UNAVAILABLE` with no `asOf` and an explicit
   message. A persisted `fallbackProvider=NONE` means no fallback is attempted.
 
-Thus a provider error, a successful empty chart, and a closed market are not
-collapsed into the same generic empty success. `retrievedAt` always describes
-when the API produced the response; it is not a substitute for `asOf`.
+Yahoo normalization records internal safe counts for raw timestamps,
+requested-date matches, declared trading-period matches, non-null closes and
+final bars. Those counts and the pre/regular/post epoch boundaries are logging
+and diagnostics only; they are not added to the public response. Missing or
+invalid Yahoo `exchangeTimezoneName` for the US ETF intraday path falls back to
+`America/New_York` rather than UTC.
+
+Thus a provider error, a pre-open successful empty chart, a post-open empty or
+filtering anomaly, and a closed market are not collapsed into the same generic
+empty success. `retrievedAt` always describes when the API produced the
+response; it is not a substitute for `asOf`.
 
 The sync response has this shape:
 
@@ -247,12 +262,14 @@ back to the regular-session chart quote and marks that quote as degraded. The
 1D chart path is independent of this quote-authentication/fallback behavior.
 
 Yahoo chart HTTP 408/429/5xx and timeout failures are retryable with a small
-bounded exponential backoff before an actually configured fallback is tried. A
-valid empty current-session chart is not retried as though it were HTTP 429.
-No retry/fallback path logs provider API keys, Yahoo cookies/crumbs, or
-authorization headers. The ETF detail view refreshes 1D directly with a short
-cache policy; its Retry action does not run daily-history sync as a substitute
-for the intraday endpoint.
+bounded exponential backoff before an actually configured fallback is tried.
+A valid empty chart before regular open is not retried merely to manufacture a
+series; an empty or unusable chart after regular open is retryable because it no
+longer represents the same benign session state. No retry/fallback path logs
+provider API keys, Yahoo cookies/crumbs, authorization headers, or database
+credentials. The ETF detail view refreshes 1D directly with a short cache
+policy; its Retry action does not run daily-history sync as a substitute for the
+intraday endpoint.
 
 ## Transactions
 

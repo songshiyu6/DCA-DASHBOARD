@@ -4,6 +4,7 @@ import com.dca.terminal.instrument.InstrumentType;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 
 public final class ProviderModels {
     private ProviderModels() { }
@@ -24,6 +25,27 @@ public final class ProviderModels {
 
     public record IntradayBar(Instant timestamp, BigDecimal open, BigDecimal high, BigDecimal low,
                               BigDecimal close, Long volume) { }
+
+    public record IntradaySession(String exchangeTimezoneName,
+                                  Instant preStart, Instant preEnd,
+                                  Instant regularStart, Instant regularEnd,
+                                  Instant postStart, Instant postEnd) { }
+
+    public record IntradayResult(List<IntradayBar> bars,
+                                 int rawTimestampCount,
+                                 int dateMatchedCount,
+                                 int tradingPeriodMatchedCount,
+                                 int nonNullCloseCount,
+                                 IntradaySession session) {
+        public IntradayResult {
+            bars = bars == null ? List.of() : List.copyOf(bars);
+        }
+
+        public static IntradayResult fromBars(List<IntradayBar> bars) {
+            List<IntradayBar> safeBars = bars == null ? List.of() : List.copyOf(bars);
+            return new IntradayResult(safeBars, safeBars.size(), safeBars.size(), safeBars.size(), safeBars.size(), null);
+        }
+    }
 
     public record EtfProfile(String name, String exchange, String currency, String issuer,
                              BigDecimal expenseRatio, BigDecimal aum, BigDecimal dividendYield) { }

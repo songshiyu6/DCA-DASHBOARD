@@ -7,6 +7,7 @@ import java.util.Optional;
 
 import static com.dca.terminal.marketdata.ProviderModels.EtfProfile;
 import static com.dca.terminal.marketdata.ProviderModels.IntradayBar;
+import static com.dca.terminal.marketdata.ProviderModels.IntradayResult;
 import static com.dca.terminal.marketdata.ProviderModels.PriceBar;
 import static com.dca.terminal.marketdata.ProviderModels.ProviderQuote;
 import static com.dca.terminal.marketdata.ProviderModels.ProviderSearchResult;
@@ -24,6 +25,10 @@ public interface MarketDataProvider {
     List<PriceBar> getHistoricalPrices(InstrumentEntity instrument, LocalDate from, LocalDate to);
 
     List<IntradayBar> getIntradayPrices(InstrumentEntity instrument, LocalDate from, LocalDate to);
+
+    default IntradayResult getIntradayResult(InstrumentEntity instrument, LocalDate from, LocalDate to) {
+        return IntradayResult.fromBars(getIntradayPrices(instrument, from, to));
+    }
 
     Optional<EtfProfile> getProfile(InstrumentEntity instrument);
 

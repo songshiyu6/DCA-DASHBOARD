@@ -14,11 +14,20 @@ interface MarketDataProvider {
                                        LocalDate from, LocalDate to);
     List<IntradayBar> getIntradayPrices(Instrument instrument,
                                         LocalDate from, LocalDate to);
+    IntradayResult getIntradayResult(Instrument instrument,
+                                     LocalDate from, LocalDate to);
     Optional<EtfProfile> getProfile(Instrument instrument);
     List<SplitEvent> getSplits(Instrument instrument,
                                LocalDate from, LocalDate to);
 }
 ```
+
+`IntradayResult` is an internal diagnostic contract. It carries the normalized
+bars plus the raw timestamp count, requested-date match count, declared trading
+period match count, non-null close count, and provider session boundaries. It is
+not an API DTO and does not expose provider response bodies or credentials.
+Providers that do not need special intraday diagnostics can use the default
+implementation derived from their normalized bar list.
 
 The registry resolves the configured primary provider and, when explicitly
 configured and usable, one fallback provider. The reviewed canonical ETF
@@ -59,8 +68,9 @@ Provider errors and valid empty market-data responses are deliberately different
 states. For a transient provider error, the registry:
 
 1. Calls the primary provider with a bounded connect/read timeout.
-2. Retries only retryable failures such as timeout, HTTP 408, HTTP 429, and
-   HTTP 5xx, using an exponential backoff of 50/100/200/400 ms capped at 500 ms.
+2. Retries only retryable failures such as timeout, HTTP 408, HTTP 429, HTTP
+   5xx, and a session-aware intraday anomaly after the regular session has
+   started, using an exponential backoff of 50/100/200/400 ms capped at 500 ms.
 3. Falls back only after the retry budget is exhausted and only when a distinct,
    configured provider is actually available.
 4. Records the fallback provider as the real `source`; it is never labeled as
@@ -68,15 +78,29 @@ states. For a transient provider error, the registry:
 5. Returns a degraded/unavailable state when no configured provider can produce
    an honest value.
 
-A successful empty list is not automatically a provider failure. In particular,
-1D intraday requests use the first valid empty result as market state and do
-not rapidly repeat the same request or switch providers merely because the
-current trading session has no bars yet. Other operations may continue to the
-configured fallback when their contract defines an empty response as incomplete.
+A successful empty list is not automatically a provider failure. For 1D Yahoo
+intraday data, a truly empty response before the regular session starts remains
+a valid incomplete market state and is not rapidly retried or replaced with
+another provider merely to manufacture a chart. Once the regular session has
+started, however, a Yahoo response with no usable current-session bars is no
+longer treated as the same benign state. It is promoted to a retryable provider
+failure so the bounded retry/fallback path can run.
 
-Logs and metrics identify provider, operation, attempt/outcome, and bounded
-retry delay. They never log API keys, Yahoo cookies/crumbs, authorization
-headers, or database credentials.
+The same distinction applies to filtering. Raw timestamps are counted before
+normalization. If Yahoo supplied timestamps but none survive the requested New
+York trading-date or `currentTradingPeriod` filters, that fact is observable and
+must not be silently described as "the session has not started". Missing or
+invalid `exchangeTimezoneName` on the Yahoo US ETF chart falls back to
+`America/New_York`, not UTC, so late post-market bars are not dropped merely
+because UTC has crossed midnight.
+
+For every Yahoo intraday response the API logs only safe diagnostic fields:
+symbol, requested dates, raw timestamp count, date-match count, trading-period
+match count, non-null-close count, final normalized bar count, exchange timezone,
+and pre/regular/post start/end timestamps. Provider retry logging and metrics
+continue to identify provider, operation and outcome. Logs never print API keys,
+Yahoo cookies/crumbs, authorization headers, proxy credentials, session tokens,
+or database credentials.
 
 ## 1D intraday contract
 
@@ -96,23 +120,29 @@ never relabels a previous trading day's chart as the current day. Yahoo 1D
 requests use `America/New_York` calendar-day boundaries, request
 `includePrePost=true`, and retain only timestamps that belong to the requested
 New York trade date and to Yahoo's declared `currentTradingPeriod` pre/regular/
-post windows when those windows are present.
+post windows when those windows are present. Trading-period boundaries are
+interpreted as `[start, end)`: a bar exactly at a period start is eligible and a
+bar exactly at its end belongs to the next state rather than the ending period.
 
 The API states are:
 
 | Situation | `dataStatus` | `source` | `asOf` | `data` |
 | --- | --- | --- | --- | --- |
-| Current pre/regular/post session has bars | `FRESH` | actual provider | actual New York trade date of newest bar | current-day bars |
-| Trading day but provider successfully returns no current-session bars (for example overnight before pre-market) | `PARTIAL` | actual provider | omitted | `[]` |
+| Current pre/regular/post session has usable bars | `FRESH` | actual provider | actual New York trade date of newest bar | current-day bars |
+| Trading day, before regular open, and primary successfully has no usable current-session bar yet | `PARTIAL` | primary provider | omitted | `[]` |
+| Regular session has started and primary still has no usable current-session bars | bounded retry; then configured fallback if usable | actual successful provider, if any | actual trade date when bars exist | real bars only |
+| Regular-session empty anomaly exhausts provider chain | `UNAVAILABLE` | last failing provider | omitted | `[]` |
 | Weekend or observed US market holiday | `PARTIAL` | omitted | omitted | `[]` |
-| Provider errors exhaust retries and no usable fallback is configured | `UNAVAILABLE` | failing provider | omitted | `[]` |
-| Primary errors and configured fallback returns bars | `FRESH` | fallback provider | actual trade date | fallback bars |
+| HTTP 408/429/5xx or timeout exhausts retries and no usable fallback is configured | `UNAVAILABLE` | failing provider | omitted | `[]` |
+| Primary failure and configured fallback returns bars | `FRESH` | fallback provider | actual trade date | fallback bars |
 
-A trading-day empty response carries a message equivalent to `Current trading
-session has no intraday bars yet`. A closed calendar day carries a distinct
-market-closed message and does not call a provider. A provider outage carries an
-unavailable message that also states when no fallback is configured. Therefore
-HTTP 429, valid empty data, and market closure are not represented as the same
+A benign pre-open empty response carries a message equivalent to `Current
+trading session has no intraday bars yet`. That message is not a generic label
+for every empty response. A closed calendar day carries a distinct market-closed
+message and does not call a provider. A provider or post-open empty anomaly
+carries an unavailable result when the configured chain cannot produce honest
+bars. Therefore HTTP 429, raw-data filtering anomalies, post-open empty data,
+valid pre-open empty data, and market closure are not represented as the same
 successful empty array.
 
 ## Data separation
@@ -255,6 +285,9 @@ probing the target deployment again.
 - `trade_date` is the provider's actual trading date, never the retrieval date.
 - 1D timestamps are never shifted into a different New York trade date and an
   overnight quote is never converted into a five-minute bar.
+- Yahoo US ETF intraday parsing treats `America/New_York` as the safe timezone
+  fallback when `meta.exchangeTimezoneName` is absent or invalid; it does not
+  fall back to UTC for current-session date filtering.
 - Provider decimals are parsed into `BigDecimal`; binary floating-point values
   are not used for persistence or financial calculations.
 - Daily rows require a valid date and close. High/low/open/volume may be
@@ -273,12 +306,13 @@ probing the target deployment again.
 `FRESH` means the requested value is available within the expected market-data
 age and, for 1D, belongs to the requested current New York trading date.
 `STALE` means a prior value is deliberately shown past its expected age.
-`PARTIAL` means the request is valid but current data is incomplete or absent,
-including an overnight/current-session no-bars response or a closed calendar
-day. `UNAVAILABLE` means no value can be displayed honestly because the
-configured provider chain failed. A metric with too little history may
-additionally carry `INSUFFICIENT_HISTORY`; it must return null rather than
-extrapolating.
+`PARTIAL` means the request is valid but current data is legitimately incomplete
+or absent, including a pre-open current-session no-bars response or a closed
+calendar day. It does not mean "every HTTP 200 empty response". `UNAVAILABLE`
+means no value can be displayed honestly because the configured provider chain
+failed, including a regular-session intraday empty anomaly that exhausts the
+retry/fallback chain. A metric with too little history may additionally carry
+`INSUFFICIENT_HISTORY`; it must return null rather than extrapolating.
 
 Quote responses expose `retrievedAt`, `source`, `status`, and quote session;
 metrics expose `asOf` and `dataStatus`; 1D prices expose `dataStatus`, `source`,
@@ -313,8 +347,10 @@ future-date validation, plan windows, and scheduler boundaries use one rule.
 ## Provider tests
 
 Provider adapters are tested with sanitized fixtures, mock providers, or a mock
-HTTP server. Tests cover successful intraday bars, valid empty charts, Yahoo
-pre/regular/post boundaries, New York day boundaries, timeout/429/5xx
-classification, bounded retry and fallback, market-closed days, and malformed
-data. No automated test depends on live Yahoo, Twelve Data, Alpha Vantage, a
-local database, Docker, or a deployment proxy.
+HTTP server. Tests cover successful intraday bars, valid pre-open empty charts,
+regular-session anomalous empty charts, all-null close responses, per-symbol
+empty-versus-normal behavior, Yahoo pre/regular/post `[start,end)` boundaries,
+New York day boundaries, missing exchange timezone fallback, timeout/429/5xx
+classification, bounded retry and fallback, `fallbackProvider=NONE`,
+market-closed days, and malformed data. No automated test depends on live Yahoo,
+Twelve Data, Alpha Vantage, a local database, Docker, or a deployment proxy.

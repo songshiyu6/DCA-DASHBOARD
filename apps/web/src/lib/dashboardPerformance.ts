@@ -85,7 +85,7 @@ export function withCurrentPortfolioPoint(
 ): PortfolioHistoryPoint[] {
   if (!marketValue || !netInvested) return history
   const timestamp = retrievedAt || new Date().toISOString()
-  const businessDay = history.length ? day(history[history.length - 1].date) : day(timestamp)
+  const businessDay = marketBusinessDay(timestamp) ?? (history.length ? day(history[history.length - 1].date) : day(timestamp))
   const timePart = timestamp.includes('T') ? timestamp.slice(timestamp.indexOf('T') + 1) : '12:00:00Z'
   const liveTimestamp = `${businessDay}T${timePart}`
   return [

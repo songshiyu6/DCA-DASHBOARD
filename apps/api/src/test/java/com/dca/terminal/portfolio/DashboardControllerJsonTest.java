@@ -5,6 +5,7 @@ import com.dca.terminal.config.JacksonConfig;
 import com.dca.terminal.plan.PlanService;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -33,6 +34,9 @@ class DashboardControllerJsonTest {
     private PortfolioService portfolioService;
 
     @MockBean
+    private PortfolioDailySettlementService settlementService;
+
+    @MockBean
     private PlanService planService;
 
     @Test
@@ -41,9 +45,13 @@ class DashboardControllerJsonTest {
         PortfolioDtos.SummaryResponse summary = new PortfolioDtos.SummaryResponse(
                 bd("0.00"), bd("0.00"), bd("0.00"), bd("0.00"), bd("0.00"), bd("0.00"),
                 bd("0.00"), bd("0.00"), null, FreshnessStatus.FRESH, asOf);
+        PortfolioDtos.DailySettlementResponse settlement = new PortfolioDtos.DailySettlementResponse(
+                LocalDate.of(2026, 8, 27), Instant.parse("2026-08-27T04:00:00Z"),
+                bd("0.00"), bd("0.00"), FreshnessStatus.FRESH);
         when(portfolioService.currentViews()).thenReturn(new PortfolioService.CurrentViews(
                 summary, List.of(), List.of()));
-        when(portfolioService.history("1Y")).thenReturn(List.of());
+        when(portfolioService.history("ALL")).thenReturn(List.of());
+        when(settlementService.current()).thenReturn(settlement);
         when(planService.list()).thenReturn(List.of());
 
         mockMvc.perform(get("/api/v1/dashboard").accept(MediaType.APPLICATION_JSON))
@@ -60,6 +68,11 @@ class DashboardControllerJsonTest {
                 .andExpect(jsonPath("$.summary.xirr").doesNotExist())
                 .andExpect(jsonPath("$.summary.dataStatus").value("FRESH"))
                 .andExpect(jsonPath("$.summary.asOf").value("2026-08-27T20:00:00Z"))
+                .andExpect(jsonPath("$.dailySettlement.date").value("2026-08-27"))
+                .andExpect(jsonPath("$.dailySettlement.settledAt").value("2026-08-27T04:00:00Z"))
+                .andExpect(jsonPath("$.dailySettlement.marketValue").value("0.00"))
+                .andExpect(jsonPath("$.dailySettlement.netInvested").value("0.00"))
+                .andExpect(jsonPath("$.dailySettlement.dataStatus").value("FRESH"))
                 .andExpect(jsonPath("$.nextDca").doesNotExist())
                 .andExpect(jsonPath("$.portfolioHistory").isArray())
                 .andExpect(jsonPath("$.portfolioHistory").isEmpty())

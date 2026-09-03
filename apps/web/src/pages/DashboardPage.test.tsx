@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import '../lib/i18n'
@@ -71,6 +71,19 @@ describe('dashboard market refresh', () => {
 
     await waitFor(() => expect(mockedApi.getQuote).toHaveBeenCalledWith('VOO'))
     await waitFor(() => expect(mockedApi.getDashboard.mock.calls.length).toBeGreaterThanOrEqual(2))
+  })
+
+  it('groups portfolio value, net investment, and cumulative performance in the primary summary', async () => {
+    renderPage()
+
+    const summary = await screen.findByLabelText('Portfolio')
+    expect(within(summary).getByText('$1,000.00')).toBeInTheDocument()
+    expect(within(summary).getByText('Net investment')).toBeInTheDocument()
+    expect(within(summary).getByText('$990.00')).toBeInTheDocument()
+    expect(within(summary).getByText('Cumulative P/L')).toBeInTheDocument()
+    expect(screen.getByText('Long-term performance')).toBeInTheDocument()
+    expect(screen.getByText('CAGR')).toBeInTheDocument()
+    expect(screen.getByText('XIRR')).toBeInTheDocument()
   })
 
   it('shows the opening skipped month as initial capital without adding it to DCA totals', async () => {

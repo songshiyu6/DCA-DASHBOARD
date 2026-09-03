@@ -73,6 +73,14 @@ function latestValuationTimestamp(points: PortfolioChartPoint[]): number | undef
   return latest
 }
 
+function latestValuationIndex(points: PortfolioChartPoint[]): number {
+  let latest = -1
+  points.forEach((point, index) => {
+    if (point.marketValue !== null) latest = index
+  })
+  return latest
+}
+
 export function resolvePortfolioChartStart(points: PortfolioChartPoint[], rangeStart?: string): number | undefined {
   const requestedStart = rangeTimestamp(rangeStart)
   const portfolioStart = earliestPointTimestamp(points, true) ?? earliestPointTimestamp(points, false)
@@ -165,7 +173,7 @@ export function PortfolioChart({
     const grid = styles.getPropertyValue('--line-subtle').trim() || '#27303d'
     const accent = styles.getPropertyValue('--accent').trim() || '#7ab8ff'
     const positive = styles.getPropertyValue('--positive').trim() || '#73d3a1'
-    const liveIndex = points.findLastIndex((point) => point.marketValue !== null)
+    const liveIndex = latestValuationIndex(points)
     const timedPoints = points.flatMap((point, index) => {
       const timestamp = pointTimestamp(point.date)
       return timestamp === undefined ? [] : [{ point, index, timestamp }]

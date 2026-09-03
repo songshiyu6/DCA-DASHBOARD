@@ -6,6 +6,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 import { useTranslation } from 'react-i18next'
 import type { PortfolioHistoryPoint } from '../../types'
 import { formatMoney } from '../../lib/format'
+import { isUsMarketTradingDay } from '../../lib/usMarketCalendar'
 
 echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
@@ -24,20 +25,23 @@ export interface PortfolioTooltipItem {
   dataIndex?: number
 }
 
+function chartDate(value: string): string {
+  return value.includes('T') ? value.slice(0, 10) : value
+}
+
 export function toPortfolioChartPoints(data: PortfolioHistoryPoint[]): PortfolioChartPoint[] {
   return data.flatMap((point) => {
+    const date = chartDate(point.date)
+    if (!isUsMarketTradingDay(date)) return []
+
     const netInvested = Number(point.netInvested)
     if (!Number.isFinite(netInvested)) return []
     if (point.marketValue === null || point.dataStatus !== 'FRESH') {
-      return [{ date: point.date, marketValue: null, netInvested }]
+      return [{ date, marketValue: null, netInvested }]
     }
     const marketValue = Number(point.marketValue)
-    return [{ date: point.date, marketValue: Number.isFinite(marketValue) ? marketValue : null, netInvested }]
+    return [{ date, marketValue: Number.isFinite(marketValue) ? marketValue : null, netInvested }]
   })
-}
-
-function chartDate(value: string): string {
-  return value.includes('T') ? value.slice(0, 10) : value
 }
 
 function pointTimestamp(value: string): number | undefined {
@@ -45,30 +49,22 @@ function pointTimestamp(value: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
-function rangeTimestamp(value: string | undefined, endOfDay = false): number | undefined {
-  if (!value) return undefined
-  const parsed = Date.parse(value.includes('T') ? value : `${value}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`)
-  return Number.isFinite(parsed) ? parsed : undefined
-}
-
-function earliestPointTimestamp(points: PortfolioChartPoint[], fundedOnly: boolean): number | undefined {
-  let earliest: number | undefined
+function earliestPointDay(points: PortfolioChartPoint[], fundedOnly: boolean): string | undefined {
+  let earliest: string | undefined
   for (const point of points) {
     if (fundedOnly && point.netInvested <= 0) continue
-    const timestamp = pointTimestamp(point.date)
-    if (timestamp === undefined) continue
-    if (earliest === undefined || timestamp < earliest) earliest = timestamp
+    const date = chartDate(point.date)
+    if (!earliest || date < earliest) earliest = date
   }
   return earliest
 }
 
-function latestValuationTimestamp(points: PortfolioChartPoint[]): number | undefined {
-  let latest: number | undefined
+function latestValuationDay(points: PortfolioChartPoint[]): string | undefined {
+  let latest: string | undefined
   for (const point of points) {
     if (point.marketValue === null) continue
-    const timestamp = pointTimestamp(point.date)
-    if (timestamp === undefined) continue
-    if (latest === undefined || timestamp > latest) latest = timestamp
+    const date = chartDate(point.date)
+    if (!latest || date > latest) latest = date
   }
   return latest
 }
@@ -81,25 +77,26 @@ function latestValuationIndex(points: PortfolioChartPoint[]): number {
   return latest
 }
 
-export function resolvePortfolioChartStart(points: PortfolioChartPoint[], rangeStart?: string): number | undefined {
-  const requestedStart = rangeTimestamp(rangeStart)
-  const portfolioStart = earliestPointTimestamp(points, true) ?? earliestPointTimestamp(points, false)
-  if (requestedStart === undefined) return portfolioStart
-  if (portfolioStart === undefined) return requestedStart
-  return Math.max(requestedStart, portfolioStart)
+export function resolvePortfolioChartStart(points: PortfolioChartPoint[], rangeStart?: string): string | undefined {
+  const requestedStart = rangeStart ? chartDate(rangeStart) : undefined
+  const portfolioStart = earliestPointDay(points, true) ?? earliestPointDay(points, false)
+  if (!requestedStart) return portfolioStart
+  if (!portfolioStart) return requestedStart
+  return requestedStart > portfolioStart ? requestedStart : portfolioStart
 }
 
-export function resolvePortfolioChartEnd(points: PortfolioChartPoint[], rangeEnd?: string): number | undefined {
-  const requestedEnd = rangeTimestamp(rangeEnd, true)
-  const latestValuation = latestValuationTimestamp(points)
-  if (requestedEnd === undefined) return latestValuation
-  if (latestValuation === undefined) return requestedEnd
-  return Math.min(requestedEnd, latestValuation)
+export function resolvePortfolioChartEnd(points: PortfolioChartPoint[], rangeEnd?: string): string | undefined {
+  const requestedEnd = rangeEnd ? chartDate(rangeEnd) : undefined
+  const latestValuation = latestValuationDay(points)
+  if (!requestedEnd) return latestValuation
+  if (!latestValuation) return requestedEnd
+  return requestedEnd < latestValuation ? requestedEnd : latestValuation
 }
 
 function formatAxisDate(value: unknown): string {
+  if (typeof value === 'string') return chartDate(value)
   const timestamp = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(timestamp)) return typeof value === 'string' ? chartDate(value) : ''
+  if (!Number.isFinite(timestamp)) return ''
   const date = new Date(timestamp)
   if (Number.isNaN(date.getTime())) return ''
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`
@@ -120,11 +117,12 @@ export function formatPortfolioTooltip(
   if (!nlv) return ''
 
   const axisTimestamp = typeof nlv.axisValue === 'number' ? nlv.axisValue : Number(nlv.axisValue)
+  const axisDay = typeof nlv.axisValue === 'string' ? chartDate(nlv.axisValue) : null
   const point = typeof nlv.dataIndex === 'number'
     ? points[nlv.dataIndex]
     : points.find((item) => {
         const timestamp = pointTimestamp(item.date)
-        return (Number.isFinite(axisTimestamp) && timestamp === axisTimestamp) || chartDate(item.date) === String(nlv.axisValue ?? '')
+        return (Number.isFinite(axisTimestamp) && timestamp === axisTimestamp) || (axisDay !== null && chartDate(item.date) === axisDay)
       })
   const investmentMarker = `<span style="display:inline-block;margin-right:4px;border-radius:10px;width:10px;height:10px;background-color:${netInvestmentColor};"></span>`
   const dateLabel = point ? chartDate(point.date) : nlv.axisValueLabel ?? formatAxisDate(nlv.axisValue)
@@ -154,8 +152,11 @@ export function PortfolioChart({
 }) {
   const { t, i18n } = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
-  const lastFreshClose = data.filter((point) => point.marketValue !== null && point.dataStatus === 'FRESH').at(-1)
-  const hasUntrustedTail = Boolean(lastFreshClose && data.some((point) => chartDate(point.date) > chartDate(lastFreshClose.date)))
+  const lastFreshClose = data.filter((point) => point.marketValue !== null
+    && point.dataStatus === 'FRESH'
+    && isUsMarketTradingDay(chartDate(point.date))).at(-1)
+  const hasUntrustedTail = Boolean(lastFreshClose && data.some((point) => chartDate(point.date) > chartDate(lastFreshClose.date)
+    && isUsMarketTradingDay(chartDate(point.date))))
   const isZh = (i18n.resolvedLanguage ?? i18n.language).toLowerCase().startsWith('zh')
   const historyNote = lastFreshClose
     ? (isZh
@@ -165,8 +166,13 @@ export function PortfolioChart({
 
   useEffect(() => {
     if (!ref.current || data.length === 0) return
-    const points = toPortfolioChartPoints(data)
+    const allPoints = toPortfolioChartPoints(data)
+    if (allPoints.length === 0) return
+    const start = resolvePortfolioChartStart(allPoints, rangeStart)
+    const end = resolvePortfolioChartEnd(allPoints, rangeEnd)
+    const points = allPoints.filter((point) => (!start || point.date >= start) && (!end || point.date <= end))
     if (points.length === 0) return
+
     const chart = echarts.init(ref.current)
     const styles = getComputedStyle(document.documentElement)
     const text = styles.getPropertyValue('--text-muted').trim() || '#7c8798'
@@ -174,11 +180,6 @@ export function PortfolioChart({
     const accent = styles.getPropertyValue('--accent').trim() || '#7ab8ff'
     const positive = styles.getPropertyValue('--positive').trim() || '#73d3a1'
     const liveIndex = latestValuationIndex(points)
-    const timedPoints = points.flatMap((point, index) => {
-      const timestamp = pointTimestamp(point.date)
-      return timestamp === undefined ? [] : [{ point, index, timestamp }]
-    })
-    if (timedPoints.length === 0) return () => chart.dispose()
 
     chart.setOption({
       animationDuration: 450,
@@ -196,12 +197,11 @@ export function PortfolioChart({
         },
       },
       xAxis: {
-        type: 'time',
-        min: resolvePortfolioChartStart(points, rangeStart),
-        max: resolvePortfolioChartEnd(points, rangeEnd),
+        type: 'category',
+        data: points.map((point) => point.date),
         boundaryGap: false,
         axisLine: { lineStyle: { color: grid } },
-        axisLabel: { color: text, fontSize: 10, hideOverlap: true, formatter: (value: number) => formatAxisDate(value) },
+        axisLabel: { color: text, fontSize: 10, hideOverlap: true, formatter: (value: string) => chartDate(value) },
         axisTick: { show: false },
       },
       yAxis: { type: 'value', scale: true, splitNumber: 3, axisLabel: { color: text, fontSize: 10, formatter: (value: number) => formatMoney(String(value), 'USD', 0) }, splitLine: { lineStyle: { color: grid, type: 'dashed' } }, axisLine: { show: false } },
@@ -213,7 +213,7 @@ export function PortfolioChart({
           showSymbol: false,
           silent: true,
           z: 1,
-          data: timedPoints.map(({ timestamp, point }) => [timestamp, point.netInvested]),
+          data: points.map((point) => point.netInvested),
           lineStyle: { width: 1.25, type: 'dashed', color: positive, opacity: 0.62 },
           itemStyle: { color: positive },
           emphasis: { disabled: true },
@@ -229,7 +229,7 @@ export function PortfolioChart({
           symbol: 'circle',
           connectNulls: false,
           z: 3,
-          data: timedPoints.map(({ timestamp, point, index }) => ({ value: [timestamp, point.marketValue], symbolSize: index === liveIndex ? 7 : 0 })),
+          data: points.map((point, index) => ({ value: point.marketValue, symbolSize: index === liveIndex ? 7 : 0 })),
           lineStyle: { width: 2.4, color: accent },
           itemStyle: { color: accent, borderColor: '#ffffff', borderWidth: 1 },
           emphasis: { focus: 'series', scale: 1.5 },

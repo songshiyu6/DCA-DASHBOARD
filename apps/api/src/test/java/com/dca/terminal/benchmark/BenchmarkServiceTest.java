@@ -76,6 +76,19 @@ class BenchmarkServiceTest {
     }
 
     @Test
+    void treatsMalformedSuccessfulYahooResponseAsUnavailableInsteadOfEmpty() {
+        server.when("/v6/finance/autocomplete", uri -> new Response(200, """
+                {"finance":{"result":[]}}
+                """));
+
+        DomainException exception = assertThrows(DomainException.class, () -> service(1).search("QQQ"));
+
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, exception.status());
+        assertEquals("BENCHMARK_SEARCH_UNAVAILABLE", exception.code());
+        assertEquals(1, server.requests().size());
+    }
+
+    @Test
     void retriesYahooRateLimitThenReturnsServiceUnavailableInsteadOfEmptyResults() {
         server.when("/v6/finance/autocomplete", uri -> new Response(429, "Too Many Requests"));
 

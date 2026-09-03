@@ -71,7 +71,6 @@ dca:
   scheduler:
     enabled: ${MARKET_SYNC_ENABLED:true}
     cron: '${MARKET_SYNC_CRON:0 30 18 * * MON-FRI}'
-    settlement-cron: '${PORTFOLIO_SETTLEMENT_CRON:0 0 0 * * *}'
   market-data:
     yahoo:
       base-url: ${YAHOO_BASE_URL:https://query2.finance.yahoo.com}

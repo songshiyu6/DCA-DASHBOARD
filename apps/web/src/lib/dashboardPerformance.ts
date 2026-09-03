@@ -35,6 +35,18 @@ function subtractMonthsClamped(value: Date, months: number): Date {
   return target
 }
 
+export function isFreshPortfolioHistoryPoint(point: PortfolioHistoryPoint): boolean {
+  return Boolean(point.date && point.marketValue !== null && point.dataStatus === 'FRESH')
+}
+
+function validPoints(history: PortfolioHistoryPoint[]): PortfolioHistoryPoint[] {
+  return history.filter(isFreshPortfolioHistoryPoint)
+}
+
+export function latestFreshPortfolioHistoryPoint(history: PortfolioHistoryPoint[]): PortfolioHistoryPoint | undefined {
+  return validPoints(history).at(-1)
+}
+
 export function portfolioRangeStartDay(endValue: string, range: ChartRange): string | null {
   const end = parseUtcDay(endValue)
   if (!end) return null
@@ -42,10 +54,6 @@ export function portfolioRangeStartDay(endValue: string, range: ChartRange): str
   if (range === '1M') return formatUtcDay(subtractMonthsClamped(end, 1))
   if (range === '3M') return formatUtcDay(subtractMonthsClamped(end, 3))
   return formatUtcDay(subtractMonthsClamped(end, 12))
-}
-
-function validPoints(history: PortfolioHistoryPoint[]): PortfolioHistoryPoint[] {
-  return history.filter((point) => point.date && point.marketValue !== null)
 }
 
 export function withCurrentPortfolioPoint(
@@ -205,7 +213,9 @@ export function ytdPerformance(history: PortfolioHistoryPoint[]): PeriodPerforma
 
 export function filterPortfolioHistory(history: PortfolioHistoryPoint[], range: ChartRange): PortfolioHistoryPoint[] {
   if (!history.length) return history
-  const startDay = portfolioRangeStartDay(history[history.length - 1].date, range)
+  const endPoint = latestFreshPortfolioHistoryPoint(history)
+  if (!endPoint) return []
+  const startDay = portfolioRangeStartDay(endPoint.date, range)
   if (!startDay) return history
-  return history.filter((point) => day(point.date) >= startDay)
+  return history.filter((point) => day(point.date) >= startDay && day(point.date) <= day(endPoint.date))
 }

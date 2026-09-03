@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { annualizedTimeWeightedReturn, CHART_RANGE_OPTIONS, filterPortfolioHistory, latestDayPerformance, livePerformanceSinceLastClose, portfolioRangeStartDay, timeWeightedReturn, withCurrentPortfolioPoint, ytdPerformance, ytdTimeWeightedReturn } from './dashboardPerformance'
+import { annualizedTimeWeightedReturn, CHART_RANGE_OPTIONS, filterPortfolioHistory, latestDayPerformance, latestFreshPortfolioHistoryPoint, livePerformanceSinceLastClose, portfolioRangeStartDay, timeWeightedReturn, withCurrentPortfolioPoint, ytdPerformance, ytdTimeWeightedReturn } from './dashboardPerformance'
 import type { PortfolioHistoryPoint } from '../types'
 
 const point = (date: string, marketValue: string, netInvested: string): PortfolioHistoryPoint => ({ date, marketValue, netInvested, dataStatus: 'FRESH' })
@@ -15,16 +15,18 @@ describe('dashboard performance', () => {
     expect(Number(result.returnRate)).toBeCloseTo(0.1, 8)
   })
 
-  it('measures live session profit from the last regular close without replacing that close', () => {
-    const history = [
+  it('measures live session profit from the last fresh regular close and ignores a stale PARTIAL tail', () => {
+    const history: PortfolioHistoryPoint[] = [
       point('2026-08-27', '1000', '1000'),
       point('2026-08-28', '1010', '1000'),
+      { date: '2026-08-31', marketValue: '1010', netInvested: '1000', dataStatus: 'PARTIAL' },
+      { date: '2026-09-01', marketValue: '1010', netInvested: '1000', dataStatus: 'PARTIAL' },
     ]
     const result = livePerformanceSinceLastClose(history, '1040', '1010')
 
     expect(Number(result.pnl)).toBeCloseTo(20, 8)
     expect(Number(result.returnRate)).toBeCloseTo(20 / 1010, 8)
-    expect(history.at(-1)?.marketValue).toBe('1010')
+    expect(latestFreshPortfolioHistoryPoint(history)?.date).toBe('2026-08-28')
   })
 
   it('calculates time-weighted return without treating later contributions as performance', () => {
@@ -36,6 +38,17 @@ describe('dashboard performance', () => {
 
     expect(Number(timeWeightedReturn(history))).toBeCloseTo(0.15, 8)
     expect(Number(ytdTimeWeightedReturn(history))).toBeCloseTo(0.15, 8)
+  })
+
+  it('does not let PARTIAL carry-forward values change time-weighted performance', () => {
+    const history: PortfolioHistoryPoint[] = [
+      point('2026-08-27', '1000', '1000'),
+      point('2026-08-28', '1100', '1000'),
+      { date: '2026-08-31', marketValue: '1100', netInvested: '1200', dataStatus: 'PARTIAL' },
+    ]
+
+    expect(Number(timeWeightedReturn(history))).toBeCloseTo(0.1, 8)
+    expect(Number(ytdTimeWeightedReturn(history))).toBeCloseTo(0.1, 8)
   })
 
   it('annualizes time-weighted performance without treating contributions as return', () => {
@@ -126,5 +139,16 @@ describe('dashboard performance', () => {
       '2026-06-01',
       '2026-08-28T16:00:00Z',
     ])
+  })
+
+  it('ends chart ranges at the last fresh close instead of a PARTIAL replay tail', () => {
+    const history: PortfolioHistoryPoint[] = [
+      point('2026-07-28', '1000', '1000'),
+      point('2026-08-28', '1100', '1000'),
+      { date: '2026-08-31', marketValue: '1100', netInvested: '1000', dataStatus: 'PARTIAL' },
+      { date: '2026-09-02', marketValue: '1100', netInvested: '1000', dataStatus: 'PARTIAL' },
+    ]
+
+    expect(filterPortfolioHistory(history, '1M').map((item) => item.date)).toEqual(['2026-07-28', '2026-08-28'])
   })
 })

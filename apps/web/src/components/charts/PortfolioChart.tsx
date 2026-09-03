@@ -28,7 +28,7 @@ export function toPortfolioChartPoints(data: PortfolioHistoryPoint[]): Portfolio
   return data.flatMap((point) => {
     const netInvested = Number(point.netInvested)
     if (!Number.isFinite(netInvested)) return []
-    if (point.marketValue === null) {
+    if (point.marketValue === null || point.dataStatus !== 'FRESH') {
       return [{ date: point.date, marketValue: null, netInvested }]
     }
     const marketValue = Number(point.marketValue)
@@ -62,12 +62,39 @@ function earliestPointTimestamp(points: PortfolioChartPoint[], fundedOnly: boole
   return earliest
 }
 
+function latestValuationTimestamp(points: PortfolioChartPoint[]): number | undefined {
+  let latest: number | undefined
+  for (const point of points) {
+    if (point.marketValue === null) continue
+    const timestamp = pointTimestamp(point.date)
+    if (timestamp === undefined) continue
+    if (latest === undefined || timestamp > latest) latest = timestamp
+  }
+  return latest
+}
+
+function latestValuationIndex(points: PortfolioChartPoint[]): number {
+  let latest = -1
+  points.forEach((point, index) => {
+    if (point.marketValue !== null) latest = index
+  })
+  return latest
+}
+
 export function resolvePortfolioChartStart(points: PortfolioChartPoint[], rangeStart?: string): number | undefined {
   const requestedStart = rangeTimestamp(rangeStart)
   const portfolioStart = earliestPointTimestamp(points, true) ?? earliestPointTimestamp(points, false)
   if (requestedStart === undefined) return portfolioStart
   if (portfolioStart === undefined) return requestedStart
   return Math.max(requestedStart, portfolioStart)
+}
+
+export function resolvePortfolioChartEnd(points: PortfolioChartPoint[], rangeEnd?: string): number | undefined {
+  const requestedEnd = rangeTimestamp(rangeEnd, true)
+  const latestValuation = latestValuationTimestamp(points)
+  if (requestedEnd === undefined) return latestValuation
+  if (latestValuation === undefined) return requestedEnd
+  return Math.min(requestedEnd, latestValuation)
 }
 
 function formatAxisDate(value: unknown): string {
@@ -125,8 +152,17 @@ export function PortfolioChart({
   rangeStart?: string
   rangeEnd?: string
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
+  const lastFreshClose = data.filter((point) => point.marketValue !== null && point.dataStatus === 'FRESH').at(-1)
+  const hasUntrustedTail = Boolean(lastFreshClose && data.some((point) => chartDate(point.date) > chartDate(lastFreshClose.date)))
+  const isZh = (i18n.resolvedLanguage ?? i18n.language).toLowerCase().startsWith('zh')
+  const historyNote = lastFreshClose
+    ? (isZh
+        ? `${hasUntrustedTail ? '历史日线有延迟 · ' : ''}常规收盘截至 ${chartDate(lastFreshClose.date)} · 当前实时估值见顶部`
+        : `${hasUntrustedTail ? 'Daily history delayed · ' : ''}Regular close through ${chartDate(lastFreshClose.date)} · see live valuation above`)
+    : (isZh ? '暂无有效常规收盘估值' : 'No valid regular-close valuation yet')
+
   useEffect(() => {
     if (!ref.current || data.length === 0) return
     const points = toPortfolioChartPoints(data)
@@ -137,7 +173,7 @@ export function PortfolioChart({
     const grid = styles.getPropertyValue('--line-subtle').trim() || '#27303d'
     const accent = styles.getPropertyValue('--accent').trim() || '#7ab8ff'
     const positive = styles.getPropertyValue('--positive').trim() || '#73d3a1'
-    const liveIndex = points[points.length - 1]?.date.includes('T') ? points.length - 1 : -1
+    const liveIndex = latestValuationIndex(points)
     const timedPoints = points.flatMap((point, index) => {
       const timestamp = pointTimestamp(point.date)
       return timestamp === undefined ? [] : [{ point, index, timestamp }]
@@ -162,7 +198,7 @@ export function PortfolioChart({
       xAxis: {
         type: 'time',
         min: resolvePortfolioChartStart(points, rangeStart),
-        max: rangeTimestamp(rangeEnd, true),
+        max: resolvePortfolioChartEnd(points, rangeEnd),
         boundaryGap: false,
         axisLine: { lineStyle: { color: grid } },
         axisLabel: { color: text, fontSize: 10, hideOverlap: true, formatter: (value: number) => formatAxisDate(value) },
@@ -207,5 +243,5 @@ export function PortfolioChart({
     window.addEventListener('resize', resize)
     return () => { observer?.disconnect(); window.removeEventListener('resize', resize); chart.dispose() }
   }, [data, netInvestmentLabel, netLiqLabel, rangeEnd, rangeStart])
-  return <div ref={ref} className="portfolio-chart" role="img" aria-label={t('charts.portfolioValue')} />
+  return <div><div ref={ref} className="portfolio-chart" role="img" aria-label={t('charts.portfolioValue')} /><small>{historyNote}</small></div>
 }

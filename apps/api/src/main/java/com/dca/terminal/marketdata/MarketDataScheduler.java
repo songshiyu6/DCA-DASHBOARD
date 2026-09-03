@@ -1,5 +1,6 @@
 package com.dca.terminal.marketdata;
 
+import com.dca.terminal.config.TimeConfig;
 import com.dca.terminal.instrument.InstrumentRepository;
 import com.dca.terminal.portfolio.PortfolioService;
 import org.slf4j.Logger;
@@ -23,7 +24,7 @@ public class MarketDataScheduler {
         this.portfolioService = portfolioService;
     }
 
-    @Scheduled(cron = "${dca.scheduler.cron:0 30 18 * * MON-FRI}", zone = "America/New_York")
+    @Scheduled(cron = "${dca.scheduler.cron:0 30 18 * * MON-FRI}", zone = TimeConfig.MARKET_ZONE_ID)
     public void syncActiveInstruments() {
         log.info("market sync started");
         instrumentRepository.findAllByTrackedTrueOrderBySymbolAsc().forEach(instrument -> {
@@ -34,6 +35,7 @@ public class MarketDataScheduler {
             }
         });
         try {
+            // Historical account-value snapshots are regular-close marks for the New York trading date.
             portfolioService.rebuildTodaySnapshot();
         } catch (Exception exception) {
             log.warn("portfolio snapshot rebuild failed reason={}", exception.getMessage());

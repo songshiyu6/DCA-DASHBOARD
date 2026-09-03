@@ -158,9 +158,10 @@ public class BenchmarkService {
     }
 
     private static SearchParseResult parseSearch(JsonNode root) {
-        if (root == null) return new SearchParseResult(List.of(), 0, 0);
+        if (root == null) throw new IllegalStateException("Yahoo benchmark search returned an empty body");
         JsonNode rawResults = root.path("ResultSet").path("Result");
-        int rawResultCount = rawResults.isArray() ? rawResults.size() : 0;
+        if (!rawResults.isArray()) throw new IllegalStateException("Yahoo benchmark search response is malformed");
+        int rawResultCount = rawResults.size();
         int droppedUnknownTypeCount = 0;
         Map<String, SearchResult> bySymbol = new LinkedHashMap<>();
         for (JsonNode item : rawResults) {

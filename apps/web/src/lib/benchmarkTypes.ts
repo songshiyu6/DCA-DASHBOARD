@@ -1,6 +1,6 @@
 import type { DataStatus } from '../types'
 
-export type BenchmarkType = 'ETF' | 'INDEX'
+export type BenchmarkType = 'ETF' | 'INDEX' | 'EQUITY'
 
 export interface BenchmarkSearchResult {
   symbol: string

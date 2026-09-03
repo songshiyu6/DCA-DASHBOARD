@@ -4,6 +4,7 @@ import com.dca.terminal.benchmark.BenchmarkDtos.BenchmarkType;
 import com.dca.terminal.benchmark.BenchmarkDtos.HistoryResponse;
 import com.dca.terminal.benchmark.BenchmarkDtos.SearchResult;
 import java.util.List;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -19,6 +20,7 @@ public class BenchmarkController {
     }
 
     @GetMapping("/search")
+    @Cacheable(cacheNames = "benchmarkSearch", key = "#p0 == null ? '' : #p0.trim().toUpperCase()")
     public List<SearchResult> search(@RequestParam String q) {
         return benchmarkService.search(q);
     }

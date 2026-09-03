@@ -11,7 +11,10 @@ import com.dca.terminal.marketdata.MarketCalendar;
 import com.dca.terminal.marketdata.ProviderException;
 import com.dca.terminal.marketdata.ProviderModels.PriceBar;
 import com.dca.terminal.marketdata.YahooFinanceProvider;
+import com.dca.terminal.observability.ObservabilityMetrics;
 import com.fasterxml.jackson.databind.JsonNode;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import java.math.BigDecimal;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
@@ -26,6 +29,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -36,22 +41,30 @@ import org.springframework.web.client.RestClientResponseException;
 
 @Service
 public class BenchmarkService {
+    private static final Logger log = LoggerFactory.getLogger(BenchmarkService.class);
     private static final ZoneId MARKET_ZONE = ZoneId.of("America/New_York");
     private static final Pattern SYMBOL = Pattern.compile("[A-Za-z0-9.^=\\-]{1,24}");
     private static final String USER_AGENT = "Mozilla/5.0";
+    private static final String SEARCH_OPERATION = "benchmark_search";
 
     private final YahooFinanceProvider yahoo;
     private final RestClient searchClient;
     private final Clock clock;
+    private final int providerAttempts;
+    private final MeterRegistry meterRegistry;
 
     public BenchmarkService(YahooFinanceProvider yahoo,
                             RestClient.Builder builder,
                             Clock clock,
                             @Value("${dca.market-data.yahoo.base-url}") String baseUrl,
                             @Value("${dca.market-data.yahoo.timeout-ms:5000}") int timeoutMs,
-                            @Value("${dca.market-data.yahoo.proxy-url:}") String proxyUrl) {
+                            @Value("${dca.market-data.yahoo.proxy-url:}") String proxyUrl,
+                            @Value("${dca.market-data.provider-attempts:2}") int providerAttempts,
+                            MeterRegistry meterRegistry) {
         this.yahoo = yahoo;
         this.clock = clock;
+        this.providerAttempts = Math.max(1, providerAttempts);
+        this.meterRegistry = meterRegistry == null ? ObservabilityMetrics.noop() : meterRegistry;
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(timeoutMs);
         factory.setReadTimeout(timeoutMs);
@@ -68,34 +81,47 @@ public class BenchmarkService {
     public List<SearchResult> search(String query) {
         String normalized = query == null ? "" : query.trim();
         if (normalized.isBlank() || normalized.length() > 32) return List.of();
-        try {
-            JsonNode root = searchClient.get()
-                    .uri(uri -> uri.path("/v6/finance/autocomplete")
-                            .queryParam("query", normalized)
-                            .queryParam("lang", "en-US")
-                            .queryParam("region", "US")
-                            .build())
-                    .retrieve()
-                    .body(JsonNode.class);
-            if (root == null) return List.of();
-            Map<String, SearchResult> bySymbol = new LinkedHashMap<>();
-            for (JsonNode item : root.path("ResultSet").path("Result")) {
-                String symbol = text(item, "symbol");
-                BenchmarkType type = benchmarkType(text(item, "type", text(item, "typeDisp")));
-                if (symbol.isBlank() || type == null || !SYMBOL.matcher(symbol).matches()) continue;
-                String name = text(item, "name", symbol);
-                String exchange = text(item, "exchDisp", text(item, "exch", null));
-                bySymbol.putIfAbsent(symbol.toUpperCase(Locale.ROOT),
-                        new SearchResult(symbol, name, exchange, type));
+
+        for (int attempt = 1; attempt <= providerAttempts; attempt++) {
+            Timer.Sample sample = ObservabilityMetrics.start(meterRegistry);
+            String outcome = "error";
+            try {
+                JsonNode root = searchClient.get()
+                        .uri(uri -> uri.path("/v6/finance/autocomplete")
+                                .queryParam("query", normalized)
+                                .queryParam("lang", "en-US")
+                                .queryParam("region", "US")
+                                .build())
+                        .retrieve()
+                        .body(JsonNode.class);
+                SearchParseResult parsed = parseSearch(root);
+                outcome = parsed.results().isEmpty() ? "empty" : "success";
+                log.info("operation={} provider=YAHOO queryLength={} httpStatus=200 rawResultCount={} acceptedResultCount={} droppedUnknownTypeCount={} outcome={}",
+                        SEARCH_OPERATION, normalized.length(), parsed.rawResultCount(), parsed.results().size(),
+                        parsed.droppedUnknownTypeCount(), outcome);
+                return parsed.results();
+            } catch (RestClientResponseException exception) {
+                int status = exception.getStatusCode().value();
+                boolean retryable = status == 429 || status >= 500;
+                log.warn("operation={} provider=YAHOO queryLength={} httpStatus={} attempt={} maxAttempts={} outcome=error reason={}",
+                        SEARCH_OPERATION, normalized.length(), status, attempt, providerAttempts,
+                        exception.getStatusText());
+                if (!retryable || attempt >= providerAttempts || !pauseAfterAttempt(attempt)) {
+                    throw searchUnavailable();
+                }
+            } catch (RuntimeException exception) {
+                log.warn("operation={} provider=YAHOO queryLength={} httpStatus=0 attempt={} maxAttempts={} outcome=error reason={}",
+                        SEARCH_OPERATION, normalized.length(), attempt, providerAttempts,
+                        exception.getClass().getSimpleName());
+                if (attempt >= providerAttempts || !pauseAfterAttempt(attempt)) {
+                    throw searchUnavailable();
+                }
+            } finally {
+                ObservabilityMetrics.stop(meterRegistry, sample, ObservabilityMetrics.PROVIDER_REQUEST,
+                        "provider", "YAHOO", "operation", SEARCH_OPERATION, "outcome", outcome);
             }
-            return bySymbol.values().stream().limit(20).toList();
-        } catch (RestClientResponseException exception) {
-            throw new DomainException(HttpStatus.SERVICE_UNAVAILABLE, "BENCHMARK_SEARCH_UNAVAILABLE",
-                    "Benchmark search is temporarily unavailable");
-        } catch (RuntimeException exception) {
-            throw new DomainException(HttpStatus.SERVICE_UNAVAILABLE, "BENCHMARK_SEARCH_UNAVAILABLE",
-                    "Benchmark search is temporarily unavailable");
         }
+        throw searchUnavailable();
     }
 
     public HistoryResponse history(String rawSymbol, String rawName, BenchmarkType type, String range) {
@@ -131,6 +157,51 @@ public class BenchmarkService {
         return new HistoryResponse(symbol, synthetic.getName(), resolvedType, "YAHOO", status, points);
     }
 
+    private static SearchParseResult parseSearch(JsonNode root) {
+        if (root == null) throw new IllegalStateException("Yahoo benchmark search returned an empty body");
+        JsonNode rawResults = root.path("ResultSet").path("Result");
+        if (!rawResults.isArray()) throw new IllegalStateException("Yahoo benchmark search response is malformed");
+        int rawResultCount = rawResults.size();
+        int droppedUnknownTypeCount = 0;
+        Map<String, SearchResult> bySymbol = new LinkedHashMap<>();
+        for (JsonNode item : rawResults) {
+            String symbol = text(item, "symbol");
+            BenchmarkType type = benchmarkType(item);
+            if (type == null) {
+                droppedUnknownTypeCount++;
+                continue;
+            }
+            if (symbol.isBlank() || !SYMBOL.matcher(symbol).matches()) continue;
+            String name = text(item, "name", symbol);
+            String exchange = text(item, "exchDisp", text(item, "exch", null));
+            bySymbol.putIfAbsent(symbol.toUpperCase(Locale.ROOT),
+                    new SearchResult(symbol, name, exchange, type));
+        }
+        return new SearchParseResult(bySymbol.values().stream().limit(20).toList(),
+                rawResultCount, droppedUnknownTypeCount);
+    }
+
+    private static BenchmarkType benchmarkType(JsonNode item) {
+        BenchmarkType displayType = benchmarkType(text(item, "typeDisp", null));
+        return displayType != null ? displayType : benchmarkType(text(item, "type", null));
+    }
+
+    private static BenchmarkType benchmarkType(String raw) {
+        if (raw == null) return null;
+        String normalized = raw.trim().toUpperCase(Locale.ROOT);
+        if (normalized.equals("E") || normalized.equals("ETF") || normalized.contains("EXCHANGE TRADED FUND")) {
+            return BenchmarkType.ETF;
+        }
+        if (normalized.equals("I") || normalized.equals("INDEX") || normalized.contains("INDEX")) {
+            return BenchmarkType.INDEX;
+        }
+        if (normalized.equals("S") || normalized.equals("EQUITY") || normalized.equals("STOCK")
+                || normalized.contains("EQUITY")) {
+            return BenchmarkType.EQUITY;
+        }
+        return null;
+    }
+
     private static LocalDate rangeStart(LocalDate end, String range) {
         if (range == null) return end.minusYears(5);
         return switch (range.toUpperCase(Locale.ROOT)) {
@@ -144,12 +215,19 @@ public class BenchmarkService {
         };
     }
 
-    private static BenchmarkType benchmarkType(String raw) {
-        if (raw == null) return null;
-        String normalized = raw.trim().toUpperCase(Locale.ROOT);
-        if (normalized.equals("ETF") || normalized.contains("EXCHANGE TRADED FUND")) return BenchmarkType.ETF;
-        if (normalized.equals("INDEX") || normalized.contains("INDEX")) return BenchmarkType.INDEX;
-        return null;
+    private static DomainException searchUnavailable() {
+        return new DomainException(HttpStatus.SERVICE_UNAVAILABLE, "BENCHMARK_SEARCH_UNAVAILABLE",
+                "Benchmark search is temporarily unavailable");
+    }
+
+    private static boolean pauseAfterAttempt(int attempt) {
+        try {
+            Thread.sleep(Math.min(250L * attempt, 1_000L));
+            return true;
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     private static boolean positive(BigDecimal value) {
@@ -175,4 +253,6 @@ public class BenchmarkService {
             return null;
         }
     }
+
+    private record SearchParseResult(List<SearchResult> results, int rawResultCount, int droppedUnknownTypeCount) { }
 }

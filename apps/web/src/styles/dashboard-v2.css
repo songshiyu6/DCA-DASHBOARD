@@ -2,6 +2,149 @@
   min-height: 126px;
 }
 
+.dashboard-summary-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 2fr) repeat(2, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+
+.portfolio-summary-card,
+.dashboard-summary-grid .metric-card {
+  min-height: 138px;
+}
+
+.portfolio-summary-card {
+  background: var(--surface-1);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius);
+  min-width: 0;
+  padding: 17px 18px 16px;
+  position: relative;
+}
+
+.portfolio-summary-card::before {
+  background: var(--accent);
+  border-radius: var(--radius) var(--radius) 0 0;
+  content: '';
+  height: 2px;
+  left: 0;
+  position: absolute;
+  right: 0;
+  top: 0;
+}
+
+.portfolio-summary-top {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.portfolio-summary-value {
+  display: block;
+  font-family: 'DM Mono', monospace;
+  font-size: 23px;
+  font-weight: 500;
+  margin-top: 18px;
+}
+
+.portfolio-summary-meta {
+  align-items: flex-end;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr);
+  margin-top: 14px;
+}
+
+.portfolio-summary-meta > span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.portfolio-summary-meta small {
+  color: var(--text-dim);
+  font-size: 9px;
+}
+
+.portfolio-summary-meta strong {
+  font-family: 'DM Mono', monospace;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.portfolio-summary-meta em {
+  font-size: 11px;
+  font-style: normal;
+  margin-left: 5px;
+  white-space: nowrap;
+}
+
+.dashboard-summary-grid .dashboard-period-card .metric-value {
+  font-size: 20px;
+}
+
+.dashboard-summary-grid .dashboard-period-card .metric-detail {
+  font-family: 'DM Mono', monospace;
+  font-size: 12px;
+  font-weight: 500;
+  margin-top: 6px;
+}
+
+.dashboard-long-term-strip {
+  align-items: stretch;
+  background: var(--surface-0);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius);
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(0, .8fr));
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.dashboard-long-term-heading,
+.dashboard-long-term-metric {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  padding: 11px 16px;
+}
+
+.dashboard-long-term-heading small,
+.dashboard-long-term-metric small {
+  color: var(--text-dim);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.dashboard-long-term-heading span,
+.dashboard-long-term-metric em {
+  color: var(--text-dim);
+  font-size: 9px;
+  font-style: normal;
+  margin-top: 3px;
+}
+
+.dashboard-long-term-metric {
+  border-left: 1px solid var(--line-subtle);
+}
+
+.dashboard-long-term-metric strong {
+  font-family: 'DM Mono', monospace;
+  font-size: 15px;
+  font-weight: 500;
+  margin-top: 3px;
+}
+
+.dashboard-page-v2 .holding-pnl small {
+  font-family: 'DM Mono', monospace;
+  font-size: 12px;
+  font-weight: 500;
+  margin-top: 4px;
+}
+
 .capital-summary-strip {
   background: var(--surface-0);
   border: 1px solid var(--line-subtle);
@@ -186,6 +329,14 @@
 }
 
 @media (max-width: 900px) {
+  .dashboard-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .portfolio-summary-card {
+    grid-column: 1 / -1;
+  }
+
   .dashboard-secondary-grid {
     grid-template-columns: 1fr;
   }
@@ -194,6 +345,63 @@
 @media (max-width: 620px) {
   .dashboard-performance-grid .metric-card {
     min-height: 114px;
+  }
+
+  .dashboard-summary-grid {
+    gap: 8px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .portfolio-summary-card {
+    grid-column: 1 / -1;
+    min-height: 132px;
+    padding: 14px;
+  }
+
+  .portfolio-summary-value {
+    font-size: 21px;
+    margin-top: 14px;
+  }
+
+  .portfolio-summary-meta {
+    gap: 9px;
+    margin-top: 12px;
+  }
+
+  .portfolio-summary-meta strong {
+    font-size: 11px;
+  }
+
+  .portfolio-summary-meta em {
+    display: block;
+    font-size: 10px;
+    margin-left: 0;
+    margin-top: 2px;
+  }
+
+  .dashboard-summary-grid .metric-card {
+    min-height: 108px;
+  }
+
+  .dashboard-summary-grid .dashboard-period-card .metric-value {
+    font-size: 17px;
+  }
+
+  .dashboard-summary-grid .dashboard-period-card .metric-detail {
+    font-size: 11px;
+  }
+
+  .dashboard-long-term-strip {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .dashboard-long-term-heading {
+    border-bottom: 1px solid var(--line-subtle);
+    grid-column: 1 / -1;
+  }
+
+  .dashboard-long-term-metric:first-of-type {
+    border-left: 0;
   }
 
   .capital-summary-strip,
@@ -276,7 +484,7 @@
   }
 
   .dashboard-page-v2 .holding-pnl small {
-    font-size: 11px;
+    font-size: 12px;
     margin-top: 0;
   }
 

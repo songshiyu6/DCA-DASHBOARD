@@ -10,7 +10,8 @@ public final class BenchmarkDtos {
 
     public enum BenchmarkType {
         ETF,
-        INDEX
+        INDEX,
+        EQUITY
     }
 
     public record SearchResult(String symbol, String name, String exchange, BenchmarkType type) { }

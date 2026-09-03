@@ -144,8 +144,17 @@ export function PortfolioChart({
   rangeStart?: string
   rangeEnd?: string
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
+  const lastFreshClose = data.filter((point) => point.marketValue !== null && point.dataStatus === 'FRESH').at(-1)
+  const hasUntrustedTail = Boolean(lastFreshClose && data.some((point) => chartDate(point.date) > chartDate(lastFreshClose.date)))
+  const isZh = (i18n.resolvedLanguage ?? i18n.language).toLowerCase().startsWith('zh')
+  const historyNote = lastFreshClose
+    ? (isZh
+        ? `${hasUntrustedTail ? '历史日线有延迟 · ' : ''}常规收盘截至 ${chartDate(lastFreshClose.date)} · 当前实时估值见顶部`
+        : `${hasUntrustedTail ? 'Daily history delayed · ' : ''}Regular close through ${chartDate(lastFreshClose.date)} · see live valuation above`)
+    : (isZh ? '暂无有效常规收盘估值' : 'No valid regular-close valuation yet')
+
   useEffect(() => {
     if (!ref.current || data.length === 0) return
     const points = toPortfolioChartPoints(data)
@@ -226,5 +235,5 @@ export function PortfolioChart({
     window.addEventListener('resize', resize)
     return () => { observer?.disconnect(); window.removeEventListener('resize', resize); chart.dispose() }
   }, [data, netInvestmentLabel, netLiqLabel, rangeEnd, rangeStart])
-  return <div ref={ref} className="portfolio-chart" role="img" aria-label={t('charts.portfolioValue')} />
+  return <div><div ref={ref} className="portfolio-chart" role="img" aria-label={t('charts.portfolioValue')} /><small>{historyNote}</small></div>
 }

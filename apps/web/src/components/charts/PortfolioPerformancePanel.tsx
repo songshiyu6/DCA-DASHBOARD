@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { Eye, EyeOff, Plus, Search, X } from 'lucide-react'
 import * as echarts from 'echarts/core'
@@ -19,6 +19,7 @@ import './portfolio-performance.css'
 echarts.use([LineChart, GridComponent, TooltipComponent, MarkLineComponent, CanvasRenderer])
 
 const STORAGE_KEY = 'dca-performance-benchmarks-v1'
+const SEARCH_DEBOUNCE_MS = 300
 
 interface StoredBenchmark extends BenchmarkSearchResult {
   visible: boolean
@@ -33,7 +34,8 @@ function loadStoredBenchmarks(): StoredBenchmark[] {
     return parsed.flatMap((item) => {
       if (!item || typeof item !== 'object') return []
       const row = item as Record<string, unknown>
-      if (typeof row.symbol !== 'string' || typeof row.name !== 'string' || (row.type !== 'ETF' && row.type !== 'INDEX')) return []
+      if (typeof row.symbol !== 'string' || typeof row.name !== 'string'
+        || (row.type !== 'ETF' && row.type !== 'INDEX' && row.type !== 'EQUITY')) return []
       return [{
         symbol: row.symbol,
         name: row.name,
@@ -142,17 +144,28 @@ export function PortfolioPerformancePanel({ history }: { history: PortfolioHisto
   const [portfolioVisible, setPortfolioVisible] = useState(true)
   const [benchmarks, setBenchmarks] = useState<StoredBenchmark[]>(loadStoredBenchmarks)
   const [searchText, setSearchText] = useState('')
-  const deferredSearch = useDeferredValue(searchText.trim())
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const normalizedSearch = searchText.trim()
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(benchmarks))
   }, [benchmarks])
 
+  useEffect(() => {
+    if (!normalizedSearch) {
+      setDebouncedSearch('')
+      return
+    }
+    const timer = window.setTimeout(() => setDebouncedSearch(normalizedSearch), SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(timer)
+  }, [normalizedSearch])
+
   const search = useQuery({
-    queryKey: ['benchmark-search', deferredSearch],
-    queryFn: () => benchmarksApi.search(deferredSearch),
-    enabled: deferredSearch.length >= 1,
+    queryKey: ['benchmark-search', debouncedSearch],
+    queryFn: () => benchmarksApi.search(debouncedSearch),
+    enabled: debouncedSearch.length >= 1,
     staleTime: 5 * 60_000,
+    retry: false,
   })
   const historyQueries = useQueries({
     queries: benchmarks.map((item) => ({
@@ -202,8 +215,8 @@ export function PortfolioPerformancePanel({ history }: { history: PortfolioHisto
   const anyError = historyQueries.some((query, index) => benchmarks[index]?.visible && query.isError)
 
   const title = isZh ? '投资表现' : 'Investment performance'
-  const detail = isZh ? '剔除新增资金影响的 TWR，可叠加任意 ETF / 指数' : 'Cash-flow-neutral TWR with any ETF / index benchmarks'
-  const addLabel = isZh ? '搜索 ETF 或指数作为基准' : 'Search any ETF or index benchmark'
+  const detail = isZh ? '剔除新增资金影响的 TWR，可叠加任意 ETF / 指数 / 股票' : 'Cash-flow-neutral TWR with any ETF / index / equity benchmarks'
+  const addLabel = isZh ? '搜索 ETF、指数或股票作为基准' : 'Search any ETF, index, or equity benchmark'
 
   return <Panel className="performance-panel" title={title} detail={detail} action={<div className="chart-range-control" aria-label="Performance range">{CHART_RANGE_OPTIONS.map((item) => <button key={item} type="button" className={range === item ? 'active' : ''} aria-pressed={range === item} onClick={() => setRange(item)}>{item}</button>)}</div>}>
     <div className="performance-controls">
@@ -222,13 +235,13 @@ export function PortfolioPerformancePanel({ history }: { history: PortfolioHisto
         <Search size={14} />
         <input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder={addLabel} aria-label={addLabel} />
         {searchText ? <button type="button" className="benchmark-search-clear" onClick={() => setSearchText('')} aria-label={isZh ? '清空搜索' : 'Clear search'}><X size={13} /></button> : null}
-        {deferredSearch && (search.isFetching || searchResults.length || search.isError) ? <div className="benchmark-search-results">
+        {debouncedSearch && (search.isFetching || searchResults.length || search.isError || search.isSuccess) ? <div className="benchmark-search-results">
           {search.isFetching ? <small>{isZh ? '搜索中…' : 'Searching…'}</small> : null}
           {!search.isFetching && searchResults.map((item) => <button type="button" key={lineKey(item)} onClick={() => addBenchmark(item)}>
             <span><strong>{item.symbol}</strong><small>{item.name}{item.exchange ? ` · ${item.exchange}` : ''}</small></span><em>{item.type}</em><Plus size={14} />
           </button>)}
           {!search.isFetching && search.isError ? <small>{isZh ? '基准搜索暂时不可用' : 'Benchmark search is temporarily unavailable'}</small> : null}
-          {!search.isFetching && !search.isError && !searchResults.length ? <small>{isZh ? '没有找到可添加的 ETF / 指数' : 'No ETF / index results to add'}</small> : null}
+          {!search.isFetching && !search.isError && !searchResults.length ? <small>{isZh ? '没有找到可添加的 ETF / 指数 / 股票' : 'No ETF / index / equity results to add'}</small> : null}
         </div> : null}
       </div>
     </div>
@@ -236,7 +249,7 @@ export function PortfolioPerformancePanel({ history }: { history: PortfolioHisto
     {anyLoading ? <p className="performance-note">{isZh ? '正在载入基准历史…' : 'Loading benchmark history…'}</p> : null}
     {visibleLines.length ? <PerformanceChart lines={visibleLines} /> : <EmptyState title={isZh ? '请选择至少一条可用曲线' : 'Select at least one available series'} detail={isZh ? '投资组合和每个 Benchmark 都可以独立开关。' : 'Portfolio and every benchmark can be toggled independently.'} />}
     <small className="performance-footnote">{isZh
-      ? '所有可见曲线在所选区间的第一个共同常规收盘点归零。Portfolio 使用 TWR 剔除净新增资金；ETF Benchmark 优先使用复权收盘价，指数使用 Yahoo 可用的对应收盘/复权值。'
-      : 'All visible lines are rebased to 0% at their first common regular close. Portfolio uses TWR to remove net external capital; ETF benchmarks prefer adjusted close while indices use the corresponding Yahoo close/adjusted value.'}</small>
+      ? '所有可见曲线在所选区间的第一个共同常规收盘点归零。Portfolio 使用 TWR 剔除净新增资金；ETF / 股票 Benchmark 优先使用复权收盘价，指数使用 Yahoo 可用的对应收盘/复权值。'
+      : 'All visible lines are rebased to 0% at their first common regular close. Portfolio uses TWR to remove net external capital; ETF/equity benchmarks prefer adjusted close while indices use the corresponding Yahoo close/adjusted value.'}</small>
   </Panel>
 }

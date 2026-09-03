@@ -99,10 +99,24 @@ export function rebasePerformanceLines(lines: PerformanceLine[]): { startDay: st
 
   let commonDates: Set<string> | null = null
   for (const line of active) {
-    const dates = new Set(line.points.filter((point) => point.value !== null).map((point) => point.date))
-    commonDates = commonDates === null ? dates : new Set([...commonDates].filter((date) => dates.has(date)))
+    const dates = new Set<string>(line.points.filter((point) => point.value !== null).map((point) => point.date))
+    if (commonDates === null) {
+      commonDates = new Set<string>(dates)
+      continue
+    }
+    const intersection = new Set<string>()
+    for (const date of commonDates) {
+      if (dates.has(date)) intersection.add(date)
+    }
+    commonDates = intersection
   }
-  const startDay = commonDates && commonDates.size ? [...commonDates].sort()[0] : null
+
+  let startDay: string | null = null
+  if (commonDates !== null && commonDates.size > 0) {
+    for (const date of commonDates) {
+      if (startDay === null || date < startDay) startDay = date
+    }
+  }
   if (!startDay) return { startDay: null, lines: [] }
 
   const rebased = active.map((line) => {

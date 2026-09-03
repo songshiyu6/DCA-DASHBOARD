@@ -102,8 +102,9 @@ export function DashboardPage() {
   const isZh = (i18n.resolvedLanguage ?? i18n.language).toLowerCase().startsWith('zh')
   const portfolioLabel = isZh ? '投资组合' : 'Portfolio'
   const portfolioOverviewLabel = isZh ? '投资组合总览' : 'Portfolio overview'
-  const pnlLabel = isZh ? '盈亏' : 'P/L'
-  const costLabel = isZh ? '成本' : 'Cost'
+  const cumulativePnlLabel = isZh ? '累计盈亏' : 'Cumulative P/L'
+  const longTermPerformanceLabel = isZh ? '长期表现' : 'Long-term performance'
+  const longTermPerformanceDetail = isZh ? '策略与资金回报' : 'Strategy and money-weighted returns'
   const timeWeightedAnnualizedLabel = isZh ? '时间加权年化' : 'Time-weighted annualized'
   const netLiqLabel = isZh ? '净清算价值' : 'Net Liq Value'
   const netInvestmentLabel = isZh ? '净投入' : 'Net investment'
@@ -171,18 +172,22 @@ export function DashboardPage() {
   return <div className="page dashboard-page dashboard-page-v2">
     <div className="page-intro dashboard-intro"><div><span className="page-eyebrow">{portfolioOverviewLabel}</span><h1>{t('dashboard.title')}</h1><p>{t('dashboard.subtitle')}</p></div><div className="page-actions"><button type="button" className="button button-ghost" onClick={() => void refreshMarket()} disabled={marketRefreshing || dashboard.isFetching}><RefreshCw size={15} className={marketRefreshing ? 'spin-icon' : undefined} />{marketRefreshing || dashboard.isFetching ? t('common.loading') : t('common.refresh')}</button><button type="button" className="button button-secondary" onClick={() => { exportDashboard(data) }}><Download size={15} />{t('common.export')}</button></div></div>
     <DataStateBanner status={meta.status} message={meta.message} source={meta.source === 'FIXTURE' ? t('common.demoData') : meta.source} asOf={meta.asOf} retrievedAt={meta.retrievedAt} />
-    <div className="metric-grid metric-grid-main dashboard-performance-grid">
-      <MetricCard label={portfolioLabel} value={formatMoney(summary.marketValue)} detail={t('dashboard.trackedEtfs', { count: data.holdings.length })} icon={CircleDollarSign} tone="accent" />
-      <MetricCard label={`${t('common.today')} ${pnlLabel}`} value={formatSignedMoney(today.pnl)} detail={formatSignedPercent(today.returnRate)} icon={TrendingUp} tone={trendClass(today.pnl) === 'trend-negative' ? 'negative' : 'positive'} />
-      <MetricCard label={`${t('dashboard.sinceInception')} ${pnlLabel}`} value={formatSignedMoney(summary.totalPnl)} detail={formatSignedPercent(cumulativeReturn)} icon={TrendingUp} tone={trendClass(summary.totalPnl) === 'trend-negative' ? 'negative' : 'positive'} />
-      <MetricCard label={`YTD ${pnlLabel}`} value={formatSignedMoney(ytdPnl)} detail={formatSignedPercent(regularYtd.returnRate)} icon={ArrowUpRight} tone={trendClass(ytdPnl) === 'trend-negative' ? 'negative' : 'positive'} />
+    <div className="dashboard-summary-grid" aria-label={portfolioLabel}>
+      <article className="portfolio-summary-card">
+        <div className="portfolio-summary-top"><span className="metric-label">{portfolioLabel}</span><span className="metric-icon"><CircleDollarSign size={15} strokeWidth={1.8} /></span></div>
+        <strong className="portfolio-summary-value">{formatMoney(summary.marketValue)}</strong>
+        <div className="portfolio-summary-meta">
+          <span><small>{netInvestmentLabel}</small><strong>{formatMoney(summary.netInvested)}</strong></span>
+          <span><small>{cumulativePnlLabel}</small><strong className={trendClass(summary.totalPnl)}>{formatSignedMoney(summary.totalPnl)} <em>{formatSignedPercent(cumulativeReturn)}</em></strong></span>
+        </div>
+      </article>
+      <MetricCard className="dashboard-period-card" label={t('common.today')} value={formatSignedMoney(today.pnl)} detail={formatSignedPercent(today.returnRate)} icon={TrendingUp} tone={trendClass(today.pnl) === 'trend-negative' ? 'negative' : 'positive'} />
+      <MetricCard className="dashboard-period-card" label="YTD" value={formatSignedMoney(ytdPnl)} detail={formatSignedPercent(regularYtd.returnRate)} icon={ArrowUpRight} tone={trendClass(ytdPnl) === 'trend-negative' ? 'negative' : 'positive'} />
     </div>
-    <div className="capital-summary-strip capital-summary-strip-overview" aria-label={`${costLabel}, CAGR, XIRR`}>
-      <span className="capital-cost-block"><small>{costLabel}</small><strong>{formatMoney(summary.costBasis)}</strong></span>
-      <span className="capital-return-summary">
-        <span className="capital-return-row"><small>CAGR</small><strong className={trendClass(cagr)}>{formatSignedPercent(cagr)}</strong><em>{timeWeightedAnnualizedLabel}</em></span>
-        <span className="capital-return-row"><small>XIRR</small><strong className={trendClass(summary.xirr)}>{formatSignedPercent(summary.xirr)}</strong><em>{t('dashboard.moneyWeightedReturn')}</em></span>
-      </span>
+    <div className="dashboard-long-term-strip" aria-label={`${longTermPerformanceLabel}, CAGR, XIRR`}>
+      <span className="dashboard-long-term-heading"><small>{longTermPerformanceLabel}</small><span>{longTermPerformanceDetail}</span></span>
+      <span className="dashboard-long-term-metric"><small>CAGR</small><strong className={trendClass(cagr)}>{formatSignedPercent(cagr)}</strong><em>{timeWeightedAnnualizedLabel}</em></span>
+      <span className="dashboard-long-term-metric"><small>XIRR</small><strong className={trendClass(summary.xirr)}>{formatSignedPercent(summary.xirr)}</strong><em>{t('dashboard.moneyWeightedReturn')}</em></span>
     </div>
     <Panel title={t('dashboard.holdings')} detail={t('dashboard.ledgerProjection')} action={<button type="button" className="text-button" onClick={() => navigate('/transactions')}>{t('common.viewAll')} <ChevronRight size={15} /></button>} className="holdings-panel dashboard-holdings-first" flush>
       {data.holdings.length ? <div className="holdings-list">{data.holdings.map((holding) => <HoldingRow key={holding.symbol} holding={holding} quote={quoteBySymbol[holding.symbol]} onOpen={(symbol) => navigate(`/etfs/${symbol}`)} />)}</div> : <EmptyState title={t('common.noData')} />}

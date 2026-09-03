@@ -4,7 +4,8 @@ import { ArrowUpRight, CalendarDays, ChevronRight, CircleDollarSign, Download, R
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
-import { annualizedTimeWeightedReturn, CHART_RANGE_OPTIONS, filterPortfolioHistory, livePerformanceSinceLastClose, portfolioRangeStartDay, withCurrentPortfolioPoint, ytdPerformance, type ChartRange } from '../lib/dashboardPerformance'
+import { annualizedTimeWeightedReturn, CHART_RANGE_OPTIONS, filterPortfolioHistory, portfolioRangeStartDay, withCurrentPortfolioPoint, ytdPerformance, type ChartRange } from '../lib/dashboardPerformance'
+import { dailyPerformanceFromSettlement } from '../lib/dailySettlementPerformance'
 import { decimal, decimalMax, decimalMin, formatDate, formatMoney, formatPeriod, formatShares, formatSignedMoney, formatSignedPercent, formatPercent, formatTime } from '../lib/format'
 import { isInitialContributionPeriod } from '../lib/initialContributionPresentation'
 import { queryKeys } from '../lib/queryKeys'
@@ -96,7 +97,11 @@ export function DashboardPage() {
   const cagr = useMemo(() => annualizedTimeWeightedReturn(regularHistory), [regularHistory])
   const chartRangeEnd = regularHistory.at(-1)?.date.slice(0, 10)
   const chartRangeStart = chartRangeEnd ? portfolioRangeStartDay(chartRangeEnd, chartRange) ?? undefined : undefined
-  const today = useMemo(() => livePerformanceSinceLastClose(regularHistory, rawData?.summary.marketValue, rawData?.summary.netInvested), [regularHistory, rawData?.summary.marketValue, rawData?.summary.netInvested])
+  const today = useMemo(() => dailyPerformanceFromSettlement(
+    rawData?.dailySettlement,
+    rawData?.summary.marketValue,
+    rawData?.summary.netInvested,
+  ), [rawData?.dailySettlement, rawData?.summary.marketValue, rawData?.summary.netInvested])
   const regularYtd = useMemo(() => ytdPerformance(regularHistory), [regularHistory])
   const liveYtd = useMemo(() => ytdPerformance(livePerformanceHistory), [livePerformanceHistory])
   const isZh = (i18n.resolvedLanguage ?? i18n.language).toLowerCase().startsWith('zh')

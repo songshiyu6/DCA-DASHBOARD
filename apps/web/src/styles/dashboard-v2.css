@@ -75,8 +75,9 @@
 }
 
 .portfolio-summary-meta em {
-  font-size: 11px;
+  font-size: 13px;
   font-style: normal;
+  font-weight: 600;
   margin-left: 5px;
   white-space: nowrap;
 }
@@ -87,9 +88,17 @@
 
 .dashboard-summary-grid .dashboard-period-card .metric-detail {
   font-family: 'DM Mono', monospace;
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 14px;
+  font-weight: 600;
   margin-top: 6px;
+}
+
+.dashboard-summary-grid .dashboard-period-card.metric-positive .metric-detail {
+  color: var(--positive);
+}
+
+.dashboard-summary-grid .dashboard-period-card.metric-negative .metric-detail {
+  color: var(--negative);
 }
 
 .dashboard-long-term-strip {
@@ -139,9 +148,10 @@
 }
 
 .dashboard-page-v2 .holding-pnl small {
+  color: inherit;
   font-family: 'DM Mono', monospace;
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 14px;
+  font-weight: 600;
   margin-top: 4px;
 }
 
@@ -374,7 +384,7 @@
 
   .portfolio-summary-meta em {
     display: block;
-    font-size: 10px;
+    font-size: 12px;
     margin-left: 0;
     margin-top: 2px;
   }
@@ -388,7 +398,7 @@
   }
 
   .dashboard-summary-grid .dashboard-period-card .metric-detail {
-    font-size: 11px;
+    font-size: 13px;
   }
 
   .dashboard-long-term-strip {
@@ -484,7 +494,7 @@
   }
 
   .dashboard-page-v2 .holding-pnl small {
-    font-size: 12px;
+    font-size: 13px;
     margin-top: 0;
   }
 

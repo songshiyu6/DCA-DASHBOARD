@@ -9,7 +9,7 @@ function stringValue(value: unknown, fallback = ''): string {
 }
 
 function benchmarkType(value: unknown): BenchmarkType | null {
-  return value === 'ETF' || value === 'INDEX' ? value : null
+  return value === 'ETF' || value === 'INDEX' || value === 'EQUITY' ? value : null
 }
 
 function normalizeSearch(value: unknown): BenchmarkSearchResult[] {

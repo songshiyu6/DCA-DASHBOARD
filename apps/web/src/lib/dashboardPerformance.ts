@@ -9,8 +9,28 @@ export interface PeriodPerformance {
   returnRate: string | null
 }
 
+const MARKET_TIME_ZONE = 'America/New_York'
+const marketDayFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: MARKET_TIME_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+})
+
 function day(value: string): string {
   return value.slice(0, 10)
+}
+
+export function marketBusinessDay(value: string | null | undefined): string | null {
+  if (!value) return null
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value
+  const instant = new Date(value)
+  if (Number.isNaN(instant.getTime())) return null
+  const parts = marketDayFormatter.formatToParts(instant)
+  const year = parts.find((part) => part.type === 'year')?.value
+  const month = parts.find((part) => part.type === 'month')?.value
+  const date = parts.find((part) => part.type === 'day')?.value
+  return year && month && date ? `${year}-${month}-${date}` : null
 }
 
 function parseUtcDay(value: string): Date | null {
@@ -88,19 +108,36 @@ export function latestDayPerformance(history: PortfolioHistoryPoint[]): PeriodPe
   return { pnl: pnl.toString(), returnRate: pnl.div(openingValue).toString() }
 }
 
+function performanceFromBaseline(
+  baseline: PortfolioHistoryPoint | undefined,
+  marketValue: string | undefined,
+  netInvested: string | undefined,
+): PeriodPerformance {
+  if (!baseline || !marketValue || !netInvested) return { pnl: null, returnRate: null }
+  const openingValue = decimal(baseline.marketValue)
+  if (openingValue.lte(0)) return { pnl: null, returnRate: null }
+  const externalFlow = decimal(netInvested).minus(baseline.netInvested)
+  const pnl = decimal(marketValue).minus(openingValue).minus(externalFlow)
+  return { pnl: pnl.toString(), returnRate: pnl.div(openingValue).toString() }
+}
+
 export function livePerformanceSinceLastClose(
   history: PortfolioHistoryPoint[],
   marketValue: string | undefined,
   netInvested: string | undefined,
 ): PeriodPerformance {
-  if (!marketValue || !netInvested) return { pnl: null, returnRate: null }
-  const previous = validPoints(history).at(-1)
-  if (!previous) return { pnl: null, returnRate: null }
-  const openingValue = decimal(previous.marketValue)
-  if (openingValue.lte(0)) return { pnl: null, returnRate: null }
-  const externalFlow = decimal(netInvested).minus(previous.netInvested)
-  const pnl = decimal(marketValue).minus(openingValue).minus(externalFlow)
-  return { pnl: pnl.toString(), returnRate: pnl.div(openingValue).toString() }
+  return performanceFromBaseline(validPoints(history).at(-1), marketValue, netInvested)
+}
+
+export function livePerformanceSincePreviousTradingClose(
+  history: PortfolioHistoryPoint[],
+  currentBusinessDay: string | null | undefined,
+  marketValue: string | undefined,
+  netInvested: string | undefined,
+): PeriodPerformance {
+  if (!currentBusinessDay) return { pnl: null, returnRate: null }
+  const baseline = validPoints(history).filter((point) => day(point.date) < currentBusinessDay).at(-1)
+  return performanceFromBaseline(baseline, marketValue, netInvested)
 }
 
 export function timeWeightedReturn(history: PortfolioHistoryPoint[], startDay?: string): string | null {

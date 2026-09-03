@@ -1,0 +1,229 @@
+.performance-panel {
+  margin-top: 18px;
+}
+
+.performance-controls {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 12px;
+  position: relative;
+  z-index: 3;
+}
+
+.performance-series-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.performance-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+}
+
+button.performance-chip {
+  cursor: pointer;
+}
+
+.performance-chip.active {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line-subtle));
+}
+
+.performance-chip strong {
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.performance-chip em {
+  font-size: 9px;
+  font-style: normal;
+  letter-spacing: .05em;
+  opacity: .7;
+}
+
+.benchmark-chip {
+  padding: 0 4px 0 0;
+  gap: 0;
+  overflow: hidden;
+}
+
+.performance-chip-toggle,
+.performance-chip-remove,
+.benchmark-search-clear {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.performance-chip-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 5px 5px 9px;
+}
+
+.performance-chip-remove {
+  display: inline-grid;
+  place-items: center;
+  padding: 5px;
+  border-radius: 999px;
+  opacity: .62;
+}
+
+.performance-chip-remove:hover {
+  opacity: 1;
+  background: var(--line-subtle);
+}
+
+.benchmark-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 1 310px;
+  min-width: 220px;
+  min-height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 9px;
+  background: var(--surface-raised, var(--surface));
+  color: var(--text-muted);
+}
+
+.benchmark-search-wrap input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+
+.benchmark-search-clear {
+  display: inline-grid;
+  place-items: center;
+  padding: 2px;
+}
+
+.benchmark-search-results {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: min(420px, 84vw);
+  max-height: 290px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 10px;
+  background: var(--surface-raised, var(--surface));
+  box-shadow: 0 14px 34px rgba(0, 0, 0, .22);
+}
+
+.benchmark-search-results > button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.benchmark-search-results > button:hover {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.benchmark-search-results > button span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.benchmark-search-results strong {
+  font-size: 12px;
+}
+
+.benchmark-search-results small {
+  display: block;
+  padding: 7px 9px;
+  color: var(--text-muted);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.benchmark-search-results button small {
+  padding: 0;
+}
+
+.benchmark-search-results em {
+  font-size: 9px;
+  font-style: normal;
+  color: var(--text-muted);
+}
+
+.performance-chart {
+  width: 100%;
+  height: 300px;
+}
+
+.performance-note,
+.performance-footnote {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.performance-note {
+  margin: 4px 0 8px;
+}
+
+.performance-warning {
+  color: var(--warning, var(--text-muted));
+}
+
+.performance-footnote {
+  display: block;
+  margin-top: 8px;
+  line-height: 1.5;
+}
+
+@media (max-width: 760px) {
+  .performance-controls {
+    flex-direction: column;
+  }
+
+  .benchmark-search-wrap {
+    width: 100%;
+    min-width: 0;
+    flex-basis: auto;
+  }
+
+  .performance-chart {
+    height: 270px;
+  }
+}

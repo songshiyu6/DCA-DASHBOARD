@@ -15,6 +15,7 @@ import { Panel } from '../components/Panel'
 import type { Holding, Quote, RecommendationItem } from '../types'
 
 const PortfolioChart = lazy(async () => ({ default: (await import('../components/charts/PortfolioChart')).PortfolioChart }))
+const PortfolioPerformancePanel = lazy(async () => ({ default: (await import('../components/charts/PortfolioPerformancePanel')).PortfolioPerformancePanel }))
 
 function trendClass(value: string | null | undefined): string {
   if (!value || decimal(value).isZero()) return 'trend-flat'
@@ -207,6 +208,9 @@ export function DashboardPage() {
       </Panel>
       {data.nextDca ? <NextDcaCard {...data.nextDca} /> : <Panel title={t('dashboard.nextDca')}><EmptyState title={t('plan.noPlan')} /></Panel>}
     </div>
+    <Suspense fallback={<Panel title={isZh ? '投资表现' : 'Investment performance'}><LoadingBlock lines={5} /></Panel>}>
+      <PortfolioPerformancePanel history={regularHistory} />
+    </Suspense>
     <div className="content-grid dashboard-mid-grid dashboard-secondary-grid">
       <Panel title={t('dashboard.allocation')} detail={t('dashboard.targetVsActual')} className="allocation-panel">
         {data.allocation.length ? <div className="allocation-list">{data.allocation.map((row) => <div className="allocation-item" key={row.symbol}><div className="allocation-item-head"><strong>{row.symbol}</strong><span className={trendClass(row.drift)}>{formatSignedPercent(row.drift)}</span></div><div className="allocation-track"><span className="allocation-target" style={{ width: `${decimal(row.targetWeight).mul(100).toNumber()}%` }} /><span className="allocation-actual" style={{ width: `${decimal(row.actualWeight).mul(100).toNumber()}%` }} /></div><div className="allocation-item-meta"><span>{t('dashboard.target')} {formatPercent(row.targetWeight)}</span><span>{t('dashboard.actual')} {formatPercent(row.actualWeight)}</span><span>{formatMoney(row.marketValue)}</span></div></div>)}</div> : <EmptyState title={t('common.noData')} />}

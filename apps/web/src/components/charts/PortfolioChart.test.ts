@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatPortfolioTooltip, resolvePortfolioChartStart, toPortfolioChartPoints } from './PortfolioChart'
+import { formatPortfolioTooltip, resolvePortfolioChartEnd, resolvePortfolioChartStart, toPortfolioChartPoints } from './PortfolioChart'
 
 describe('PortfolioChart data adapter', () => {
   it('keeps missing market value as a gap while retaining net investment', () => {
@@ -10,6 +10,17 @@ describe('PortfolioChart data adapter', () => {
       { date: '2026-08-26', marketValue: null, netInvested: 100 },
       { date: '2026-08-27', marketValue: 101, netInvested: 100 },
     ])
+  })
+
+  it('does not render carried-forward PARTIAL values as regular-close valuations', () => {
+    const points = toPortfolioChartPoints([
+      { date: '2026-08-28', marketValue: '58909.71', netInvested: '59000', dataStatus: 'FRESH' },
+      { date: '2026-08-31', marketValue: '58909.71', netInvested: '59000', dataStatus: 'PARTIAL' },
+      { date: '2026-09-01', marketValue: '58909.71', netInvested: '59000', dataStatus: 'PARTIAL' },
+    ])
+
+    expect(points.map((point) => point.marketValue)).toEqual([58909.71, null, null])
+    expect(resolvePortfolioChartEnd(points, '2026-09-01')).toBe(Date.parse('2026-08-28T12:00:00Z'))
   })
 
   it('clamps every requested window to the first funded portfolio point', () => {

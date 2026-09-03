@@ -20,7 +20,7 @@ public class BenchmarkController {
     }
 
     @GetMapping("/search")
-    @Cacheable(cacheNames = "benchmarkSearch", key = "#q == null ? '' : #q.trim().toUpperCase()")
+    @Cacheable(cacheNames = "benchmarkSearch", key = "#p0 == null ? '' : #p0.trim().toUpperCase()")
     public List<SearchResult> search(@RequestParam String q) {
         return benchmarkService.search(q);
     }

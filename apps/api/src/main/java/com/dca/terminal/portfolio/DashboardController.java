@@ -15,14 +15,10 @@ import static com.dca.terminal.portfolio.PortfolioDtos.DashboardResponse;
 @RequestMapping("/api/v1/dashboard")
 public class DashboardController {
     private final PortfolioService portfolioService;
-    private final PortfolioDailySettlementService settlementService;
     private final PlanService planService;
 
-    public DashboardController(PortfolioService portfolioService,
-                               PortfolioDailySettlementService settlementService,
-                               PlanService planService) {
+    public DashboardController(PortfolioService portfolioService, PlanService planService) {
         this.portfolioService = portfolioService;
-        this.settlementService = settlementService;
         this.planService = planService;
     }
 
@@ -34,7 +30,7 @@ public class DashboardController {
         NextDcaResponse nextDca = active == null ? null : planService.nextDca(active.id()).orElse(null);
         ContributionProgress progress = active == null ? null : planService.contributionProgress(active.id());
         PortfolioService.CurrentViews current = portfolioService.currentViews();
-        return new DashboardResponse(current.summary(), settlementService.current(), nextDca,
-                portfolioService.history("ALL"), current.holdings(), current.allocation(), progress);
+        return new DashboardResponse(current.summary(), nextDca, portfolioService.history("ALL"),
+                current.holdings(), current.allocation(), progress);
     }
 }

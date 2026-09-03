@@ -18,10 +18,6 @@ public final class PortfolioDtos {
                                   @com.fasterxml.jackson.annotation.JsonProperty("dataStatus") FreshnessStatus status,
                                   Instant asOf) { }
 
-    public record DailySettlementResponse(LocalDate date, Instant settledAt, BigDecimal marketValue,
-                                          BigDecimal netInvested,
-                                          @com.fasterxml.jackson.annotation.JsonProperty("dataStatus") FreshnessStatus status) { }
-
     public record HoldingResponse(String symbol, String name, BigDecimal price, BigDecimal todayPercent,
                                   BigDecimal shares, BigDecimal avgCost, BigDecimal costBasis,
                                   BigDecimal marketValue, BigDecimal unrealizedPnl, BigDecimal returnPercent,
@@ -39,8 +35,8 @@ public final class PortfolioDtos {
 
     public record UUIDValue(java.util.UUID value) { }
 
-    public record DashboardResponse(SummaryResponse summary, DailySettlementResponse dailySettlement,
-                                    NextDcaResponse nextDca, List<HistoryPoint> portfolioHistory,
-                                    List<HoldingResponse> holdings, List<AllocationResponse> allocation,
+    public record DashboardResponse(SummaryResponse summary, NextDcaResponse nextDca,
+                                    List<HistoryPoint> portfolioHistory, List<HoldingResponse> holdings,
+                                    List<AllocationResponse> allocation,
                                     ContributionProgress contributionProgress) { }
 }

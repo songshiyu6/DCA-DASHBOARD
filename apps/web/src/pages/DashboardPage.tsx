@@ -4,8 +4,7 @@ import { ArrowUpRight, CalendarDays, ChevronRight, CircleDollarSign, Download, R
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
-import { annualizedTimeWeightedReturn, CHART_RANGE_OPTIONS, filterPortfolioHistory, portfolioRangeStartDay, withCurrentPortfolioPoint, ytdPerformance, type ChartRange } from '../lib/dashboardPerformance'
-import { dailyPerformanceFromSettlement } from '../lib/dailySettlementPerformance'
+import { annualizedTimeWeightedReturn, CHART_RANGE_OPTIONS, filterPortfolioHistory, livePerformanceSincePreviousTradingClose, marketBusinessDay, portfolioRangeStartDay, withCurrentPortfolioPoint, ytdPerformance, type ChartRange } from '../lib/dashboardPerformance'
 import { decimal, decimalMax, decimalMin, formatDate, formatMoney, formatPeriod, formatShares, formatSignedMoney, formatSignedPercent, formatPercent, formatTime } from '../lib/format'
 import { isInitialContributionPeriod } from '../lib/initialContributionPresentation'
 import { queryKeys } from '../lib/queryKeys'
@@ -97,11 +96,16 @@ export function DashboardPage() {
   const cagr = useMemo(() => annualizedTimeWeightedReturn(regularHistory), [regularHistory])
   const chartRangeEnd = regularHistory.at(-1)?.date.slice(0, 10)
   const chartRangeStart = chartRangeEnd ? portfolioRangeStartDay(chartRangeEnd, chartRange) ?? undefined : undefined
-  const today = useMemo(() => dailyPerformanceFromSettlement(
-    rawData?.dailySettlement,
+  const currentBusinessDay = useMemo(
+    () => marketBusinessDay(dashboard.data?.meta.asOf ?? dashboard.data?.meta.retrievedAt),
+    [dashboard.data?.meta.asOf, dashboard.data?.meta.retrievedAt],
+  )
+  const today = useMemo(() => livePerformanceSincePreviousTradingClose(
+    regularHistory,
+    currentBusinessDay,
     rawData?.summary.marketValue,
     rawData?.summary.netInvested,
-  ), [rawData?.dailySettlement, rawData?.summary.marketValue, rawData?.summary.netInvested])
+  ), [regularHistory, currentBusinessDay, rawData?.summary.marketValue, rawData?.summary.netInvested])
   const regularYtd = useMemo(() => ytdPerformance(regularHistory), [regularHistory])
   const liveYtd = useMemo(() => ytdPerformance(livePerformanceHistory), [livePerformanceHistory])
   const isZh = (i18n.resolvedLanguage ?? i18n.language).toLowerCase().startsWith('zh')

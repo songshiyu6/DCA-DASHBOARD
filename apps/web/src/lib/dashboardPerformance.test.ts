@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { annualizedTimeWeightedReturn, CHART_RANGE_OPTIONS, filterPortfolioHistory, latestDayPerformance, latestFreshPortfolioHistoryPoint, livePerformanceSinceLastClose, portfolioRangeStartDay, timeWeightedReturn, withCurrentPortfolioPoint, ytdPerformance, ytdTimeWeightedReturn } from './dashboardPerformance'
+import { annualizedTimeWeightedReturn, CHART_RANGE_OPTIONS, filterPortfolioHistory, latestDayPerformance, latestFreshPortfolioHistoryPoint, livePerformanceSinceLastClose, livePerformanceSincePreviousTradingClose, marketBusinessDay, portfolioRangeStartDay, timeWeightedReturn, withCurrentPortfolioPoint, ytdPerformance, ytdTimeWeightedReturn } from './dashboardPerformance'
 import type { PortfolioHistoryPoint } from '../types'
 
 const point = (date: string, marketValue: string, netInvested: string): PortfolioHistoryPoint => ({ date, marketValue, netInvested, dataStatus: 'FRESH' })
@@ -27,6 +27,43 @@ describe('dashboard performance', () => {
     expect(Number(result.pnl)).toBeCloseTo(20, 8)
     expect(Number(result.returnRate)).toBeCloseTo(20 / 1010, 8)
     expect(latestFreshPortfolioHistoryPoint(history)?.date).toBe('2026-08-28')
+  })
+
+  it('uses America/New_York midnight only as the daily rollover boundary', () => {
+    expect(marketBusinessDay('2026-09-03T03:59:59Z')).toBe('2026-09-02')
+    expect(marketBusinessDay('2026-09-03T04:00:00Z')).toBe('2026-09-03')
+    expect(marketBusinessDay('2026-01-15T04:59:59Z')).toBe('2026-01-14')
+    expect(marketBusinessDay('2026-01-15T05:00:00Z')).toBe('2026-01-15')
+  })
+
+  it('keeps Today anchored to the previous trading close after the current-day close is stored', () => {
+    const history = [
+      point('2026-09-04', '1000', '1000'),
+      point('2026-09-08', '1100', '1000'),
+    ]
+    const result = livePerformanceSincePreviousTradingClose(history, '2026-09-08', '1110', '1000')
+
+    expect(Number(result.pnl)).toBeCloseTo(110, 8)
+    expect(Number(result.returnRate)).toBeCloseTo(0.11, 8)
+  })
+
+  it('rolls the Today baseline to the prior close on the next New York day', () => {
+    const history = [
+      point('2026-09-04', '1000', '1000'),
+      point('2026-09-08', '1100', '1000'),
+    ]
+    const result = livePerformanceSincePreviousTradingClose(history, '2026-09-09', '1110', '1000')
+
+    expect(Number(result.pnl)).toBeCloseTo(10, 8)
+    expect(Number(result.returnRate)).toBeCloseTo(10 / 1100, 8)
+  })
+
+  it('removes current-day external flows from previous-close Today performance', () => {
+    const history = [point('2026-09-04', '1000', '1000')]
+    const result = livePerformanceSincePreviousTradingClose(history, '2026-09-08', '1320', '1200')
+
+    expect(Number(result.pnl)).toBeCloseTo(120, 8)
+    expect(Number(result.returnRate)).toBeCloseTo(0.12, 8)
   })
 
   it('calculates time-weighted return without treating later contributions as performance', () => {

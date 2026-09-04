@@ -205,14 +205,14 @@ export function PortfolioPerformancePanel({ history, inceptionCagr, inceptionXir
     : endDay ? portfolioRangeStartDay(endDay, range) : null
   const startDay = serverPerformance?.requestedStartDate ?? fallbackStartDay
   const externalSummary = rangeSummary?.[range]
-  const selectedServerSummary = serverPerformance
+  const selectedServerSummary = useMemo(() => serverPerformance
     ? {
         twr: serverPerformance.twr,
         cagr: serverPerformance.cagr,
         xirr: serverPerformance.xirr,
         maxDrawdown: serverPerformance.maximumDrawdown,
       }
-    : externalSummary
+    : externalSummary, [externalSummary, serverPerformance])
   const fallbackRangeTwr = useMemo(() => {
     if (selectedServerSummary) return null
     if (range !== 'ALL' && !startDay) return null

@@ -6,6 +6,10 @@ import '../../lib/i18n'
 import type { PortfolioHistoryPoint } from '../../types'
 import { PortfolioPerformancePanel } from './PortfolioPerformancePanel'
 
+const mockedEcharts = vi.hoisted(() => ({
+  use: vi.fn(),
+  init: vi.fn(() => ({ setOption: vi.fn(), resize: vi.fn(), dispose: vi.fn() })),
+}))
 const mockedBenchmarksApi = vi.hoisted(() => ({
   search: vi.fn(),
   history: vi.fn(),
@@ -14,6 +18,7 @@ const mockedAppApi = vi.hoisted(() => ({
   getPortfolioPerformance: vi.fn(),
 }))
 
+vi.mock('echarts/core', () => mockedEcharts)
 vi.mock('../../lib/api/benchmarks', () => ({ benchmarksApi: mockedBenchmarksApi }))
 vi.mock('../../lib/api', () => ({ api: mockedAppApi }))
 

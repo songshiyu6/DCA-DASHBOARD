@@ -209,10 +209,11 @@ public class YahooFinanceProvider implements MarketDataProvider {
         JsonNode timestamps = chart.path("timestamp");
         JsonNode quote = chart.path("indicators").path("quote").path(0);
         JsonNode adjusted = chart.path("indicators").path("adjclose").path(0).path("adjclose");
+        ZoneId exchangeZone = exchangeZone(chart.path("meta"));
         List<PriceBar> bars = new ArrayList<>();
         for (int i = 0; i < timestamps.size(); i++) {
             Instant timestamp = Instant.ofEpochSecond(timestamps.get(i).asLong());
-            LocalDate date = timestamp.atZone(ZoneOffset.UTC).toLocalDate();
+            LocalDate date = timestamp.atZone(exchangeZone).toLocalDate();
             if (date.isBefore(from) || date.isAfter(to)) continue;
             BigDecimal close = decimalAt(quote.path("close"), i);
             if (close == null) continue;
@@ -529,8 +530,8 @@ public class YahooFinanceProvider implements MarketDataProvider {
         if (range != null) {
             params.put("range", range);
         } else {
-            params.put("period1", String.valueOf(from.atStartOfDay(ZoneOffset.UTC).toEpochSecond()));
-            params.put("period2", String.valueOf(to.atStartOfDay(ZoneOffset.UTC).toEpochSecond()));
+            params.put("period1", String.valueOf(from.atStartOfDay(US_MARKET_ZONE).toEpochSecond()));
+            params.put("period2", String.valueOf(to.atStartOfDay(US_MARKET_ZONE).toEpochSecond()));
         }
         return get("/v8/finance/chart/" + symbol, params);
     }

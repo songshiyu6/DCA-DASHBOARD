@@ -6,7 +6,9 @@ import { LineChart } from 'echarts/charts'
 import { GridComponent, LegendComponent, MarkLineComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { useTranslation } from 'react-i18next'
+import { api } from '../../lib/api'
 import { benchmarksApi } from '../../lib/api/benchmarks'
+import type { PortfolioPerformanceRange } from '../../lib/api/portfolio'
 import type { BenchmarkSearchResult } from '../../lib/benchmarkTypes'
 import { CHART_RANGE_OPTIONS, latestFreshPortfolioHistoryPoint, portfolioRangeStartDay, timeWeightedReturn, type ChartRange } from '../../lib/dashboardPerformance'
 import { formatSignedPercent } from '../../lib/format'
@@ -22,6 +24,7 @@ const STORAGE_KEY = 'dca-performance-benchmarks-v1'
 const SEARCH_DEBOUNCE_MS = 300
 const BENCHMARK_STALE_REFETCH_MS = 5 * 60_000
 const BENCHMARK_FRESH_REFETCH_MS = 15 * 60_000
+const PORTFOLIO_PERFORMANCE_REFETCH_MS = 60_000
 const PERFORMANCE_RANGE_OPTIONS = [...CHART_RANGE_OPTIONS, 'ALL'] as const
 
 type PerformanceRange = ChartRange | 'ALL'
@@ -184,11 +187,32 @@ export function PortfolioPerformancePanel({ history, inceptionCagr, inceptionXir
   const [searchText, setSearchText] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const normalizedSearch = searchText.trim()
-  const endDay = latestFreshPortfolioHistoryPoint(history)?.date.slice(0, 10) ?? null
-  const startDay = range === 'ALL'
+
+  const performance = useQuery({
+    queryKey: ['portfolio-performance', range],
+    queryFn: () => api.getPortfolioPerformance(range as PortfolioPerformanceRange),
+    staleTime: 30_000,
+    refetchInterval: PORTFOLIO_PERFORMANCE_REFETCH_MS,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: 'always',
+    retry: 1,
+  })
+  const serverPerformance = performance.data?.data
+  const fallbackEndDay = latestFreshPortfolioHistoryPoint(history)?.date.slice(0, 10) ?? null
+  const endDay = serverPerformance?.endpointDate ?? fallbackEndDay
+  const fallbackStartDay = range === 'ALL'
     ? firstFreshDay(history)
     : endDay ? portfolioRangeStartDay(endDay, range) : null
-  const selectedServerSummary = rangeSummary?.[range]
+  const startDay = serverPerformance?.requestedStartDate ?? fallbackStartDay
+  const externalSummary = rangeSummary?.[range]
+  const selectedServerSummary = useMemo(() => serverPerformance
+    ? {
+        twr: serverPerformance.twr,
+        cagr: serverPerformance.cagr,
+        xirr: serverPerformance.xirr,
+        maxDrawdown: serverPerformance.maximumDrawdown,
+      }
+    : externalSummary, [externalSummary, serverPerformance])
   const fallbackRangeTwr = useMemo(() => {
     if (selectedServerSummary) return null
     if (range !== 'ALL' && !startDay) return null
@@ -223,7 +247,7 @@ export function PortfolioPerformancePanel({ history, inceptionCagr, inceptionXir
   })
   const historyQueries = useQueries({
     queries: benchmarks.map((item) => ({
-      queryKey: ['benchmark-history', item.type, item.symbol, endDay ?? 'NO_PORTFOLIO_CLOSE'],
+      queryKey: ['benchmark-history', item.type, item.symbol, endDay ?? 'NO_PORTFOLIO_ENDPOINT'],
       queryFn: () => benchmarksApi.history(item),
       staleTime: BENCHMARK_FRESH_REFETCH_MS,
       refetchInterval: (query: { state: { data?: Awaited<ReturnType<typeof benchmarksApi.history>> } }) => {
@@ -240,10 +264,14 @@ export function PortfolioPerformancePanel({ history, inceptionCagr, inceptionXir
     if (!startDay || !endDay) return []
     const lines: PerformanceLine[] = []
     if (portfolioVisible) {
+      const realtimePoints = serverPerformance?.points.flatMap((point) => {
+        const level = point.level === null ? Number.NaN : Number(point.level)
+        return Number.isFinite(level) && level > 0 ? [{ date: point.date, value: level }] : []
+      })
       lines.push({
         key: 'PORTFOLIO',
         label: isZh ? '投资组合 TWR' : 'Portfolio TWR',
-        points: portfolioTwrLevels(history, startDay, endDay),
+        points: realtimePoints?.length ? realtimePoints : portfolioTwrLevels(history, startDay, endDay),
       })
     }
     benchmarks.forEach((item, index) => {
@@ -257,7 +285,7 @@ export function PortfolioPerformancePanel({ history, inceptionCagr, inceptionXir
       })
     })
     return rebasePerformanceLines(lines).lines
-  }, [benchmarks, endDay, history, historyQueries, isZh, portfolioVisible, startDay])
+  }, [benchmarks, endDay, history, historyQueries, isZh, portfolioVisible, serverPerformance?.points, startDay])
 
   const addBenchmark = (item: BenchmarkSearchResult) => {
     setBenchmarks((current) => current.some((row) => lineKey(row) === lineKey(item))
@@ -276,7 +304,6 @@ export function PortfolioPerformancePanel({ history, inceptionCagr, inceptionXir
   const title = isZh ? '投资表现（TWR）' : 'Investment performance (TWR)'
   const detail = isZh ? '剔除外部资金流影响；可叠加任意 ETF / 指数 / 股票 Benchmark' : 'Cash-flow-neutral performance with any ETF / index / equity benchmark'
   const addLabel = isZh ? '搜索 ETF、指数或股票作为基准' : 'Search any ETF, index, or equity benchmark'
-  const selectedRangeLabel = isZh ? `${range} 区间` : `${range} range`
   const inceptionAnnualizedLabel = isZh ? '成立以来年化' : 'Since inception annualized'
   const inceptionMoneyWeightedLabel = isZh ? '成立以来资金加权' : 'Since inception money-weighted'
   const rangeMetricLabel = isZh ? '随当前区间联动' : 'Follows selected range'
@@ -308,18 +335,19 @@ export function PortfolioPerformancePanel({ history, inceptionCagr, inceptionXir
         </div> : null}
       </div>
     </div>
+    {performance.isError ? <p className="performance-note performance-warning">{isZh ? '实时组合表现暂时不可用，当前使用最近可靠的历史收盘数据。' : 'Realtime portfolio performance is temporarily unavailable; using the latest reliable close history.'}</p> : null}
     {anyError ? <p className="performance-note performance-warning">{isZh ? '部分基准行情暂时不可用；其余曲线仍可正常比较。' : 'Some benchmark history is unavailable; remaining lines are still comparable.'}</p> : null}
     {anyStale && !anyError ? <p className="performance-note performance-warning">{isZh ? '部分基准尚未取得其所属市场最近已完成交易日的收盘数据，正在自动刷新。' : 'Some benchmarks have not published the latest completed close for their own market yet; refreshing automatically.'}</p> : null}
     {anyLoading ? <p className="performance-note">{isZh ? '正在载入基准历史…' : 'Loading benchmark history…'}</p> : null}
     {visibleLines.length ? <PerformanceChart lines={visibleLines} /> : <EmptyState title={isZh ? '请选择至少一条可用曲线' : 'Select at least one available series'} detail={isZh ? '投资组合和每个 Benchmark 都可以独立开关。' : 'Portfolio and every benchmark can be toggled independently.'} />}
     <div className="performance-summary" aria-label={isZh ? '表现摘要' : 'Performance summary'}>
       <span><small>{range} TWR</small><strong>{formatSignedPercent(rangeTwr)}</strong><em>{rangeMetricLabel}</em></span>
-      <span><small>CAGR</small><strong>{formatSignedPercent(displayedCagr)}</strong><em>{selectedServerSummary ? selectedRangeLabel : inceptionAnnualizedLabel}</em></span>
-      <span><small>XIRR</small><strong>{formatSignedPercent(displayedXirr)}</strong><em>{selectedServerSummary ? selectedRangeLabel : inceptionMoneyWeightedLabel}</em></span>
-      <span><small>{isZh ? '最大回撤' : 'Max drawdown'}</small><strong>{formatSignedPercent(displayedMaxDrawdown)}</strong><em>{selectedServerSummary ? selectedRangeLabel : range === 'ALL' && displayedMaxDrawdown !== null ? (isZh ? '成立以来' : 'Since inception') : rangeMetricLabel}</em></span>
+      <span><small>CAGR</small><strong>{formatSignedPercent(displayedCagr)}</strong><em>{inceptionAnnualizedLabel}</em></span>
+      <span><small>XIRR</small><strong>{formatSignedPercent(displayedXirr)}</strong><em>{inceptionMoneyWeightedLabel}</em></span>
+      <span><small>{isZh ? '最大回撤' : 'Max drawdown'}</small><strong>{formatSignedPercent(displayedMaxDrawdown)}</strong><em>{rangeMetricLabel}</em></span>
     </div>
     <small className="performance-footnote">{isZh
-      ? '图例颜色与曲线一一对应。所有可见曲线在所选区间的第一个共同常规收盘点归零；Portfolio 使用 TWR 剔除净新增资金。摘要会明确标注区间指标与成立以来年化/资金加权指标。'
-      : 'Legend colors match each curve. Visible lines are rebased to 0% at their first common regular close; Portfolio uses TWR to remove net external capital. The summary explicitly distinguishes selected-range metrics from since-inception annualized or money-weighted metrics.'}</small>
+      ? 'Portfolio 历史使用常规收盘估值，最后一个点使用完整的实时总资产；DEPOSIT / WITHDRAWAL 从 TWR 中剔除。所有可见曲线在所选区间的第一个共同有效点归零。CAGR 与 XIRR 始终为成立以来年化指标。'
+      : 'Portfolio history uses regular-close valuations and the final point uses a complete live total account value; DEPOSIT/WITHDRAWAL are removed from TWR. Visible lines are rebased at their first common valid point. CAGR and XIRR remain since-inception annualized metrics.'}</small>
   </Panel>
 }

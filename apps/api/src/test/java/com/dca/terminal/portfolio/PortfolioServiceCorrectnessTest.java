@@ -40,18 +40,20 @@ class PortfolioServiceCorrectnessTest {
         when(instrument.getSymbol()).thenReturn("VOO");
         when(instrument.getName()).thenReturn("Vanguard S&P 500 ETF");
 
+        LocalDate tradeDate = LocalDate.of(2026, 8, 1);
+        TransactionEntity funding = deposit(tradeDate, "100", 1L);
         TransactionEntity buy = new TransactionEntity();
         buy.setInstrument(instrument);
         buy.setTransactionType(TransactionType.BUY);
-        buy.setTradeDate(LocalDate.of(2026, 8, 1));
+        buy.setTradeDate(tradeDate);
         buy.setQuantity(new BigDecimal("1"));
         buy.setUnitPrice(new BigDecimal("100"));
         buy.setFee(BigDecimal.ZERO);
-        buy.setLedgerOrder(1L);
+        buy.setLedgerOrder(2L);
 
         TransactionRepository transactions = mock(TransactionRepository.class);
         when(transactions.findAllByTradeDateLessThanEqualOrderByTradeDateAscLedgerOrderAscIdAsc(any(LocalDate.class)))
-                .thenReturn(List.of(buy));
+                .thenReturn(List.of(funding, buy));
         SplitEventRepository splits = mock(SplitEventRepository.class);
         when(splits.findAllByInstrumentIdInAndEffectiveDateLessThanEqualOrderByInstrumentIdAscEffectiveDateAsc(
                 anyCollection(), any(LocalDate.class))).thenReturn(List.of());
@@ -97,6 +99,7 @@ class PortfolioServiceCorrectnessTest {
 
         LocalDate firstTradeDate = LocalDate.of(2026, 8, 1);
         LocalDate today = LocalDate.of(2026, 8, 27);
+        TransactionEntity funding = deposit(firstTradeDate, "100", 1L);
         TransactionEntity buy = new TransactionEntity();
         buy.setInstrument(instrument);
         buy.setTransactionType(TransactionType.BUY);
@@ -104,18 +107,20 @@ class PortfolioServiceCorrectnessTest {
         buy.setQuantity(new BigDecimal("1"));
         buy.setUnitPrice(new BigDecimal("100"));
         buy.setFee(BigDecimal.ZERO);
-        buy.setLedgerOrder(1L);
+        buy.setLedgerOrder(2L);
 
         PortfolioSnapshotEntity todaySnapshot = new PortfolioSnapshotEntity();
         todaySnapshot.setSnapshotDate(today);
         todaySnapshot.setMarketValue(new BigDecimal("210"));
+        todaySnapshot.setSecuritiesValue(new BigDecimal("210"));
+        todaySnapshot.setCashBalance(BigDecimal.ZERO);
         todaySnapshot.setCostBasis(new BigDecimal("100"));
         todaySnapshot.setNetCashFlow(new BigDecimal("100"));
         todaySnapshot.setUnrealizedPnl(new BigDecimal("110"));
         todaySnapshot.setDataStatus(FreshnessStatus.FRESH);
 
         TransactionRepository transactions = mock(TransactionRepository.class);
-        when(transactions.findAllByOrderByTradeDateAscLedgerOrderAscIdAsc()).thenReturn(List.of(buy));
+        when(transactions.findAllByOrderByTradeDateAscLedgerOrderAscIdAsc()).thenReturn(List.of(funding, buy));
         PortfolioSnapshotRepository snapshots = mock(PortfolioSnapshotRepository.class);
         when(snapshots.findAllBySnapshotDateBetweenOrderBySnapshotDateAsc(any(), any()))
                 .thenReturn(List.of(todaySnapshot));
@@ -162,21 +167,23 @@ class PortfolioServiceCorrectnessTest {
         when(instrument.getSymbol()).thenReturn("VOO");
         when(instrument.getName()).thenReturn("Vanguard S&P 500 ETF");
 
+        LocalDate tradeDate = LocalDate.of(2026, 8, 1);
+        TransactionEntity funding = deposit(tradeDate, "100", 1L);
         TransactionEntity buy = new TransactionEntity();
         buy.setInstrument(instrument);
         buy.setTransactionType(TransactionType.BUY);
-        buy.setTradeDate(LocalDate.of(2026, 8, 1));
+        buy.setTradeDate(tradeDate);
         buy.setQuantity(new BigDecimal("1"));
         buy.setUnitPrice(new BigDecimal("100"));
         buy.setFee(BigDecimal.ZERO);
-        buy.setLedgerOrder(1L);
+        buy.setLedgerOrder(2L);
 
         PortfolioSnapshotEntity augustFirst = snapshot("2026-08-01", "100", "100", "100", "0", FreshnessStatus.FRESH);
         PortfolioSnapshotEntity augustThird = snapshot("2026-08-03", "110", "100", "100", "10", FreshnessStatus.FRESH);
         PortfolioSnapshotEntity duplicateAugustThird = snapshot("2026-08-03", "999", "999", "999", "999", FreshnessStatus.FRESH);
 
         TransactionRepository transactions = mock(TransactionRepository.class);
-        when(transactions.findAllByOrderByTradeDateAscLedgerOrderAscIdAsc()).thenReturn(List.of(buy));
+        when(transactions.findAllByOrderByTradeDateAscLedgerOrderAscIdAsc()).thenReturn(List.of(funding, buy));
         PortfolioSnapshotRepository snapshots = mock(PortfolioSnapshotRepository.class);
         when(snapshots.findAllBySnapshotDateBetweenOrderBySnapshotDateAsc(any(), any()))
                 .thenReturn(List.of(augustThird, duplicateAugustThird, augustFirst));
@@ -216,17 +223,19 @@ class PortfolioServiceCorrectnessTest {
         when(instrument.getSymbol()).thenReturn("VOO");
         when(instrument.getName()).thenReturn("Vanguard S&P 500 ETF");
 
+        LocalDate tradeDate = LocalDate.of(2026, 8, 1);
+        TransactionEntity funding = deposit(tradeDate, "100", 1L);
         TransactionEntity buy = new TransactionEntity();
         buy.setInstrument(instrument);
         buy.setTransactionType(TransactionType.BUY);
-        buy.setTradeDate(LocalDate.of(2026, 8, 1));
+        buy.setTradeDate(tradeDate);
         buy.setQuantity(new BigDecimal("1"));
         buy.setUnitPrice(new BigDecimal("100"));
         buy.setFee(BigDecimal.ZERO);
-        buy.setLedgerOrder(1L);
+        buy.setLedgerOrder(2L);
 
         TransactionRepository transactions = mock(TransactionRepository.class);
-        when(transactions.findAllByOrderByTradeDateAscLedgerOrderAscIdAsc()).thenReturn(List.of(buy));
+        when(transactions.findAllByOrderByTradeDateAscLedgerOrderAscIdAsc()).thenReturn(List.of(funding, buy));
         PortfolioSnapshotRepository snapshots = mock(PortfolioSnapshotRepository.class);
         when(snapshots.findAllBySnapshotDateBetweenOrderBySnapshotDateAsc(any(), any())).thenReturn(List.of());
         SplitEventRepository splits = mock(SplitEventRepository.class);
@@ -258,6 +267,7 @@ class PortfolioServiceCorrectnessTest {
         when(instrument.getSymbol()).thenReturn("VOO");
         when(instrument.getName()).thenReturn("Vanguard S&P 500 ETF");
 
+        TransactionEntity firstFunding = deposit(LocalDate.of(2026, 8, 1), "100", 1L);
         TransactionEntity buy = new TransactionEntity();
         buy.setInstrument(instrument);
         buy.setTransactionType(TransactionType.BUY);
@@ -265,7 +275,8 @@ class PortfolioServiceCorrectnessTest {
         buy.setQuantity(new BigDecimal("1"));
         buy.setUnitPrice(new BigDecimal("100"));
         buy.setFee(BigDecimal.ZERO);
-        buy.setLedgerOrder(1L);
+        buy.setLedgerOrder(2L);
+        TransactionEntity laterFunding = deposit(LocalDate.of(2026, 8, 20), "200", 3L);
         TransactionEntity laterBuy = new TransactionEntity();
         laterBuy.setInstrument(instrument);
         laterBuy.setTransactionType(TransactionType.BUY);
@@ -273,10 +284,11 @@ class PortfolioServiceCorrectnessTest {
         laterBuy.setQuantity(new BigDecimal("1"));
         laterBuy.setUnitPrice(new BigDecimal("200"));
         laterBuy.setFee(BigDecimal.ZERO);
-        laterBuy.setLedgerOrder(2L);
+        laterBuy.setLedgerOrder(4L);
 
         TransactionRepository transactions = mock(TransactionRepository.class);
-        when(transactions.findAllByOrderByTradeDateAscLedgerOrderAscIdAsc()).thenReturn(List.of(buy, laterBuy));
+        when(transactions.findAllByOrderByTradeDateAscLedgerOrderAscIdAsc())
+                .thenReturn(List.of(firstFunding, buy, laterFunding, laterBuy));
         PortfolioSnapshotRepository snapshots = mock(PortfolioSnapshotRepository.class);
         when(snapshots.findAllBySnapshotDateBetweenOrderBySnapshotDateAsc(any(), any())).thenReturn(List.of());
         SplitEventRepository splits = mock(SplitEventRepository.class);
@@ -311,6 +323,16 @@ class PortfolioServiceCorrectnessTest {
         assertDecimal("300", latest.costBasis());
     }
 
+    private static TransactionEntity deposit(LocalDate date, String amount, long ledgerOrder) {
+        TransactionEntity deposit = new TransactionEntity();
+        deposit.setTransactionType(TransactionType.DEPOSIT);
+        deposit.setTradeDate(date);
+        deposit.setAmount(new BigDecimal(amount));
+        deposit.setFee(BigDecimal.ZERO);
+        deposit.setLedgerOrder(ledgerOrder);
+        return deposit;
+    }
+
     private static PriceDailyEntity dailyPrice(InstrumentEntity instrument, String date, String close) {
         PriceDailyEntity price = new PriceDailyEntity();
         price.setInstrument(instrument);
@@ -326,6 +348,8 @@ class PortfolioServiceCorrectnessTest {
         PortfolioSnapshotEntity snapshot = new PortfolioSnapshotEntity();
         snapshot.setSnapshotDate(LocalDate.parse(date));
         snapshot.setMarketValue(new BigDecimal(marketValue));
+        snapshot.setSecuritiesValue(new BigDecimal(marketValue));
+        snapshot.setCashBalance(BigDecimal.ZERO);
         snapshot.setNetCashFlow(new BigDecimal(netCashFlow));
         snapshot.setCostBasis(new BigDecimal(costBasis));
         snapshot.setUnrealizedPnl(new BigDecimal(unrealizedPnl));

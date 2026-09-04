@@ -51,6 +51,9 @@ class PortfolioLiveValuationTest {
         PortfolioDtos.HoldingResponse holding = views.holdings().getFirst();
 
         assertDecimal("125", summary.marketValue());
+        assertDecimal("125", summary.securitiesValue());
+        assertDecimal("0", summary.cashBalance());
+        assertDecimal("100", summary.netInvested());
         assertDecimal("25", summary.unrealizedPnl());
         assertDecimal("25", summary.totalPnl());
         assertDecimal("125", holding.price());
@@ -70,6 +73,8 @@ class PortfolioLiveValuationTest {
         verify(fixture.snapshots).save(saved.capture());
         PortfolioSnapshotEntity snapshot = saved.getValue();
         assertDecimal("110", snapshot.getMarketValue());
+        assertDecimal("110", snapshot.getSecuritiesValue());
+        assertDecimal("0", snapshot.getCashBalance());
         assertDecimal("10", snapshot.getUnrealizedPnl());
         verify(fixture.marketData, never()).latestQuote(any());
     }
@@ -81,6 +86,13 @@ class PortfolioLiveValuationTest {
         when(instrument.getSymbol()).thenReturn("VOO");
         when(instrument.getName()).thenReturn("Vanguard S&P 500 ETF");
 
+        TransactionEntity funding = new TransactionEntity();
+        funding.setTransactionType(TransactionType.DEPOSIT);
+        funding.setTradeDate(LocalDate.of(2026, 8, 1));
+        funding.setAmount(new BigDecimal("100"));
+        funding.setFee(BigDecimal.ZERO);
+        funding.setLedgerOrder(1L);
+
         TransactionEntity buy = new TransactionEntity();
         buy.setInstrument(instrument);
         buy.setTransactionType(TransactionType.BUY);
@@ -88,11 +100,11 @@ class PortfolioLiveValuationTest {
         buy.setQuantity(BigDecimal.ONE);
         buy.setUnitPrice(new BigDecimal("100"));
         buy.setFee(BigDecimal.ZERO);
-        buy.setLedgerOrder(1L);
+        buy.setLedgerOrder(2L);
 
         TransactionRepository transactions = mock(TransactionRepository.class);
         when(transactions.findAllByTradeDateLessThanEqualOrderByTradeDateAscLedgerOrderAscIdAsc(any(LocalDate.class)))
-                .thenReturn(List.of(buy));
+                .thenReturn(List.of(funding, buy));
 
         SplitEventRepository splits = mock(SplitEventRepository.class);
         when(splits.findAllByInstrumentIdInAndEffectiveDateLessThanEqualOrderByInstrumentIdAscEffectiveDateAsc(

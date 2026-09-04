@@ -3,11 +3,13 @@ package com.dca.terminal.transaction;
 import com.dca.terminal.common.DecimalMath;
 import com.dca.terminal.common.DomainException;
 import com.dca.terminal.marketdata.MarketDataEntities.SplitEventEntity;
+import com.dca.terminal.marketdata.ProviderId;
+import com.dca.terminal.marketdata.ProviderPriority;
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.math.RoundingMode;
-import java.time.LocalDate;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -16,8 +18,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import com.dca.terminal.marketdata.ProviderId;
-import com.dca.terminal.marketdata.ProviderPriority;
 import org.springframework.http.HttpStatus;
 
 public final class FifoCalculator {
@@ -94,12 +94,21 @@ public final class FifoCalculator {
             while (transactionIndex < orderedTransactions.size()
                     && !orderedTransactions.get(transactionIndex).getTradeDate().isAfter(asOf)) {
                 TransactionEntity transaction = orderedTransactions.get(transactionIndex++);
-                UUID instrumentId = transaction.getInstrument().getId();
-                Deque<Lot> instrumentLots = lots.computeIfAbsent(instrumentId, ignored -> new ArrayDeque<>());
-                applySplitsThrough(instrumentId, instrumentLots, transaction.getTradeDate());
-                applyTransaction(transaction, instrumentId, instrumentLots);
+                if (transaction.getTransactionType() == TransactionType.BUY
+                        || transaction.getTransactionType() == TransactionType.SELL) {
+                    if (transaction.getInstrument() == null) {
+                        throw new DomainException(HttpStatus.BAD_REQUEST, "INVALID_TRANSACTION",
+                                transaction.getTransactionType() + " requires an instrument");
+                    }
+                    UUID instrumentId = transaction.getInstrument().getId();
+                    Deque<Lot> instrumentLots = lots.computeIfAbsent(instrumentId, ignored -> new ArrayDeque<>());
+                    applySplitsThrough(instrumentId, instrumentLots, transaction.getTradeDate());
+                    applyTransaction(transaction, instrumentId, instrumentLots);
+                } else {
+                    applyTransaction(transaction, null, null);
+                }
             }
-            // Apply corporate actions that occurred after the last transaction but before the valuation date.
+            // Apply corporate actions that occurred after the last security transaction but before valuation.
             lots.forEach((instrumentId, instrumentLots) -> applySplitsThrough(instrumentId, instrumentLots, asOf));
             currentAsOf = asOf;
             return snapshot();
@@ -146,6 +155,9 @@ public final class FifoCalculator {
                     BigDecimal fee = required(transaction.getAmount(), "FEE amount");
                     standaloneFees = standaloneFees.add(fee, MC);
                     totalFees = totalFees.add(fee, MC);
+                }
+                case DEPOSIT, WITHDRAWAL, INTEREST -> {
+                    // Account cash events do not change FIFO lots or realized security P/L.
                 }
             }
         }
@@ -275,7 +287,8 @@ public final class FifoCalculator {
                 BigDecimal basis = instrumentLots.stream().map(Lot::costBasis)
                         .reduce(BigDecimal.ZERO, (a, b) -> a.add(b, MC));
                 if (shares.signum() != 0) {
-                    result.add(new Position(instrumentId, shares, basis, realizedByInstrument.getOrDefault(instrumentId, BigDecimal.ZERO)));
+                    result.add(new Position(instrumentId, shares, basis,
+                            realizedByInstrument.getOrDefault(instrumentId, BigDecimal.ZERO)));
                 }
             });
             result.sort(Comparator.comparing(Position::instrumentId, Comparator.nullsFirst(Comparator.naturalOrder())));

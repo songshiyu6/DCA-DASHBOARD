@@ -3,6 +3,7 @@ import type { QueryClient, QueryKey } from '@tanstack/react-query'
 export const queryKeys = {
   session: ['session'] as const,
   dashboard: ['dashboard'] as const,
+  portfolioPerformance: ['portfolio-performance'] as const,
   instruments: ['instruments'] as const,
   instrument: (symbol: string) => ['instrument', symbol] as const,
   instrumentSearch: (query: string) => ['instrument-search', query] as const,
@@ -31,7 +32,7 @@ export function invalidatePlanQueries(queryClient: QueryClient, planId?: string)
 }
 
 export function invalidateTransactionQueries(queryClient: QueryClient, planId?: string): Promise<void> {
-  const keys: QueryKey[] = [queryKeys.transactions, queryKeys.dashboard]
+  const keys: QueryKey[] = [queryKeys.transactions, queryKeys.dashboard, queryKeys.portfolioPerformance]
   if (planId) keys.push(queryKeys.planCycles(planId), queryKeys.recommendation(planId), queryKeys.contributionAnalysis(planId))
   return Promise.all(keys.map((queryKey) => invalidate(queryClient, queryKey))).then(() => undefined)
 }
@@ -43,7 +44,7 @@ export function invalidateInstrumentQueries(queryClient: QueryClient, symbol?: s
 }
 
 export function invalidateInstrumentHistoryQueries(queryClient: QueryClient, symbol: string): Promise<void> {
-  const keys: QueryKey[] = [queryKeys.instrument(symbol), queryKeys.prices(symbol), queryKeys.metrics(symbol)]
+  const keys: QueryKey[] = [queryKeys.instrument(symbol), queryKeys.prices(symbol), queryKeys.metrics(symbol), queryKeys.portfolioPerformance]
   return Promise.all(keys.map((queryKey) => invalidate(queryClient, queryKey))).then(() => undefined)
 }
 

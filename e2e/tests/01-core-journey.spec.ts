@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 import { appBusinessDate, assertNoFixtureLeak, login, setMockChart } from '../playwright.config'
 
 test.describe('E2E-01 core journey @smoke', () => {
-  test('login, track VOO, plan, BUY, and ledger-derived dashboard persist after refresh', async ({ page, context }) => {
+  test('login, track VOO, plan, DEPOSIT, BUY, and ledger-derived dashboard persist after refresh', async ({ page, context }) => {
     await setMockChart('ok')
     await login(page)
 
@@ -56,6 +56,31 @@ test.describe('E2E-01 core journey @smoke', () => {
     await page.getByRole('button', { name: 'Save transaction' }).click()
     await expect(page.getByRole('dialog')).toHaveCount(0)
     await expect(page.getByRole('table')).toContainText('10')
+
+    // PR A deliberately does not add cash-event controls to the current transaction UI; PR C owns that UX.
+    // Fund the already-created BUY through the real authenticated API so this acceptance test exercises the
+    // new account model without temporarily duplicating PR C's frontend work.
+    await page.evaluate(async (tradeDate) => {
+      const csrfResponse = await fetch('/api/v1/auth/csrf', { credentials: 'include' })
+      if (!csrfResponse.ok) throw new Error(`CSRF request failed with ${csrfResponse.status}`)
+      const csrf = await csrfResponse.json() as { token: string, headerName: string }
+      const response = await fetch('/api/v1/transactions', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          [csrf.headerName]: csrf.token,
+        },
+        body: JSON.stringify({
+          transactionType: 'DEPOSIT',
+          tradeDate,
+          amount: '1000',
+          fee: '0',
+          notes: 'E2E account funding',
+        }),
+      })
+      if (!response.ok) throw new Error(`DEPOSIT request failed with ${response.status}: ${await response.text()}`)
+    }, isoDate)
 
     await page.getByRole('link', { name: 'Dashboard' }).click()
     await expect(page.getByText('$1,100.00').first()).toBeVisible()

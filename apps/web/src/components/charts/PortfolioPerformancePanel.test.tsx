@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import '../../lib/i18n'
+import type { PortfolioHistoryPoint } from '../../types'
 import { PortfolioPerformancePanel } from './PortfolioPerformancePanel'
 
 const mockedBenchmarksApi = vi.hoisted(() => ({
@@ -11,9 +12,16 @@ const mockedBenchmarksApi = vi.hoisted(() => ({
 
 vi.mock('../../lib/api/benchmarks', () => ({ benchmarksApi: mockedBenchmarksApi }))
 
-function renderPanel() {
+function renderPanel(history: PortfolioHistoryPoint[] = []) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(<QueryClientProvider client={queryClient}><PortfolioPerformancePanel history={[]} /></QueryClientProvider>)
+  const renderWithHistory = (points: PortfolioHistoryPoint[]) => (
+    <QueryClientProvider client={queryClient}><PortfolioPerformancePanel history={points} /></QueryClientProvider>
+  )
+  const view = render(renderWithHistory(history))
+  return {
+    ...view,
+    rerenderPanel: (points: PortfolioHistoryPoint[]) => view.rerender(renderWithHistory(points)),
+  }
 }
 
 beforeEach(() => {
@@ -52,5 +60,29 @@ describe('portfolio performance benchmark search', () => {
     fireEvent.click(screen.getByText('AAPL'))
 
     await waitFor(() => expect(localStorage.getItem('dca-performance-benchmarks-v1')).toContain('"type":"EQUITY"'))
+  })
+
+  it('refetches selected benchmarks when the latest fresh portfolio close advances', async () => {
+    localStorage.setItem('dca-performance-benchmarks-v1', JSON.stringify([{
+      symbol: 'QQQ', name: 'Invesco QQQ Trust', exchange: 'NASDAQ', type: 'ETF', visible: true,
+    }]))
+    mockedBenchmarksApi.history.mockResolvedValue({
+      data: { symbol: 'QQQ', name: 'Invesco QQQ Trust', type: 'ETF', source: 'YAHOO', dataStatus: 'FRESH', points: [] },
+      meta: { status: 'FRESH', source: 'YAHOO' },
+    })
+    const september2: PortfolioHistoryPoint[] = [
+      { date: '2026-09-02', marketValue: '0', netInvested: '0', dataStatus: 'FRESH' },
+    ]
+    const september3: PortfolioHistoryPoint[] = [
+      ...september2,
+      { date: '2026-09-03', marketValue: '0', netInvested: '0', dataStatus: 'FRESH' },
+    ]
+
+    const view = renderPanel(september2)
+    await waitFor(() => expect(mockedBenchmarksApi.history).toHaveBeenCalledTimes(1))
+
+    view.rerenderPanel(september3)
+
+    await waitFor(() => expect(mockedBenchmarksApi.history).toHaveBeenCalledTimes(2))
   })
 })

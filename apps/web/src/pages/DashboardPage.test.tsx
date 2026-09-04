@@ -89,13 +89,40 @@ describe('dashboard market refresh', () => {
     expect(within(portfolio).getByText('Cumulative P/L')).toBeInTheDocument()
     expect(within(portfolio).getByText('+$10.00')).toBeInTheDocument()
     expect(within(portfolio).getByText('Cumulative return · ALL TWR')).toBeInTheDocument()
-    expect(within(portfolio).getByText('+0.51%')).toBeInTheDocument()
+    expect(within(portfolio).getByText('+1.01%')).toBeInTheDocument()
 
     expect(screen.getByText('Today')).toBeInTheDocument()
     expect(screen.getByLabelText('Cash')).toBeInTheDocument()
     expect(screen.queryByText('YTD · TWR')).not.toBeInTheDocument()
     expect(screen.queryByText('Long-term performance')).not.toBeInTheDocument()
     expect(screen.queryByText('Since inception TWR')).not.toBeInTheDocument()
+  })
+
+  it('keeps the latest main live-valuation semantics for ALL TWR while adjusting external contributions', async () => {
+    mockedApi.getDashboard.mockResolvedValue({
+      data: {
+        ...dashboardData,
+        summary: {
+          ...dashboardData.summary,
+          marketValue: '220.00',
+          netInvested: '200.00',
+          totalPnl: '20.00',
+        },
+        portfolioHistory: [
+          { date: '2026-01-02', marketValue: '100.00', netInvested: '100.00', dataStatus: 'FRESH' },
+          { date: '2026-06-01', marketValue: '110.00', netInvested: '100.00', dataStatus: 'FRESH' },
+        ],
+      },
+      meta: { status: 'FRESH', source: 'API', retrievedAt: '2026-09-04T16:00:00Z' },
+    })
+
+    renderPage()
+
+    const portfolio = await screen.findByLabelText('Portfolio')
+    expect(within(portfolio).getByText('$220.00')).toBeInTheDocument()
+    expect(within(portfolio).getByText('+$20.00')).toBeInTheDocument()
+    expect(within(portfolio).getByText('+20.00%')).toBeInTheDocument()
+    expect(within(portfolio).queryByText('+10.00%')).not.toBeInTheDocument()
   })
 
   it('uses optional PR A cash fields when available instead of inventing a cash balance', async () => {

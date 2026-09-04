@@ -1,8 +1,10 @@
 package com.dca.terminal.benchmark;
 
 import com.dca.terminal.benchmark.BenchmarkDtos.BenchmarkType;
+import com.dca.terminal.benchmark.BenchmarkDtos.HistoryResponse;
 import com.dca.terminal.benchmark.BenchmarkDtos.SearchResult;
 import com.dca.terminal.common.DomainException;
+import com.dca.terminal.common.FreshnessStatus;
 import com.dca.terminal.marketdata.YahooFinanceProvider;
 import com.dca.terminal.observability.ObservabilityMetrics;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -14,6 +16,8 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -99,11 +103,67 @@ class BenchmarkServiceTest {
         assertEquals(2, server.requests().size());
     }
 
+    @Test
+    void excludesCurrentTradingDayDailyBarBeforeRegularClose() {
+        server.when("/v8/finance/chart/QQQ", uri -> new Response(200,
+                chartResponse("2026-09-02T13:30:00Z", "2026-09-03T13:30:00Z")));
+        Clock beforeClose = Clock.fixed(Instant.parse("2026-09-03T19:30:00Z"), ZoneOffset.UTC);
+
+        HistoryResponse history = service(1, beforeClose).history("QQQ", "Invesco QQQ Trust", BenchmarkType.ETF, "1M");
+
+        assertEquals(List.of("2026-09-02"), history.points().stream().map(point -> point.date().toString()).toList());
+        assertEquals(FreshnessStatus.FRESH, history.dataStatus());
+    }
+
+    @Test
+    void marksBenchmarkStaleAfterCloseUntilCurrentTradingDayBarArrives() {
+        server.when("/v8/finance/chart/QQQ", uri -> new Response(200,
+                chartResponse("2026-09-02T13:30:00Z")));
+        Clock afterClose = Clock.fixed(Instant.parse("2026-09-03T20:05:00Z"), ZoneOffset.UTC);
+
+        HistoryResponse history = service(1, afterClose).history("QQQ", "Invesco QQQ Trust", BenchmarkType.ETF, "1M");
+
+        assertEquals(List.of("2026-09-02"), history.points().stream().map(point -> point.date().toString()).toList());
+        assertEquals(FreshnessStatus.STALE, history.dataStatus());
+    }
+
+    @Test
+    void includesCurrentTradingDayBarAfterRegularClose() {
+        server.when("/v8/finance/chart/QQQ", uri -> new Response(200,
+                chartResponse("2026-09-02T13:30:00Z", "2026-09-03T13:30:00Z")));
+        Clock afterClose = Clock.fixed(Instant.parse("2026-09-03T20:05:00Z"), ZoneOffset.UTC);
+
+        HistoryResponse history = service(1, afterClose).history("QQQ", "Invesco QQQ Trust", BenchmarkType.ETF, "1M");
+
+        assertEquals(List.of("2026-09-02", "2026-09-03"),
+                history.points().stream().map(point -> point.date().toString()).toList());
+        assertEquals(FreshnessStatus.FRESH, history.dataStatus());
+    }
+
     private BenchmarkService service(int attempts) {
+        return service(attempts, Clock.systemUTC());
+    }
+
+    private BenchmarkService service(int attempts, Clock clock) {
         RestClient.Builder builder = RestClient.builder();
         YahooFinanceProvider yahoo = new YahooFinanceProvider(builder, new ObjectMapper(), server.baseUrl().toString(), 1_000);
-        return new BenchmarkService(yahoo, builder, Clock.systemUTC(), server.baseUrl().toString(),
+        return new BenchmarkService(yahoo, builder, clock, server.baseUrl().toString(),
                 1_000, "", attempts, ObservabilityMetrics.noop());
+    }
+
+    private static String chartResponse(String... timestamps) {
+        String epochs = java.util.Arrays.stream(timestamps)
+                .map(value -> Long.toString(Instant.parse(value).getEpochSecond()))
+                .collect(java.util.stream.Collectors.joining(","));
+        String closes = java.util.stream.IntStream.range(0, timestamps.length)
+                .mapToObj(index -> Integer.toString(100 + index))
+                .collect(java.util.stream.Collectors.joining(","));
+        return """
+                {"chart":{"result":[{
+                  "timestamp":[%s],
+                  "indicators":{"quote":[{"close":[%s]}],"adjclose":[{"adjclose":[%s]}]}
+                }],"error":null}}
+                """.formatted(epochs, closes, closes);
     }
 
     private record Response(int status, String body) { }

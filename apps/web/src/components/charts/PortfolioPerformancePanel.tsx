@@ -20,6 +20,7 @@ echarts.use([LineChart, GridComponent, TooltipComponent, MarkLineComponent, Canv
 
 const STORAGE_KEY = 'dca-performance-benchmarks-v1'
 const SEARCH_DEBOUNCE_MS = 300
+const BENCHMARK_STALE_REFETCH_MS = 5 * 60_000
 
 interface StoredBenchmark extends BenchmarkSearchResult {
   visible: boolean
@@ -146,6 +147,7 @@ export function PortfolioPerformancePanel({ history }: { history: PortfolioHisto
   const [searchText, setSearchText] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const normalizedSearch = searchText.trim()
+  const endDay = latestFreshPortfolioHistoryPoint(history)?.date.slice(0, 10) ?? null
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(benchmarks))
@@ -169,14 +171,20 @@ export function PortfolioPerformancePanel({ history }: { history: PortfolioHisto
   })
   const historyQueries = useQueries({
     queries: benchmarks.map((item) => ({
-      queryKey: ['benchmark-history', item.type, item.symbol],
+      queryKey: ['benchmark-history', item.type, item.symbol, endDay ?? 'NO_PORTFOLIO_CLOSE'],
       queryFn: () => benchmarksApi.history(item),
       staleTime: 6 * 60 * 60_000,
+      refetchInterval: (query: { state: { data?: Awaited<ReturnType<typeof benchmarksApi.history>> } }) => {
+        const benchmark = query.state.data?.data
+        const latest = benchmark?.points.at(-1)?.date ?? null
+        return benchmark?.dataStatus === 'STALE' || (endDay != null && latest != null && latest < endDay)
+          ? BENCHMARK_STALE_REFETCH_MS
+          : false
+      },
       retry: 1,
     })),
   })
 
-  const endDay = latestFreshPortfolioHistoryPoint(history)?.date.slice(0, 10) ?? null
   const startDay = endDay ? portfolioRangeStartDay(endDay, range) : null
   const visibleLines = useMemo(() => {
     if (!startDay || !endDay) return []
@@ -213,6 +221,12 @@ export function PortfolioPerformancePanel({ history }: { history: PortfolioHisto
   const searchResults = (search.data?.data ?? []).filter((item) => !selectedKeys.has(lineKey(item)))
   const anyLoading = historyQueries.some((query, index) => benchmarks[index]?.visible && query.isLoading)
   const anyError = historyQueries.some((query, index) => benchmarks[index]?.visible && query.isError)
+  const anyStale = historyQueries.some((query, index) => {
+    if (!benchmarks[index]?.visible) return false
+    const benchmark = query.data?.data
+    const latest = benchmark?.points.at(-1)?.date ?? null
+    return benchmark?.dataStatus === 'STALE' || (endDay != null && latest != null && latest < endDay)
+  })
 
   const title = isZh ? '投资表现' : 'Investment performance'
   const detail = isZh ? '剔除新增资金影响的 TWR，可叠加任意 ETF / 指数 / 股票' : 'Cash-flow-neutral TWR with any ETF / index / equity benchmarks'
@@ -246,6 +260,7 @@ export function PortfolioPerformancePanel({ history }: { history: PortfolioHisto
       </div>
     </div>
     {anyError ? <p className="performance-note performance-warning">{isZh ? '部分基准行情暂时不可用；其余曲线仍可正常比较。' : 'Some benchmark history is unavailable; remaining lines are still comparable.'}</p> : null}
+    {anyStale && !anyError ? <p className="performance-note performance-warning">{isZh ? `部分基准尚未取得 ${endDay ?? '最新交易日'} 收盘数据，正在自动刷新。` : `Some benchmarks have not published the ${endDay ?? 'latest trading day'} close yet; refreshing automatically.`}</p> : null}
     {anyLoading ? <p className="performance-note">{isZh ? '正在载入基准历史…' : 'Loading benchmark history…'}</p> : null}
     {visibleLines.length ? <PerformanceChart lines={visibleLines} /> : <EmptyState title={isZh ? '请选择至少一条可用曲线' : 'Select at least one available series'} detail={isZh ? '投资组合和每个 Benchmark 都可以独立开关。' : 'Portfolio and every benchmark can be toggled independently.'} />}
     <small className="performance-footnote">{isZh

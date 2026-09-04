@@ -21,7 +21,9 @@ import java.net.Proxy;
 import java.net.URI;
 import java.time.Clock;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -43,6 +45,7 @@ import org.springframework.web.client.RestClientResponseException;
 public class BenchmarkService {
     private static final Logger log = LoggerFactory.getLogger(BenchmarkService.class);
     private static final ZoneId MARKET_ZONE = ZoneId.of("America/New_York");
+    private static final LocalTime REGULAR_CLOSE = LocalTime.of(16, 0);
     private static final Pattern SYMBOL = Pattern.compile("[A-Za-z0-9.^=\\-]{1,24}");
     private static final String USER_AGENT = "Mozilla/5.0";
     private static final String SEARCH_OPERATION = "benchmark_search";
@@ -130,7 +133,9 @@ public class BenchmarkService {
             throw new DomainException(HttpStatus.BAD_REQUEST, "INVALID_BENCHMARK_SYMBOL", "Invalid benchmark symbol");
         }
         BenchmarkType resolvedType = type == null ? BenchmarkType.ETF : type;
-        LocalDate end = LocalDate.now(clock.withZone(MARKET_ZONE));
+        ZonedDateTime now = clock.instant().atZone(MARKET_ZONE);
+        LocalDate end = now.toLocalDate();
+        LocalDate expectedCloseDate = latestCompletedRegularCloseDate(now);
         LocalDate start = rangeStart(end, range);
         InstrumentEntity synthetic = new InstrumentEntity();
         synthetic.setSymbol(symbol);
@@ -145,7 +150,7 @@ public class BenchmarkService {
         }
         List<PricePoint> points = new ArrayList<>();
         for (PriceBar bar : bars == null ? List.<PriceBar>of() : bars) {
-            if (bar == null || bar.tradeDate() == null) continue;
+            if (bar == null || bar.tradeDate() == null || bar.tradeDate().isAfter(expectedCloseDate)) continue;
             BigDecimal value = positive(bar.adjustedClose()) ? bar.adjustedClose() : bar.close();
             if (!positive(value)) continue;
             points.add(new PricePoint(bar.tradeDate(), value));
@@ -153,8 +158,17 @@ public class BenchmarkService {
         points.sort(Comparator.comparing(PricePoint::date));
         LocalDate latest = points.isEmpty() ? null : points.get(points.size() - 1).date();
         FreshnessStatus status = latest == null ? FreshnessStatus.UNAVAILABLE
-                : latest.isBefore(MarketCalendar.latestExpectedTradingDate(end)) ? FreshnessStatus.STALE : FreshnessStatus.FRESH;
+                : latest.isBefore(expectedCloseDate) ? FreshnessStatus.STALE : FreshnessStatus.FRESH;
         return new HistoryResponse(symbol, synthetic.getName(), resolvedType, "YAHOO", status, points);
+    }
+
+    private static LocalDate latestCompletedRegularCloseDate(ZonedDateTime now) {
+        LocalDate today = now.toLocalDate();
+        LocalDate latestTradingDate = MarketCalendar.latestExpectedTradingDate(today);
+        if (today.equals(latestTradingDate) && now.toLocalTime().isBefore(REGULAR_CLOSE)) {
+            return MarketCalendar.latestExpectedTradingDate(today.minusDays(1));
+        }
+        return latestTradingDate;
     }
 
     private static SearchParseResult parseSearch(JsonNode root) {

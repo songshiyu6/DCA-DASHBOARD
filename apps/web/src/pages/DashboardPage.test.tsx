@@ -73,34 +73,62 @@ describe('dashboard market refresh', () => {
     await waitFor(() => expect(mockedApi.getDashboard.mock.calls.length).toBeGreaterThanOrEqual(2))
   })
 
-  it('groups portfolio value and P/L without presenting simple net-invested ROI as performance', async () => {
+  it('groups live portfolio value, cumulative P/L, and live TWR in the primary summary', async () => {
     renderPage()
 
     const summary = await screen.findByLabelText('Portfolio')
-    expect(within(summary).getByText('$1,000.00')).toBeInTheDocument()
-    expect(within(summary).getByText('Net investment')).toBeInTheDocument()
-    expect(within(summary).getByText('$990.00')).toBeInTheDocument()
-    expect(within(summary).getByText('Cumulative P/L')).toBeInTheDocument()
-    expect(within(summary).getByText('+$10.00')).toBeInTheDocument()
-    expect(within(summary).queryByText('+1.01%')).not.toBeInTheDocument()
+    const portfolioCard = summary.querySelector('.portfolio-summary-card')
+    expect(portfolioCard).not.toBeNull()
+    const portfolio = within(portfolioCard as HTMLElement)
+    expect(portfolio.getByText('$1,000.00')).toBeInTheDocument()
+    expect(portfolio.getByText('Net investment')).toBeInTheDocument()
+    expect(portfolio.getByText('$990.00')).toBeInTheDocument()
+    expect(portfolio.getByText('Cumulative P/L · live TWR')).toBeInTheDocument()
+    expect(portfolio.getByText(/\+\$10\.00/)).toBeInTheDocument()
+    expect(portfolio.getByText('+1.01%')).toBeInTheDocument()
     expect(screen.getByText('Long-term performance')).toBeInTheDocument()
     expect(screen.getByText('CAGR')).toBeInTheDocument()
     expect(screen.getByText('XIRR')).toBeInTheDocument()
   })
 
-  it('uses one regular-close TWR basis for YTD and since-inception performance', async () => {
+  it('uses the live current valuation for YTD and since-inception TWR while adjusting for contributions', async () => {
+    mockedApi.getDashboard.mockResolvedValue({
+      data: {
+        ...dashboardData,
+        summary: {
+          ...dashboardData.summary,
+          marketValue: '220.00',
+          netInvested: '200.00',
+          totalPnl: '20.00',
+        },
+        portfolioHistory: [
+          { date: '2026-01-02', marketValue: '100.00', netInvested: '100.00', dataStatus: 'FRESH' },
+          { date: '2026-06-01', marketValue: '110.00', netInvested: '100.00', dataStatus: 'FRESH' },
+        ],
+      },
+      meta: { status: 'FRESH', source: 'API', retrievedAt: '2026-09-04T16:00:00Z' },
+    })
+
     renderPage()
 
-    const ytdLabel = await screen.findByText('YTD · TWR')
+    const summary = await screen.findByLabelText('Portfolio')
+    const portfolioCard = summary.querySelector('.portfolio-summary-card')
+    expect(portfolioCard).not.toBeNull()
+    const portfolio = within(portfolioCard as HTMLElement)
+    expect(portfolio.getByText(/\+\$20\.00/)).toBeInTheDocument()
+    expect(portfolio.getByText('+20.00%')).toBeInTheDocument()
+    expect(portfolio.queryByText('+10.00%')).not.toBeInTheDocument()
+
+    const ytdLabel = screen.getByText('YTD · TWR')
     const ytdCard = ytdLabel.closest('.metric-card')
     expect(ytdCard).not.toBeNull()
-    expect(within(ytdCard as HTMLElement).getByText('+$5.00')).toBeInTheDocument()
-    expect(within(ytdCard as HTMLElement).getByText('+0.51%')).toBeInTheDocument()
+    expect(within(ytdCard as HTMLElement).getByText('+$20.00')).toBeInTheDocument()
+    expect(within(ytdCard as HTMLElement).getByText('+20.00%')).toBeInTheDocument()
 
     const longTerm = screen.getByText('Long-term performance').closest('.dashboard-long-term-heading')
     expect(longTerm).not.toBeNull()
-    expect(within(longTerm as HTMLElement).getByText(/Since inception TWR/)).toBeInTheDocument()
-    expect(within(longTerm as HTMLElement).getByText('+0.51%')).toBeInTheDocument()
+    expect(within(longTerm as HTMLElement).getByText(/Since inception TWR · live/)).toBeInTheDocument()
+    expect(within(longTerm as HTMLElement).getByText('+20.00%')).toBeInTheDocument()
   })
 
   it('shows the opening skipped month as initial capital without adding it to DCA totals', async () => {

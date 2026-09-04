@@ -4,7 +4,7 @@ import { ArrowUpRight, CalendarDays, ChevronRight, CircleDollarSign, Download, R
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
-import { annualizedTimeWeightedReturn, CHART_RANGE_OPTIONS, filterPortfolioHistory, livePerformanceSincePreviousTradingClose, marketBusinessDay, portfolioRangeStartDay, timeWeightedReturn, ytdPerformance, type ChartRange } from '../lib/dashboardPerformance'
+import { annualizedTimeWeightedReturn, CHART_RANGE_OPTIONS, filterPortfolioHistory, livePerformanceSincePreviousTradingClose, marketBusinessDay, portfolioRangeStartDay, timeWeightedReturn, withCurrentPortfolioPoint, ytdPerformance, type ChartRange } from '../lib/dashboardPerformance'
 import { decimal, decimalMax, decimalMin, formatDate, formatMoney, formatPeriod, formatShares, formatSignedMoney, formatSignedPercent, formatPercent, formatTime } from '../lib/format'
 import { isInitialContributionPeriod } from '../lib/initialContributionPresentation'
 import { queryKeys } from '../lib/queryKeys'
@@ -86,9 +86,16 @@ export function DashboardPage() {
   })) })
   const quoteBySymbol = useMemo(() => Object.fromEntries(quotes.map((query, index) => [symbols[index], query.data?.data])), [quotes, symbols])
   const regularHistory = useMemo(() => rawData?.portfolioHistory ?? [], [rawData?.portfolioHistory])
+  const livePerformanceHistory = useMemo(() => withCurrentPortfolioPoint(
+    regularHistory,
+    rawData?.summary.marketValue,
+    rawData?.summary.netInvested,
+    dashboard.data?.meta.asOf ?? dashboard.data?.meta.retrievedAt,
+    dashboard.data?.meta.status ?? 'STALE',
+  ), [regularHistory, rawData?.summary.marketValue, rawData?.summary.netInvested, dashboard.data?.meta.asOf, dashboard.data?.meta.retrievedAt, dashboard.data?.meta.status])
   const visibleHistory = useMemo(() => filterPortfolioHistory(regularHistory, chartRange), [regularHistory, chartRange])
   const cagr = useMemo(() => annualizedTimeWeightedReturn(regularHistory), [regularHistory])
-  const sinceInceptionTwr = useMemo(() => timeWeightedReturn(regularHistory), [regularHistory])
+  const sinceInceptionTwr = useMemo(() => timeWeightedReturn(livePerformanceHistory), [livePerformanceHistory])
   const chartRangeEnd = regularHistory.at(-1)?.date.slice(0, 10)
   const chartRangeStart = chartRangeEnd ? portfolioRangeStartDay(chartRangeEnd, chartRange) ?? undefined : undefined
   const currentBusinessDay = useMemo(
@@ -101,14 +108,14 @@ export function DashboardPage() {
     rawData?.summary.marketValue,
     rawData?.summary.netInvested,
   ), [regularHistory, currentBusinessDay, rawData?.summary.marketValue, rawData?.summary.netInvested])
-  const regularYtd = useMemo(() => ytdPerformance(regularHistory), [regularHistory])
+  const liveYtd = useMemo(() => ytdPerformance(livePerformanceHistory), [livePerformanceHistory])
   const isZh = (i18n.resolvedLanguage ?? i18n.language).toLowerCase().startsWith('zh')
   const portfolioLabel = isZh ? '投资组合' : 'Portfolio'
   const portfolioOverviewLabel = isZh ? '投资组合总览' : 'Portfolio overview'
-  const cumulativePnlLabel = isZh ? '累计盈亏' : 'Cumulative P/L'
+  const cumulativePnlLabel = isZh ? '累计盈亏 · 实时 TWR' : 'Cumulative P/L · live TWR'
   const longTermPerformanceLabel = isZh ? '长期表现' : 'Long-term performance'
   const longTermPerformanceDetail = isZh ? '策略收益与资金回报' : 'Strategy and money-weighted returns'
-  const sinceInceptionTwrLabel = isZh ? '成立以来 TWR' : 'Since inception TWR'
+  const sinceInceptionTwrLabel = isZh ? '成立以来 TWR · 实时' : 'Since inception TWR · live'
   const timeWeightedAnnualizedLabel = isZh ? '时间加权年化' : 'Time-weighted annualized'
   const netLiqLabel = isZh ? '净清算价值' : 'Net Liq Value'
   const netInvestmentLabel = isZh ? '净投入' : 'Net investment'
@@ -166,7 +173,7 @@ export function DashboardPage() {
   const { data, meta } = dashboard.data
   const summary = data.summary
   const progress = data.contributionProgress
-  const ytdPnl = regularYtd.pnl
+  const ytdPnl = liveYtd.pnl
   const showInitialProgress = Boolean(progress && initialPeriod && progress.months.some((month) => isInitialContributionPeriod(month.period, month.status, activePlan?.startDate, initialPrincipal, month.executed)))
   return <div className="page dashboard-page dashboard-page-v2">
     <div className="page-intro dashboard-intro"><div><span className="page-eyebrow">{portfolioOverviewLabel}</span><h1>{t('dashboard.title')}</h1><p>{t('dashboard.subtitle')}</p></div><div className="page-actions"><button type="button" className="button button-ghost" onClick={() => void refreshMarket()} disabled={marketRefreshing || dashboard.isFetching}><RefreshCw size={15} className={marketRefreshing ? 'spin-icon' : undefined} />{marketRefreshing || dashboard.isFetching ? t('common.loading') : t('common.refresh')}</button><button type="button" className="button button-secondary" onClick={() => { exportDashboard(data) }}><Download size={15} />{t('common.export')}</button></div></div>
@@ -177,11 +184,11 @@ export function DashboardPage() {
         <strong className="portfolio-summary-value">{formatMoney(summary.marketValue)}</strong>
         <div className="portfolio-summary-meta">
           <span><small>{netInvestmentLabel}</small><strong>{formatMoney(summary.netInvested)}</strong></span>
-          <span><small>{cumulativePnlLabel}</small><strong className={trendClass(summary.totalPnl)}>{formatSignedMoney(summary.totalPnl)}</strong></span>
+          <span><small>{cumulativePnlLabel}</small><strong className={trendClass(summary.totalPnl)}>{formatSignedMoney(summary.totalPnl)} <em>{formatSignedPercent(sinceInceptionTwr)}</em></strong></span>
         </div>
       </article>
       <MetricCard className="dashboard-period-card" label={t('common.today')} value={formatSignedMoney(today.pnl)} detail={formatSignedPercent(today.returnRate)} icon={TrendingUp} tone={trendClass(today.pnl) === 'trend-negative' ? 'negative' : 'positive'} />
-      <MetricCard className="dashboard-period-card" label="YTD · TWR" value={formatSignedMoney(ytdPnl)} detail={formatSignedPercent(regularYtd.returnRate)} icon={ArrowUpRight} tone={trendClass(ytdPnl) === 'trend-negative' ? 'negative' : 'positive'} />
+      <MetricCard className="dashboard-period-card" label="YTD · TWR" value={formatSignedMoney(ytdPnl)} detail={formatSignedPercent(liveYtd.returnRate)} icon={ArrowUpRight} tone={trendClass(ytdPnl) === 'trend-negative' ? 'negative' : 'positive'} />
     </div>
     <div className="dashboard-long-term-strip" aria-label={`${longTermPerformanceLabel}, ${sinceInceptionTwrLabel}, CAGR, XIRR`}>
       <span className="dashboard-long-term-heading"><small>{longTermPerformanceLabel}</small><span>{longTermPerformanceDetail}</span><span>{sinceInceptionTwrLabel} <b className={trendClass(sinceInceptionTwr)}>{formatSignedPercent(sinceInceptionTwr)}</b></span></span>

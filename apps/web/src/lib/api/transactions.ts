@@ -1,6 +1,8 @@
 import type { Transaction, TransactionCsvRow, TransactionImportCommit, TransactionImportPreview, TransactionInput } from '../../types'
 import { apiMeta, request, type ApiResponse } from './transport'
-import { normalizeApiResponse, normalizeResult, normalizeTransaction, normalizeTransactions } from './normalize'
+import { isRecord, normalizeApiResponse, normalizeResult, normalizeTransaction } from './normalize'
+
+type CashTransactionType = Transaction['transactionType'] | 'DEPOSIT' | 'WITHDRAWAL' | 'INTEREST'
 
 interface ServerCsvPreviewImpact {
   rowNumber?: number
@@ -40,6 +42,21 @@ interface TransactionImportPreviewUx extends TransactionImportPreview {
   rowImpacts?: ServerCsvPreviewImpact[]
 }
 
+function futureCashTransactionType(value: unknown): CashTransactionType | null {
+  return value === 'DEPOSIT' || value === 'WITHDRAWAL' || value === 'INTEREST' ? value : null
+}
+
+function normalizeCashReadyTransaction(value: unknown): Transaction {
+  const normalized = normalizeTransaction(value)
+  if (!isRecord(value)) return normalized
+  const futureType = futureCashTransactionType(value.transactionType ?? value.type)
+  return futureType ? { ...normalized, transactionType: futureType } as Transaction : normalized
+}
+
+function normalizeCashReadyTransactions(value: unknown): Transaction[] {
+  return Array.isArray(value) ? value.filter(isRecord).map(normalizeCashReadyTransaction) : []
+}
+
 function csvRowToTransaction(row: TransactionCsvRow): TransactionInput {
   const trade = row.type === 'BUY' || row.type === 'SELL'
   const symbol = typeof row.symbol === 'string' ? row.symbol.trim().toUpperCase() : ''
@@ -77,15 +94,15 @@ function normalizeDelete(value: unknown): { id: string } {
 }
 
 export const transactionsApi = {
-  getTransactions: async (): ApiResponse<Transaction[]> => normalizeResult(await request<unknown>('/transactions'), normalizeTransactions, apiMeta()),
+  getTransactions: async (): ApiResponse<Transaction[]> => normalizeResult(await request<unknown>('/transactions'), normalizeCashReadyTransactions, apiMeta()),
   createTransaction: async (input: TransactionInput): ApiResponse<Transaction> => normalizeResult(await request<unknown>('/transactions', {
     method: 'POST',
     body: JSON.stringify(input),
-  }), normalizeTransaction, apiMeta()),
+  }), normalizeCashReadyTransaction, apiMeta()),
   updateTransaction: async (id: string, input: TransactionInput): ApiResponse<Transaction> => normalizeResult(await request<unknown>(`/transactions/${encodeURIComponent(id)}`, {
     method: 'PUT',
     body: JSON.stringify(input),
-  }), normalizeTransaction, apiMeta()),
+  }), normalizeCashReadyTransaction, apiMeta()),
   previewTransactionImport: async (csv: string): ApiResponse<TransactionImportPreview> => {
     const form = new FormData()
     form.append('file', new Blob([csv], { type: 'text/csv' }), 'transactions.csv')

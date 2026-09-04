@@ -17,6 +17,8 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
@@ -27,6 +29,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -70,6 +73,17 @@ class BenchmarkServiceTest {
     }
 
     @Test
+    void usesChinaRegionForAshareSymbolSearch() {
+        server.when("/v6/finance/autocomplete", uri -> new Response(200, """
+                {"ResultSet":{"Result":[]}}
+                """));
+
+        service(1).search("510300.SS");
+
+        assertEquals("CN", query(server.requests().getFirst(), "region"));
+    }
+
+    @Test
     void returnsEmptyForAValidYahooResponseWithNoSupportedResults() {
         server.when("/v6/finance/autocomplete", uri -> new Response(200, """
                 {"ResultSet":{"Result":[{"symbol":"ES=F","name":"E-mini S&P 500","type":"F","typeDisp":"Future"}]}}
@@ -106,7 +120,7 @@ class BenchmarkServiceTest {
     @Test
     void excludesCurrentTradingDayDailyBarBeforeRegularClose() {
         server.when("/v8/finance/chart/QQQ", uri -> new Response(200,
-                chartResponse("2026-09-02T13:30:00Z", "2026-09-03T13:30:00Z")));
+                chartResponse("America/New_York", "2026-09-02T13:30:00Z", "2026-09-03T13:30:00Z")));
         Clock beforeClose = Clock.fixed(Instant.parse("2026-09-03T19:30:00Z"), ZoneOffset.UTC);
 
         HistoryResponse history = service(1, beforeClose).history("QQQ", "Invesco QQQ Trust", BenchmarkType.ETF, "1M");
@@ -118,7 +132,7 @@ class BenchmarkServiceTest {
     @Test
     void marksBenchmarkStaleAfterCloseUntilCurrentTradingDayBarArrives() {
         server.when("/v8/finance/chart/QQQ", uri -> new Response(200,
-                chartResponse("2026-09-02T13:30:00Z")));
+                chartResponse("America/New_York", "2026-09-02T13:30:00Z")));
         Clock afterClose = Clock.fixed(Instant.parse("2026-09-03T20:05:00Z"), ZoneOffset.UTC);
 
         HistoryResponse history = service(1, afterClose).history("QQQ", "Invesco QQQ Trust", BenchmarkType.ETF, "1M");
@@ -130,13 +144,57 @@ class BenchmarkServiceTest {
     @Test
     void includesCurrentTradingDayBarAfterRegularClose() {
         server.when("/v8/finance/chart/QQQ", uri -> new Response(200,
-                chartResponse("2026-09-02T13:30:00Z", "2026-09-03T13:30:00Z")));
+                chartResponse("America/New_York", "2026-09-02T13:30:00Z", "2026-09-03T13:30:00Z")));
         Clock afterClose = Clock.fixed(Instant.parse("2026-09-03T20:05:00Z"), ZoneOffset.UTC);
 
         HistoryResponse history = service(1, afterClose).history("QQQ", "Invesco QQQ Trust", BenchmarkType.ETF, "1M");
 
         assertEquals(List.of("2026-09-02", "2026-09-03"),
                 history.points().stream().map(point -> point.date().toString()).toList());
+        assertEquals(FreshnessStatus.FRESH, history.dataStatus());
+    }
+
+    @Test
+    void chinaBenchmarkUsesShanghaiBoundaryAndPreviousCloseBefore1500() {
+        server.when("/v8/finance/chart/510300.SS", uri -> new Response(200,
+                chartResponse("Asia/Shanghai", "2026-09-03T01:30:00Z", "2026-09-04T01:30:00Z")));
+        Clock beforeChinaClose = Clock.fixed(Instant.parse("2026-09-04T04:08:00Z"), ZoneOffset.UTC);
+
+        HistoryResponse history = service(1, beforeChinaClose)
+                .history("510300.SS", "CSI 300 ETF", BenchmarkType.ETF, "1M");
+
+        assertEquals(List.of("2026-09-03"), history.points().stream().map(point -> point.date().toString()).toList());
+        assertEquals(FreshnessStatus.FRESH, history.dataStatus());
+        URI request = server.requests().getFirst();
+        assertEquals(Long.toString(LocalDate.of(2026, 9, 5)
+                        .atStartOfDay(ZoneId.of("Asia/Shanghai")).toEpochSecond()),
+                query(request, "period2"));
+    }
+
+    @Test
+    void chinaBenchmarkAcceptsCurrentCloseAfter1500Shanghai() {
+        server.when("/v8/finance/chart/510300.SS", uri -> new Response(200,
+                chartResponse("Asia/Shanghai", "2026-09-03T01:30:00Z", "2026-09-04T01:30:00Z")));
+        Clock afterChinaClose = Clock.fixed(Instant.parse("2026-09-04T07:05:00Z"), ZoneOffset.UTC);
+
+        HistoryResponse history = service(1, afterChinaClose)
+                .history("510300.SS", "CSI 300 ETF", BenchmarkType.ETF, "1M");
+
+        assertEquals(List.of("2026-09-03", "2026-09-04"),
+                history.points().stream().map(point -> point.date().toString()).toList());
+        assertEquals(FreshnessStatus.FRESH, history.dataStatus());
+    }
+
+    @Test
+    void chinaHolidayDoesNotCreateFalseMissingClose() {
+        server.when("/v8/finance/chart/510300.SS", uri -> new Response(200,
+                chartResponse("Asia/Shanghai", "2026-09-24T01:30:00Z")));
+        Clock midAutumnHoliday = Clock.fixed(Instant.parse("2026-09-25T08:00:00Z"), ZoneOffset.UTC);
+
+        HistoryResponse history = service(1, midAutumnHoliday)
+                .history("510300.SS", "CSI 300 ETF", BenchmarkType.ETF, "1M");
+
+        assertEquals(List.of("2026-09-24"), history.points().stream().map(point -> point.date().toString()).toList());
         assertEquals(FreshnessStatus.FRESH, history.dataStatus());
     }
 
@@ -151,7 +209,7 @@ class BenchmarkServiceTest {
                 1_000, "", attempts, ObservabilityMetrics.noop());
     }
 
-    private static String chartResponse(String... timestamps) {
+    private static String chartResponse(String exchangeTimezoneName, String... timestamps) {
         String epochs = java.util.Arrays.stream(timestamps)
                 .map(value -> Long.toString(Instant.parse(value).getEpochSecond()))
                 .collect(java.util.stream.Collectors.joining(","));
@@ -160,10 +218,15 @@ class BenchmarkServiceTest {
                 .collect(java.util.stream.Collectors.joining(","));
         return """
                 {"chart":{"result":[{
+                  "meta":{"exchangeTimezoneName":"%s"},
                   "timestamp":[%s],
                   "indicators":{"quote":[{"close":[%s]}],"adjclose":[{"adjclose":[%s]}]}
                 }],"error":null}}
-                """.formatted(epochs, closes, closes);
+                """.formatted(exchangeTimezoneName, epochs, closes, closes);
+    }
+
+    private static String query(URI uri, String key) {
+        return UriComponentsBuilder.fromUri(uri).build().getQueryParams().getFirst(key);
     }
 
     private record Response(int status, String body) { }

@@ -36,6 +36,18 @@ describe('performance series', () => {
     ])
   })
 
+  it('keeps a benchmark trading date even when the US market is closed', () => {
+    const levels = benchmarkPriceLevels([
+      { date: '2026-09-04', value: '4.20' },
+      { date: '2026-09-07', value: '4.25' },
+    ], '2026-09-01', '2026-09-10')
+
+    expect(levels).toEqual([
+      { date: '2026-09-04', value: 4.2 },
+      { date: '2026-09-07', value: 4.25 },
+    ])
+  })
+
   it('rebases portfolio and multiple benchmarks to one common trading close', () => {
     const portfolio = portfolioTwrLevels([
       point('2026-08-03', '1000', '1000'),

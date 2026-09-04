@@ -33,7 +33,7 @@ class SettingsServiceCorrectnessTest {
         SettingsService service = service(repository, invalidator);
 
         SettingsDtos.SettingsResponse response = service.update(
-                new SettingsDtos.SettingsUpdateRequest(primary, fallback, null));
+                new SettingsDtos.SettingsUpdateRequest(primary, fallback, null, null, null));
 
         assertEquals(primary, response.primaryProvider());
         assertEquals(fallback, response.fallbackProvider());
@@ -48,9 +48,22 @@ class SettingsServiceCorrectnessTest {
         PortfolioSnapshotInvalidator invalidator = mock(PortfolioSnapshotInvalidator.class);
         SettingsService service = service(repository("YAHOO", "TWELVE_DATA"), invalidator);
 
-        service.update(new SettingsDtos.SettingsUpdateRequest("YAHOO", "TWELVE_DATA", null));
+        service.update(new SettingsDtos.SettingsUpdateRequest("YAHOO", "TWELVE_DATA", null, null, null));
 
         verifyNoInteractions(invalidator);
+    }
+
+    @Test
+    void persistsAndReturnsBothTimezoneSettings() {
+        PortfolioSnapshotInvalidator invalidator = mock(PortfolioSnapshotInvalidator.class);
+        SettingsService service = service(repository("YAHOO", "TWELVE_DATA"), invalidator);
+
+        SettingsDtos.SettingsResponse response = service.update(new SettingsDtos.SettingsUpdateRequest(
+                null, null, null, "Asia/Shanghai", "America/New_York"));
+
+        assertEquals("Asia/Shanghai", response.marketTimezone());
+        assertEquals("America/New_York", response.displayTimezone());
+        verify(invalidator).invalidateAll();
     }
 
     private static SettingsService service(AppSettingRepository repository,

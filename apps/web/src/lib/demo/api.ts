@@ -42,7 +42,7 @@ function localImportPreview(csv: string): ApiResult<TransactionImportPreview> {
       sourceRows: parsed.rows.map(transactionToCsvRow),
       errors: parsed.errors,
     },
-    meta: { ...fixtureMeta, message: 'Demo data only. CSV validated locally.' },
+    meta: { ...fixtureMeta, message: 'Demo parser only. Live CSV imports use the server preview as the authority.' },
   }
 }
 
@@ -179,26 +179,24 @@ export const demoApi = {
   },
   getPlans: async (): Promise<ApiResult<InvestmentPlan[]>> => getFixturePlans(),
   getPlan: async (id: string): Promise<ApiResult<InvestmentPlan>> => getFixturePlan(id),
-  createPlan: async (plan: Omit<InvestmentPlan, 'id' | 'cycles'>): Promise<ApiResult<InvestmentPlan>> => createFixturePlan(plan),
-  updatePlan: async (id: string, patch: Partial<InvestmentPlan>): Promise<ApiResult<InvestmentPlan>> => updateFixturePlan(id, patch),
-  getCycles: async (id: string): Promise<ApiResult<PlanCycle[]>> => getFixtureCycles(id),
-  getRecommendation: async (id: string): Promise<ApiResult<Recommendation>> => {
-    const result = getFixtureRecommendation(id)
+  createPlan: async (input: Partial<InvestmentPlan>): Promise<ApiResult<InvestmentPlan>> => createFixturePlan(input),
+  updatePlan: async (id: string, input: Partial<InvestmentPlan>): Promise<ApiResult<InvestmentPlan>> => updateFixturePlan(id, input),
+  getCycles: async (planId: string): Promise<ApiResult<PlanCycle[]>> => getFixtureCycles(planId),
+  getRecommendation: async (planId: string, amount?: string): Promise<ApiResult<Recommendation>> => {
+    const result = getFixtureRecommendation(planId, amount)
     return { ...result, data: normalizeRecommendation(result.data) }
   },
-  getContributionAnalysis: async (_id: string): Promise<ApiResult<ContributionAnalysis>> => demoContributionAnalysis(),
-  previewContributionClassifications: async (_id: string, items: ContributionClassificationItem[]): Promise<ApiResult<ContributionClassificationPreview>> => demoClassificationPreview(items),
-  commitContributionClassifications: async (_id: string, previewHash: string, items: ContributionClassificationItem[]): Promise<ApiResult<ContributionClassificationCommit>> => {
-    const preview = demoClassificationPreview(items)
-    if (!preview.data.valid || preview.data.previewHash !== previewHash) throw new Error('Contribution classification preview is stale')
-    for (const item of items) {
+  getContributionAnalysis: async (_planId: string): Promise<ApiResult<ContributionAnalysis>> => demoContributionAnalysis(),
+  previewContributionClassification: async (items: ContributionClassificationItem[]): Promise<ApiResult<ContributionClassificationPreview>> => demoClassificationPreview(items),
+  commitContributionClassification: async (preview: ContributionClassificationPreview): Promise<ApiResult<ContributionClassificationCommit>> => {
+    const transactions = new Map(getFixtureTransactions().data.map((transaction) => [transaction.id, transaction]))
+    for (const item of preview.items) {
+      const transaction = transactions.get(item.transactionId)
+      if (!transaction || !item.valid) continue
       if (item.classification === 'INITIAL') demoInitialTransactions.add(item.transactionId)
       else demoUnplannedTransactions.add(item.transactionId)
     }
-    return {
-      data: { batchId: `demo-${Date.now()}`, transactionIds: items.map((item) => item.transactionId), analysis: demoContributionAnalysis().data },
-      meta: fixtureMeta,
-    }
+    return { data: { batchId: `classification-${Date.now()}`, transactionIds: preview.items.filter((item) => item.valid).map((item) => item.transactionId), analysis: demoContributionAnalysis().data }, meta: fixtureMeta }
   },
   getTransactions: async (): Promise<ApiResult<Transaction[]>> => getFixtureTransactions(),
   createTransaction: async (input: TransactionInput): Promise<ApiResult<Transaction>> => createFixtureTransaction(input),
@@ -210,8 +208,5 @@ export const demoApi = {
     const result = getFixtureSettings()
     return { ...result, data: normalizeSettings(result.data) }
   },
-  updateSettings: async (patch: Partial<AppSettings>): Promise<ApiResult<AppSettings>> => {
-    const result = updateFixtureSettings(patch)
-    return { ...result, data: normalizeSettings(result.data) }
-  },
+  updateSettings: async (settings: AppSettings): Promise<ApiResult<AppSettings>> => updateFixtureSettings(settings),
 }

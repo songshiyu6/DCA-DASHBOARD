@@ -14,7 +14,8 @@ public interface TransactionRepository extends JpaRepository<TransactionEntity, 
     @Query("""
             select tx from TransactionEntity tx
             left join fetch tx.instrument instrument
-            where (:symbol is null or lower(instrument.symbol) = lower(:symbol))
+            where lower(coalesce(instrument.symbol, '')) =
+                  lower(coalesce(:symbol, coalesce(instrument.symbol, '')))
               and tx.tradeDate >= coalesce(:fromDate, tx.tradeDate)
               and tx.tradeDate <= coalesce(:toDate, tx.tradeDate)
             order by tx.tradeDate asc, tx.ledgerOrder asc, tx.id asc

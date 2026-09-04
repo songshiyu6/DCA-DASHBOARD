@@ -169,11 +169,14 @@ ALTER TABLE portfolio_snapshot_daily
 
 DELETE FROM portfolio_snapshot_daily;
 
-ALTER TABLE portfolio_snapshot_daily
-    ALTER COLUMN securities_value SET NOT NULL,
-    ALTER COLUMN cash_balance SET NOT NULL;
-
+-- Keep these additive breakdown columns nullable at the SQL boundary so pre-V022 backup/restore tools and
+-- rolling consumers that still write the old snapshot shape are not blocked. The current application always
+-- writes both values, and history has an explicit compatibility fallback for restored legacy rows.
 COMMENT ON COLUMN portfolio_snapshot_daily.market_value IS
     'Total portfolio value: securities_value + cash_balance';
+COMMENT ON COLUMN portfolio_snapshot_daily.securities_value IS
+    'Security-only market value; nullable only for restored legacy snapshot rows';
+COMMENT ON COLUMN portfolio_snapshot_daily.cash_balance IS
+    'Ledger-derived cash balance; nullable only for restored legacy snapshot rows';
 COMMENT ON COLUMN portfolio_snapshot_daily.net_cash_flow IS
     'Cumulative external cash flow: DEPOSIT - WITHDRAWAL';

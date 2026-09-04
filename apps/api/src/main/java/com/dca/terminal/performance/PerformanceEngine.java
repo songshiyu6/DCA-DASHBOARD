@@ -42,7 +42,6 @@ public class PerformanceEngine {
             valuations.add(new Valuation(item.date(), null, item.totalValue(), item.cumulativeExternalFlow(),
                     PointType.REGULAR_CLOSE, item.dataStatus()));
         }
-        LocalDate inception = valuations.isEmpty() ? null : valuations.getFirst().date();
 
         // A partial current portfolio value can look like a sudden loss. Only a complete FRESH account
         // valuation is allowed to extend the otherwise immutable regular-close history.
@@ -61,12 +60,18 @@ public class PerformanceEngine {
                     FreshnessStatus.UNAVAILABLE, false, source.externalFlowModel(), List.of());
         }
 
+        LocalDate inception = valuations.getFirst().date();
         LocalDate endpointDate = valuations.getLast().date();
         LocalDate requestedStart = range.startDate(endpointDate);
         if (requestedStart == null) requestedStart = inception;
         int baselineIndex = baselineIndex(valuations, requestedStart);
         List<LevelPoint> allLevels = levels(valuations);
-        BigDecimal baselineLevel = allLevels.get(baselineIndex).level();
+
+        // If the selected range begins before (or exactly at) the first valuation, there is no prior close to
+        // use as a visible baseline. The first cumulative external capital is therefore the theoretical level=1
+        // base, which preserves performance earned between initial funding and the first close/live valuation.
+        boolean startsAtInception = baselineIndex == 0 && !requestedStart.isAfter(inception);
+        BigDecimal baselineLevel = startsAtInception ? BigDecimal.ONE : allLevels.get(baselineIndex).level();
 
         List<PerformancePoint> points = new ArrayList<>();
         for (int index = baselineIndex; index < allLevels.size(); index++) {
@@ -79,7 +84,7 @@ public class PerformanceEngine {
         }
 
         BigDecimal twr = points.isEmpty() ? null : points.getLast().returnRate();
-        BigDecimal cagr = inception == null ? null : annualizedSinceInception(allLevels, inception, endpointDate);
+        BigDecimal cagr = annualizedSinceInception(allLevels, inception, endpointDate);
         BigDecimal xirr = liveIncluded ? xirr(current) : null;
         BigDecimal maximumDrawdown = maximumDrawdown(points);
         FreshnessStatus status = points.size() < 2 ? FreshnessStatus.INSUFFICIENT_HISTORY
@@ -108,8 +113,11 @@ public class PerformanceEngine {
     static List<LevelPoint> levels(List<Valuation> valuations) {
         if (valuations == null || valuations.isEmpty()) return List.of();
         List<LevelPoint> result = new ArrayList<>();
-        BigDecimal level = BigDecimal.ONE;
         Valuation previous = valuations.getFirst();
+        BigDecimal initialCapital = zero(previous.cumulativeExternalFlow());
+        BigDecimal level = positive(initialCapital)
+                ? previous.totalValue().divide(initialCapital, MC)
+                : BigDecimal.ONE;
         result.add(new LevelPoint(previous.date(), previous.asOf(), level, previous.pointType(), previous.dataStatus()));
         for (int index = 1; index < valuations.size(); index++) {
             Valuation current = valuations.get(index);
@@ -118,7 +126,6 @@ public class PerformanceEngine {
             BigDecimal currentFlow = zero(current.cumulativeExternalFlow());
             BigDecimal externalFlow = currentFlow.subtract(previousFlow, MC);
             BigDecimal numerator = current.totalValue().subtract(externalFlow, MC);
-            if (!positive(numerator)) continue;
             BigDecimal gross = numerator.divide(previous.totalValue(), MC);
             level = level.multiply(gross, MC);
             result.add(new LevelPoint(current.date(), current.asOf(), level, current.pointType(), current.dataStatus()));

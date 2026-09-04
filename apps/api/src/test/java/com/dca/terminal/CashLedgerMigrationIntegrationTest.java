@@ -73,21 +73,25 @@ class CashLedgerMigrationIntegrationTest {
                 FROM investment_transaction
                 """, BigDecimal.class).intValueExact());
         assertTrue(jdbc.queryForObject("""
-                SELECT (SELECT ledger_order FROM investment_transaction WHERE transaction_type = 'DEPOSIT')
+                SELECT (SELECT ledger_order FROM investment_transaction
+                        WHERE transaction_type = 'DEPOSIT' AND notes LIKE 'System-generated legacy cash bridge for BUY%')
                      < (SELECT ledger_order FROM investment_transaction WHERE id = ?)
                 """, Boolean.class, buyId));
         assertTrue(jdbc.queryForObject("""
-                SELECT (SELECT ledger_order FROM investment_transaction WHERE transaction_type = 'WITHDRAWAL')
+                SELECT (SELECT ledger_order FROM investment_transaction
+                        WHERE transaction_type = 'WITHDRAWAL' AND notes LIKE 'System-generated legacy cash bridge for SELL%')
                      > (SELECT ledger_order FROM investment_transaction WHERE id = ?)
                 """, Boolean.class, sellId));
         assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM portfolio_snapshot_daily", Integer.class));
         assertTrue(jdbc.queryForObject("""
                 SELECT is_nullable = 'YES' FROM information_schema.columns
-                WHERE table_name = 'investment_transaction' AND column_name = 'instrument_id'
+                WHERE table_schema = current_schema()
+                  AND table_name = 'investment_transaction' AND column_name = 'instrument_id'
                 """, Boolean.class));
         assertTrue(jdbc.queryForObject("""
                 SELECT count(*) = 2 FROM information_schema.columns
-                WHERE table_name = 'portfolio_snapshot_daily'
+                WHERE table_schema = current_schema()
+                  AND table_name = 'portfolio_snapshot_daily'
                   AND column_name IN ('securities_value', 'cash_balance')
                 """, Boolean.class));
         long maxOrder = jdbc.queryForObject("SELECT max(ledger_order) FROM investment_transaction", Long.class);

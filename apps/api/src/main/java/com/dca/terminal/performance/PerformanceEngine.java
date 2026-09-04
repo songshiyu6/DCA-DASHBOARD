@@ -29,8 +29,9 @@ public class PerformanceEngine {
     public PortfolioPerformanceResponse performance(String rawRange) {
         PerformanceRange range = PerformanceRange.parse(rawRange);
         PortfolioPerformanceSource.CurrentValuation current = source.current();
-        List<PortfolioPerformanceSource.DailyValuation> history = source.regularCloseHistory() == null
-                ? List.of() : source.regularCloseHistory().stream()
+        List<PortfolioPerformanceSource.DailyValuation> sourceHistory = source.regularCloseHistory();
+        List<PortfolioPerformanceSource.DailyValuation> history = sourceHistory == null
+                ? List.of() : sourceHistory.stream()
                 .filter(item -> item != null && item.date() != null)
                 .sorted(Comparator.comparing(PortfolioPerformanceSource.DailyValuation::date))
                 .toList();
@@ -42,12 +43,14 @@ public class PerformanceEngine {
                     PointType.REGULAR_CLOSE, item.dataStatus()));
         }
         LocalDate inception = valuations.isEmpty() ? null : valuations.getFirst().date();
+
+        // A partial current portfolio value can look like a sudden loss. Only a complete FRESH account
+        // valuation is allowed to extend the otherwise immutable regular-close history.
         boolean liveIncluded = current != null && current.businessDate() != null && current.asOf() != null
-                && positive(current.totalValue()) && current.dataStatus() != FreshnessStatus.UNAVAILABLE;
+                && positive(current.totalValue()) && current.dataStatus() == FreshnessStatus.FRESH;
         if (liveIncluded) {
             valuations.add(new Valuation(current.businessDate(), current.asOf(), current.totalValue(),
-                    current.cumulativeExternalFlow(), PointType.LIVE,
-                    current.dataStatus() == null ? FreshnessStatus.STALE : current.dataStatus()));
+                    current.cumulativeExternalFlow(), PointType.LIVE, FreshnessStatus.FRESH));
         }
         valuations.sort(Comparator.comparing(Valuation::date)
                 .thenComparing(item -> item.pointType() == PointType.REGULAR_CLOSE ? 0 : 1));
@@ -58,8 +61,7 @@ public class PerformanceEngine {
                     FreshnessStatus.UNAVAILABLE, false, source.externalFlowModel(), List.of());
         }
 
-        LocalDate endpointDate = current != null && current.businessDate() != null
-                ? current.businessDate() : valuations.getLast().date();
+        LocalDate endpointDate = valuations.getLast().date();
         LocalDate requestedStart = range.startDate(endpointDate);
         if (requestedStart == null) requestedStart = inception;
         int baselineIndex = baselineIndex(valuations, requestedStart);
@@ -78,14 +80,14 @@ public class PerformanceEngine {
 
         BigDecimal twr = points.isEmpty() ? null : points.getLast().returnRate();
         BigDecimal cagr = inception == null ? null : annualizedSinceInception(allLevels, inception, endpointDate);
-        BigDecimal xirr = xirr(current);
+        BigDecimal xirr = liveIncluded ? xirr(current) : null;
         BigDecimal maximumDrawdown = maximumDrawdown(points);
         FreshnessStatus status = points.size() < 2 ? FreshnessStatus.INSUFFICIENT_HISTORY
                 : points.getLast().dataStatus();
 
         return new PortfolioPerformanceResponse(range.code(), requestedStart,
                 valuations.get(baselineIndex).date(), inception, endpointDate,
-                current == null ? null : current.asOf(), twr, cagr, xirr, maximumDrawdown,
+                liveIncluded ? current.asOf() : null, twr, cagr, xirr, maximumDrawdown,
                 status, liveIncluded, source.externalFlowModel(), List.copyOf(points));
     }
 
@@ -116,6 +118,7 @@ public class PerformanceEngine {
             BigDecimal currentFlow = zero(current.cumulativeExternalFlow());
             BigDecimal externalFlow = currentFlow.subtract(previousFlow, MC);
             BigDecimal numerator = current.totalValue().subtract(externalFlow, MC);
+            if (!positive(numerator)) continue;
             BigDecimal gross = numerator.divide(previous.totalValue(), MC);
             level = level.multiply(gross, MC);
             result.add(new LevelPoint(current.date(), current.asOf(), level, current.pointType(), current.dataStatus()));

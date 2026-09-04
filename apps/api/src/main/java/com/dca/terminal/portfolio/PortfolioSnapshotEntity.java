@@ -23,9 +23,9 @@ public class PortfolioSnapshotEntity extends CreatedEntity {
     private LocalDate snapshotDate;
     @Column(name = "market_value", nullable = false, precision = 20, scale = 6)
     private BigDecimal marketValue;
-    @Column(name = "securities_value", nullable = false, precision = 20, scale = 6)
+    @Column(name = "securities_value", precision = 20, scale = 6)
     private BigDecimal securitiesValue;
-    @Column(name = "cash_balance", nullable = false, precision = 20, scale = 6)
+    @Column(name = "cash_balance", precision = 20, scale = 6)
     private BigDecimal cashBalance;
     @Column(name = "cost_basis", nullable = false, precision = 20, scale = 6)
     private BigDecimal costBasis;

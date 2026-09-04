@@ -18,7 +18,7 @@ describe('query key and invalidation policy', () => {
     ])
   })
 
-  it('invalidates linked plan projections without broad prefixes after a transaction mutation', async () => {
+  it('invalidates linked plan and realtime performance projections after a transaction mutation', async () => {
     const queryClient = new QueryClient()
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries').mockResolvedValue(undefined)
 
@@ -27,6 +27,7 @@ describe('query key and invalidation policy', () => {
     expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([
       queryKeys.transactions,
       queryKeys.dashboard,
+      queryKeys.portfolioPerformance,
       queryKeys.planCycles('plan-1'),
       queryKeys.recommendation('plan-1'),
       queryKeys.contributionAnalysis('plan-1'),

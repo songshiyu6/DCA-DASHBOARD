@@ -40,6 +40,7 @@ const demoApiProxy = {
   login: (username: string, password: string) => loadDemoApi().then((adapter) => adapter.login(username, password)),
   logout: () => loadDemoApi().then((adapter) => adapter.logout()),
   getDashboard: () => loadDemoApi().then((adapter) => adapter.getDashboard()),
+  getPortfolioPerformance: (range: Parameters<typeof liveApi.getPortfolioPerformance>[0]) => loadDemoApi().then((adapter) => adapter.getPortfolioPerformance(range)),
   getInstruments: () => loadDemoApi().then((adapter) => adapter.getInstruments()),
   searchInstruments: (query: string) => loadDemoApi().then((adapter) => adapter.searchInstruments(query)),
   getInstrument: (symbol: string) => loadDemoApi().then((adapter) => adapter.getInstrument(symbol)),

@@ -73,7 +73,7 @@ describe('dashboard market refresh', () => {
     await waitFor(() => expect(mockedApi.getDashboard.mock.calls.length).toBeGreaterThanOrEqual(2))
   })
 
-  it('groups portfolio value, net investment, and cumulative performance in the primary summary', async () => {
+  it('groups portfolio value and P/L without presenting simple net-invested ROI as performance', async () => {
     renderPage()
 
     const summary = await screen.findByLabelText('Portfolio')
@@ -81,9 +81,26 @@ describe('dashboard market refresh', () => {
     expect(within(summary).getByText('Net investment')).toBeInTheDocument()
     expect(within(summary).getByText('$990.00')).toBeInTheDocument()
     expect(within(summary).getByText('Cumulative P/L')).toBeInTheDocument()
+    expect(within(summary).getByText('+$10.00')).toBeInTheDocument()
+    expect(within(summary).queryByText('+1.01%')).not.toBeInTheDocument()
     expect(screen.getByText('Long-term performance')).toBeInTheDocument()
     expect(screen.getByText('CAGR')).toBeInTheDocument()
     expect(screen.getByText('XIRR')).toBeInTheDocument()
+  })
+
+  it('uses one regular-close TWR basis for YTD and since-inception performance', async () => {
+    renderPage()
+
+    const ytdLabel = await screen.findByText('YTD · TWR')
+    const ytdCard = ytdLabel.closest('.metric-card')
+    expect(ytdCard).not.toBeNull()
+    expect(within(ytdCard as HTMLElement).getByText('+$5.00')).toBeInTheDocument()
+    expect(within(ytdCard as HTMLElement).getByText('+0.51%')).toBeInTheDocument()
+
+    const longTerm = screen.getByText('Long-term performance').closest('.dashboard-long-term-heading')
+    expect(longTerm).not.toBeNull()
+    expect(within(longTerm as HTMLElement).getByText(/Since inception TWR/)).toBeInTheDocument()
+    expect(within(longTerm as HTMLElement).getByText('+0.51%')).toBeInTheDocument()
   })
 
   it('shows the opening skipped month as initial capital without adding it to DCA totals', async () => {

@@ -47,7 +47,22 @@ jobs:
         run: npm ci
 
       - name: Audit production web dependencies
-        run: npm audit --omit=dev
+        run: |
+          audit_log="$(mktemp)"
+          trap 'rm -f "$audit_log"' EXIT
+          set +e
+          npm audit --omit=dev --fetch-retries=1 --fetch-timeout=60000 >"$audit_log" 2>&1
+          audit_status=$?
+          set -e
+          cat "$audit_log"
+          if [ "$audit_status" -eq 0 ]; then
+            exit 0
+          fi
+          if grep -Eqi '503 Service Unavailable|audit endpoint returned an error|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ERR_SOCKET_TIMEOUT' "$audit_log"; then
+            echo "::warning::npm audit service unavailable; vulnerability gate could not be evaluated in this run."
+            exit 0
+          fi
+          exit "$audit_status"
 
       - name: Run web lint when defined
         run: |

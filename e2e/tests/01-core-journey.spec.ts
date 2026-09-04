@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 import { appBusinessDate, assertNoFixtureLeak, login, setMockChart } from '../playwright.config'
 
 test.describe('E2E-01 core journey @smoke', () => {
-  test('login, track VOO, plan, BUY, and ledger-derived dashboard persist after refresh', async ({ page, context }) => {
+  test('login, track VOO, plan, DEPOSIT, BUY, and ledger-derived dashboard persist after refresh', async ({ page, context }) => {
     await setMockChart('ok')
     await login(page)
 
@@ -35,24 +35,26 @@ test.describe('E2E-01 core journey @smoke', () => {
     await page.getByRole('button', { name: /Create plan|Save changes/ }).click()
     await expect(page.getByText('Saved')).toBeVisible()
 
-    await page.getByRole('link', { name: 'Transactions' }).click()
-    await page.getByRole('button', { name: 'Add transaction' }).click()
     const isoDate = appBusinessDate()
-    await page.getByLabel('Date').fill(isoDate)
-    await page.getByLabel('Ticker').fill('VOO')
-    await page.getByLabel('Quantity').fill('10')
-    await page.getByLabel('Unit price').fill('100')
-    await page.getByLabel('Fee').fill('0')
-    const cycleLabel = new Date(`${isoDate}T12:00:00Z`).toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    })
-    const cycleSelect = page.getByLabel('Plan cycle')
-    const matchingCycle = cycleSelect.locator('option', { hasText: cycleLabel })
-    if (await matchingCycle.count()) {
-      await cycleSelect.selectOption({ label: cycleLabel })
-    }
+    await page.getByRole('link', { name: 'Transactions' }).click()
+
+    // Cash enters the account independently from the security purchase.
+    await page.getByRole('button', { name: 'Add transaction' }).click()
+    await page.locator('#transaction-type').selectOption('DEPOSIT')
+    await page.locator('#transaction-date').fill(isoDate)
+    await page.locator('#transaction-amount').fill('1000')
+    await page.getByRole('button', { name: 'Save transaction' }).click()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    await expect(page.getByRole('table')).toContainText('DEPOSIT')
+
+    // BUY consumes account cash but does not create another external contribution.
+    await page.getByRole('button', { name: 'Add transaction' }).click()
+    await page.locator('#transaction-type').selectOption('BUY')
+    await page.locator('#transaction-date').fill(isoDate)
+    await page.locator('#transaction-symbol').fill('VOO')
+    await page.locator('#transaction-quantity').fill('10')
+    await page.locator('#transaction-price').fill('100')
+    await page.locator('#transaction-fee').fill('0')
     await page.getByRole('button', { name: 'Save transaction' }).click()
     await expect(page.getByRole('dialog')).toHaveCount(0)
     await expect(page.getByRole('table')).toContainText('10')

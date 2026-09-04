@@ -16,6 +16,11 @@ const mockedApi = vi.hoisted(() => ({
 
 vi.mock('../lib/api', () => ({ api: mockedApi }))
 vi.mock('../components/charts/PortfolioChart', () => ({ PortfolioChart: () => <div data-testid="portfolio-chart" /> }))
+vi.mock('../components/charts/PortfolioPerformancePanel', () => ({
+  PortfolioPerformancePanel: (props: { inceptionCagr?: string | null; inceptionXirr?: string | null; maxDrawdown?: string | null }) => (
+    <div data-testid="performance-panel" data-cagr={props.inceptionCagr ?? ''} data-xirr={props.inceptionXirr ?? ''} data-max-drawdown={props.maxDrawdown ?? ''} />
+  ),
+}))
 
 const dashboardData: DashboardData = {
   summary: {
@@ -73,25 +78,27 @@ describe('dashboard market refresh', () => {
     await waitFor(() => expect(mockedApi.getDashboard.mock.calls.length).toBeGreaterThanOrEqual(2))
   })
 
-  it('groups live portfolio value, cumulative P/L, and live TWR in the primary summary', async () => {
+  it('presents Portfolio, Today, and Cash without the old standalone YTD or inception TWR cards', async () => {
     renderPage()
 
-    const summary = await screen.findByLabelText('Portfolio')
-    const portfolioCard = summary.querySelector('.portfolio-summary-card')
-    expect(portfolioCard).not.toBeNull()
-    const portfolio = within(portfolioCard as HTMLElement)
-    expect(portfolio.getByText('$1,000.00')).toBeInTheDocument()
-    expect(portfolio.getByText('Net investment')).toBeInTheDocument()
-    expect(portfolio.getByText('$990.00')).toBeInTheDocument()
-    expect(portfolio.getByText('Cumulative P/L · live TWR')).toBeInTheDocument()
-    expect(portfolio.getByText(/\+\$10\.00/)).toBeInTheDocument()
-    expect(portfolio.getByText('+1.01%')).toBeInTheDocument()
-    expect(screen.getByText('Long-term performance')).toBeInTheDocument()
-    expect(screen.getByText('CAGR')).toBeInTheDocument()
-    expect(screen.getByText('XIRR')).toBeInTheDocument()
+    const portfolio = await screen.findByLabelText('Portfolio')
+    expect(within(portfolio).getByText('Total value')).toBeInTheDocument()
+    expect(within(portfolio).getByText('$1,000.00')).toBeInTheDocument()
+    expect(within(portfolio).getByText('Net investment')).toBeInTheDocument()
+    expect(within(portfolio).getByText('$990.00')).toBeInTheDocument()
+    expect(within(portfolio).getByText('Cumulative P/L')).toBeInTheDocument()
+    expect(within(portfolio).getByText('+$10.00')).toBeInTheDocument()
+    expect(within(portfolio).getByText('Cumulative return · ALL TWR')).toBeInTheDocument()
+    expect(within(portfolio).getByText('+1.01%')).toBeInTheDocument()
+
+    expect(screen.getByText('Today')).toBeInTheDocument()
+    expect(screen.getByLabelText('Cash')).toBeInTheDocument()
+    expect(screen.queryByText('YTD · TWR')).not.toBeInTheDocument()
+    expect(screen.queryByText('Long-term performance')).not.toBeInTheDocument()
+    expect(screen.queryByText('Since inception TWR')).not.toBeInTheDocument()
   })
 
-  it('uses the live current valuation for YTD and since-inception TWR while adjusting for contributions', async () => {
+  it('keeps the latest main live-valuation semantics for ALL TWR while adjusting external contributions', async () => {
     mockedApi.getDashboard.mockResolvedValue({
       data: {
         ...dashboardData,
@@ -111,24 +118,49 @@ describe('dashboard market refresh', () => {
 
     renderPage()
 
-    const summary = await screen.findByLabelText('Portfolio')
-    const portfolioCard = summary.querySelector('.portfolio-summary-card')
-    expect(portfolioCard).not.toBeNull()
-    const portfolio = within(portfolioCard as HTMLElement)
-    expect(portfolio.getByText(/\+\$20\.00/)).toBeInTheDocument()
-    expect(portfolio.getByText('+20.00%')).toBeInTheDocument()
-    expect(portfolio.queryByText('+10.00%')).not.toBeInTheDocument()
+    const portfolio = await screen.findByLabelText('Portfolio')
+    expect(within(portfolio).getByText('$220.00')).toBeInTheDocument()
+    expect(within(portfolio).getByText('+$20.00')).toBeInTheDocument()
+    expect(within(portfolio).getByText('+20.00%')).toBeInTheDocument()
+    expect(within(portfolio).queryByText('+10.00%')).not.toBeInTheDocument()
+  })
 
-    const ytdLabel = screen.getByText('YTD · TWR')
-    const ytdCard = ytdLabel.closest('.metric-card')
-    expect(ytdCard).not.toBeNull()
-    expect(within(ytdCard as HTMLElement).getByText('+$20.00')).toBeInTheDocument()
-    expect(within(ytdCard as HTMLElement).getByText('+20.00%')).toBeInTheDocument()
+  it('uses optional PR A cash fields when available instead of inventing a cash balance', async () => {
+    const cashReady = {
+      ...dashboardData,
+      summary: {
+        ...dashboardData.summary,
+        cashBalance: '250.00',
+        securitiesValue: '1000.00',
+        totalPortfolioValue: '1250.00',
+        cashAllocation: '0.20',
+        allTwr: '0.12',
+        cagr: '0.08',
+        maxDrawdown: '-0.06',
+      },
+    } as DashboardData
+    mockedApi.getDashboard.mockResolvedValue({ data: cashReady, meta: { status: 'FRESH', source: 'API', retrievedAt: '2026-08-28T16:00:00Z' } })
 
-    const longTerm = screen.getByText('Long-term performance').closest('.dashboard-long-term-heading')
-    expect(longTerm).not.toBeNull()
-    expect(within(longTerm as HTMLElement).getByText(/Since inception TWR · live/)).toBeInTheDocument()
-    expect(within(longTerm as HTMLElement).getByText('+20.00%')).toBeInTheDocument()
+    renderPage()
+
+    const portfolio = await screen.findByLabelText('Portfolio')
+    expect(within(portfolio).getByText('$1,250.00')).toBeInTheDocument()
+    expect(within(portfolio).getByText('+12.00%')).toBeInTheDocument()
+
+    const cash = screen.getByLabelText('Cash')
+    expect(within(cash).getByText('Cash balance')).toBeInTheDocument()
+    expect(within(cash).getByText('$250.00')).toBeInTheDocument()
+    expect(within(cash).getByText('Securities value')).toBeInTheDocument()
+    expect(within(cash).getByText('$1,000.00')).toBeInTheDocument()
+    expect(within(cash).getByText('Total portfolio value')).toBeInTheDocument()
+    expect(within(cash).getByText('$1,250.00')).toBeInTheDocument()
+    expect(within(cash).getByText('Cash allocation')).toBeInTheDocument()
+    expect(within(cash).getByText('20.00%')).toBeInTheDocument()
+
+    const performance = await screen.findByTestId('performance-panel')
+    expect(performance).toHaveAttribute('data-cagr', '0.08')
+    expect(performance).toHaveAttribute('data-xirr', '0.05')
+    expect(performance).toHaveAttribute('data-max-drawdown', '-0.06')
   })
 
   it('shows the opening skipped month as initial capital without adding it to DCA totals', async () => {

@@ -1,5 +1,6 @@
+import type { ComponentProps } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import '../../lib/i18n'
 import type { PortfolioHistoryPoint } from '../../types'
@@ -12,10 +13,10 @@ const mockedBenchmarksApi = vi.hoisted(() => ({
 
 vi.mock('../../lib/api/benchmarks', () => ({ benchmarksApi: mockedBenchmarksApi }))
 
-function renderPanel(history: PortfolioHistoryPoint[] = []) {
+function renderPanel(history: PortfolioHistoryPoint[] = [], props: Partial<ComponentProps<typeof PortfolioPerformancePanel>> = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const renderWithHistory = (points: PortfolioHistoryPoint[]) => (
-    <QueryClientProvider client={queryClient}><PortfolioPerformancePanel history={points} /></QueryClientProvider>
+    <QueryClientProvider client={queryClient}><PortfolioPerformancePanel history={points} {...props} /></QueryClientProvider>
   )
   const view = render(renderWithHistory(history))
   return {
@@ -84,5 +85,37 @@ describe('portfolio performance benchmark search', () => {
     view.rerenderPanel(september3)
 
     await waitFor(() => expect(mockedBenchmarksApi.history).toHaveBeenCalledTimes(2))
+  })
+})
+
+describe('performance range summary', () => {
+  it('offers ALL and uses PR B range summary values when provided', () => {
+    renderPanel([], {
+      inceptionCagr: '0.08',
+      inceptionXirr: '0.07',
+      maxDrawdown: '-0.12',
+      rangeSummary: {
+        ALL: { twr: '0.25', cagr: '0.10', xirr: '0.09', maxDrawdown: '-0.15' },
+      },
+    })
+
+    expect(screen.getByRole('heading', { name: 'Investment performance (TWR)' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'ALL' }))
+
+    const summary = screen.getByLabelText('Performance summary')
+    expect(within(summary).getByText('ALL TWR')).toBeInTheDocument()
+    expect(within(summary).getByText('+25.00%')).toBeInTheDocument()
+    expect(within(summary).getByText('+10.00%')).toBeInTheDocument()
+    expect(within(summary).getByText('+9.00%')).toBeInTheDocument()
+    expect(within(summary).getByText('-15.00%')).toBeInTheDocument()
+    expect(within(summary).getAllByText('ALL range').length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('labels legacy CAGR/XIRR fallbacks as since-inception metrics instead of pretending they follow the selected range', () => {
+    renderPanel([], { inceptionCagr: '0.08', inceptionXirr: '0.07' })
+
+    const summary = screen.getByLabelText('Performance summary')
+    expect(within(summary).getByText('Since inception annualized')).toBeInTheDocument()
+    expect(within(summary).getByText('Since inception money-weighted')).toBeInTheDocument()
   })
 })

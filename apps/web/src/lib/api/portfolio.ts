@@ -1,4 +1,5 @@
 import type { DashboardData, DashboardSummary, DataStatus } from '../../types'
+import { decimal } from '../format'
 import { apiMeta, request, type ApiResponse } from './transport'
 import { dataStatus, isRecord, normalizeApiResponse, normalizeDashboardData, normalizeResult } from './normalize'
 
@@ -66,6 +67,10 @@ function preserveOptionalSummaryFields(raw: unknown, normalized: DashboardData):
     const value = envelope.data.summary[field]
     if (typeof value === 'string' || typeof value === 'number') target[field] = String(value)
     else if (value === null) target[field] = null
+  }
+  if (target.cashAllocation == null && target.cashBalance != null) {
+    const total = decimal(target.marketValue)
+    target.cashAllocation = total.isZero() ? '0' : decimal(target.cashBalance).div(total).toString()
   }
   return normalized
 }

@@ -27,8 +27,8 @@ public class TransactionEntity extends PersistedEntity {
     @Column(name = "ledger_order", nullable = false, updatable = false)
     private Long ledgerOrder;
 
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "instrument_id", nullable = false)
+    @ManyToOne(fetch = FetchType.LAZY, optional = true)
+    @JoinColumn(name = "instrument_id", nullable = true)
     private InstrumentEntity instrument;
 
     @Column(name = "plan_cycle_id")

@@ -6,8 +6,8 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
-import java.time.LocalDate;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -15,7 +15,7 @@ public final class TransactionDtos {
     private TransactionDtos() { }
 
     public record TransactionRequest(
-            @JsonAlias("symbol") @NotBlank String instrumentSymbol,
+            @JsonAlias("symbol") String instrumentSymbol,
             @JsonAlias("type") @NotNull TransactionType transactionType,
             @NotNull LocalDate tradeDate,
             @DecimalMin(value = "0.00000001", inclusive = true) BigDecimal quantity,
@@ -44,9 +44,17 @@ public final class TransactionDtos {
             String notes, Instant createdAt, Instant updatedAt, Long ledgerOrder) { }
 
     public record CsvRowRequest(
-            @NotBlank String date, @NotBlank String type, @NotBlank String symbol,
+            @NotBlank String date, @NotBlank String type, String symbol,
             String quantity, String price, String fee, String amount,
-            @JsonAlias("plan_cycle_id") String planCycleId, String notes) { }
+            @JsonAlias("plan_cycle_id") String planCycleId,
+            @JsonAlias("contribution_type") String contributionType,
+            @JsonAlias("contribution_plan_id") String contributionPlanId,
+            String notes) {
+        public CsvRowRequest(String date, String type, String symbol, String quantity, String price, String fee,
+                             String amount, String planCycleId, String notes) {
+            this(date, type, symbol, quantity, price, fee, amount, planCycleId, null, null, notes);
+        }
+    }
 
     public record CsvRowPreview(int rowNumber, CsvRowRequest row, boolean valid, List<String> errors,
                                 String fingerprint) { }

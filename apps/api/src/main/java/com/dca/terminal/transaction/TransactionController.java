@@ -1,5 +1,6 @@
 package com.dca.terminal.transaction;
 
+import com.dca.terminal.instrument.InstrumentEntity;
 import com.dca.terminal.transaction.TransactionDtos.CsvCommitRequest;
 import com.dca.terminal.transaction.TransactionDtos.CsvCommitResponse;
 import com.dca.terminal.transaction.TransactionDtos.CsvPreviewResponse;
@@ -63,10 +64,11 @@ public class TransactionController {
     public CsvCommitResponse commit(@Valid @RequestBody CsvCommitRequest request) { return service.commit(request); }
 
     private TransactionResponse response(TransactionEntity entity) {
-        return new TransactionResponse(entity.getId(), entity.getInstrument().getSymbol(), entity.getInstrument().getName(),
-                entity.getTransactionType(), entity.getTradeDate(), entity.getQuantity(), entity.getUnitPrice(),
-                entity.getAmount(), entity.getFee(), entity.getCurrency(), entity.getPlanCycleId(),
-                entity.getContributionType(), entity.getContributionPlanId(), entity.getNotes(),
+        InstrumentEntity instrument = entity.getInstrument();
+        return new TransactionResponse(entity.getId(), instrument == null ? null : instrument.getSymbol(),
+                instrument == null ? null : instrument.getName(), entity.getTransactionType(), entity.getTradeDate(),
+                entity.getQuantity(), entity.getUnitPrice(), entity.getAmount(), entity.getFee(), entity.getCurrency(),
+                entity.getPlanCycleId(), entity.getContributionType(), entity.getContributionPlanId(), entity.getNotes(),
                 entity.getCreatedAt(), entity.getUpdatedAt(), entity.getLedgerOrder());
     }
 }

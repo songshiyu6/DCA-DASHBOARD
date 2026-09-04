@@ -13,8 +13,9 @@ import org.springframework.data.repository.query.Param;
 public interface TransactionRepository extends JpaRepository<TransactionEntity, UUID> {
     @Query("""
             select tx from TransactionEntity tx
-            join fetch tx.instrument instrument
-            where lower(instrument.symbol) = lower(coalesce(:symbol, instrument.symbol))
+            left join fetch tx.instrument instrument
+            where lower(coalesce(instrument.symbol, '')) =
+                  lower(coalesce(:symbol, coalesce(instrument.symbol, '')))
               and tx.tradeDate >= coalesce(:fromDate, tx.tradeDate)
               and tx.tradeDate <= coalesce(:toDate, tx.tradeDate)
             order by tx.tradeDate asc, tx.ledgerOrder asc, tx.id asc
@@ -30,13 +31,27 @@ public interface TransactionRepository extends JpaRepository<TransactionEntity, 
     List<TransactionEntity> findAllByPlanCycleIdOrderByTradeDateAscLedgerOrderAscIdAsc(UUID planCycleId);
     Optional<TransactionEntity> findTopByOrderByLedgerOrderDesc();
     boolean existsByImportFingerprint(String fingerprint);
+
+    // Historical product semantics deliberately key the initial-capital month off an actual INITIAL BUY,
+    // not merely an INITIAL DEPOSIT that has not yet been invested. Keep the existing method signature so
+    // PlanService and its mocks remain stable while cash-source rows become first-class ledger events.
+    @Query("""
+            select (count(tx) > 0) from TransactionEntity tx
+            where tx.transactionType = com.dca.terminal.transaction.TransactionType.BUY
+              and tx.contributionType = :contributionType
+              and tx.contributionPlanId = :contributionPlanId
+              and tx.tradeDate between :fromDate and :toDate
+            """)
     boolean existsByContributionTypeAndContributionPlanIdAndTradeDateBetween(
-            ContributionType contributionType, UUID contributionPlanId, LocalDate from, LocalDate to);
+            @Param("contributionType") ContributionType contributionType,
+            @Param("contributionPlanId") UUID contributionPlanId,
+            @Param("fromDate") LocalDate from,
+            @Param("toDate") LocalDate to);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
             select tx from TransactionEntity tx
-            join fetch tx.instrument
+            left join fetch tx.instrument
             where tx.id in :ids
             """)
     List<TransactionEntity> findAllByIdInForUpdate(@Param("ids") List<UUID> ids);

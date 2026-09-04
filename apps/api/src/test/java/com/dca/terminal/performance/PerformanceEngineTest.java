@@ -12,6 +12,39 @@ import static org.assertj.core.api.Assertions.assertThat;
 class PerformanceEngineTest {
 
     @Test
+    void inceptionCloseKeepsReturnEarnedAfterInitialFunding() {
+        StubSource source = new StubSource(
+                List.of(day("2026-09-01", "1100", "1000")),
+                null,
+                List.of(flow("2026-09-01", "1000"))
+        );
+
+        var result = new PerformanceEngine(source).performance("ALL");
+
+        assertThat(result.twr()).isEqualByComparingTo("0.1");
+        assertThat(result.points()).singleElement().satisfies(point -> {
+            assertThat(point.level()).isEqualByComparingTo("1.1");
+            assertThat(point.returnRate()).isEqualByComparingTo("0.1");
+        });
+    }
+
+    @Test
+    void liveOnlyInceptionHasAValidCapitalBaseline() {
+        StubSource source = new StubSource(
+                List.of(),
+                current("2026-09-01", "1100", "1000", FreshnessStatus.FRESH),
+                List.of(flow("2026-09-01", "1000"))
+        );
+
+        var result = new PerformanceEngine(source).performance("ALL");
+
+        assertThat(result.inceptionDate()).isEqualTo(LocalDate.parse("2026-09-01"));
+        assertThat(result.endpointDate()).isEqualTo(LocalDate.parse("2026-09-01"));
+        assertThat(result.twr()).isEqualByComparingTo("0.1");
+        assertThat(result.liveEndpointIncluded()).isTrue();
+    }
+
+    @Test
     void depositChangesCapitalButNotPerformance() {
         StubSource source = new StubSource(
                 List.of(

@@ -1,6 +1,5 @@
 package com.dca.terminal.portfolio;
 
-import com.dca.terminal.common.DecimalMath;
 import com.dca.terminal.common.DomainException;
 import com.dca.terminal.common.FreshnessStatus;
 import com.dca.terminal.instrument.InstrumentDtos.QuoteResponse;
@@ -10,21 +9,22 @@ import com.dca.terminal.marketdata.MarketDataEntities.PriceDailyEntity;
 import com.dca.terminal.marketdata.MarketDataEntities.QuoteLatestEntity;
 import com.dca.terminal.marketdata.MarketDataEntities.SplitEventEntity;
 import com.dca.terminal.marketdata.MarketDataService;
-import com.dca.terminal.marketdata.ProviderPriority;
-import com.dca.terminal.marketdata.ProviderId;
 import com.dca.terminal.marketdata.PriceDailyRepository;
+import com.dca.terminal.marketdata.ProviderId;
+import com.dca.terminal.marketdata.ProviderPriority;
 import com.dca.terminal.marketdata.QuoteLatestRepository;
 import com.dca.terminal.marketdata.SplitEventRepository;
-import com.dca.terminal.plan.InvestmentPlanAssetEntity;
+import com.dca.terminal.observability.ObservabilityMetrics;
 import com.dca.terminal.plan.AssetRepository;
+import com.dca.terminal.plan.InvestmentPlanAssetEntity;
 import com.dca.terminal.plan.PlanRepository;
 import com.dca.terminal.plan.PlanStatus;
+import com.dca.terminal.transaction.CashLedgerCalculator;
 import com.dca.terminal.transaction.FifoCalculator;
 import com.dca.terminal.transaction.TransactionEntity;
 import com.dca.terminal.transaction.TransactionRepository;
 import com.dca.terminal.transaction.TransactionType;
 import com.dca.terminal.transaction.XirrCalculator;
-import com.dca.terminal.observability.ObservabilityMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import java.math.BigDecimal;
@@ -34,7 +34,6 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -47,7 +46,6 @@ import java.util.TreeMap;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -169,17 +167,13 @@ public class PortfolioService {
             List<ProviderId> priority = marketDataService.providerPriority();
             Map<UUID, List<SplitEventEntity>> splits = splitMap(allTransactions, end, priority);
             Map<UUID, List<PriceDailyEntity>> prices = historicalPrices(allTransactions, end, priority);
-            FifoCalculator.Replay replay = FifoCalculator.replay(allTransactions, splits, priority);
-            Map<LocalDate, BigDecimal> dailyNetInvested = allTransactions.stream()
-                    .collect(Collectors.toMap(TransactionEntity::getTradeDate, this::netInvestedChange,
-                            (first, second) -> first.add(second, MC)));
-            BigDecimal cumulativeNetInvested = netInvested(allTransactions, start.minusDays(1));
+            FifoCalculator.Replay securityReplay = FifoCalculator.replay(allTransactions, splits, priority);
+            CashLedgerCalculator.Replay cashReplay = CashLedgerCalculator.replay(allTransactions);
             for (LocalDate date = start; !date.isAfter(end); date = date.plusDays(1)) {
-                FifoCalculator.Calculation calculation = replay.calculateThrough(date);
-                cumulativeNetInvested = cumulativeNetInvested.add(
-                        dailyNetInvested.getOrDefault(date, BigDecimal.ZERO), MC);
+                FifoCalculator.Calculation calculation = securityReplay.calculateThrough(date);
+                CashLedgerCalculator.Calculation cash = cashReplay.calculateThrough(date);
                 if (!merged.containsKey(date)) {
-                    merged.put(date, replayHistoryPoint(date, calculation, cumulativeNetInvested, prices));
+                    merged.put(date, replayHistoryPoint(date, calculation, cash, prices));
                 }
             }
             return new ArrayList<>(merged.values());
@@ -188,6 +182,7 @@ public class PortfolioService {
         }
     }
 
+    /** Per-instrument security market values. Cash is intentionally not represented as a pseudo instrument. */
     @Transactional(readOnly = true)
     public Map<UUID, BigDecimal> currentMarketValues() {
         Ledger ledger = ledger(today());
@@ -230,6 +225,8 @@ public class PortfolioService {
             PortfolioSnapshotEntity entity = snapshotRepository.findBySnapshotDate(date).orElseGet(PortfolioSnapshotEntity::new);
             entity.setSnapshotDate(date);
             entity.setMarketValue(summary.marketValue());
+            entity.setSecuritiesValue(summary.securitiesValue());
+            entity.setCashBalance(summary.cashBalance());
             entity.setCostBasis(summary.costBasis());
             entity.setNetCashFlow(summary.netInvested());
             entity.setRealizedPnl(summary.realizedPnl());
@@ -244,7 +241,8 @@ public class PortfolioService {
     }
 
     private List<HoldingResponse> holdings(Ledger ledger) {
-        BigDecimal total = ledger.marketValue;
+        // Holding allocation is a securities-allocation concept. Cash is surfaced separately in SummaryResponse.
+        BigDecimal total = ledger.securitiesValue;
         return ledger.calculation.positions().stream()
                 .filter(position -> position.shares().signum() != 0)
                 .sorted(Comparator.comparing(position -> ledger.instruments.get(position.instrumentId()).getSymbol()))
@@ -252,7 +250,7 @@ public class PortfolioService {
     }
 
     private List<PortfolioDtos.AllocationResponse> allocation(Ledger ledger) {
-        BigDecimal total = ledger.marketValue;
+        BigDecimal total = ledger.securitiesValue;
         Map<UUID, InvestmentPlanAssetEntity> planned = new LinkedHashMap<>();
         planRepository.findFirstByStatus(PlanStatus.ACTIVE)
                 .ifPresent(plan -> planAssetRepository.findAllByPlanIdOrderByIdAsc(plan.getId())
@@ -288,20 +286,25 @@ public class PortfolioService {
 
     private Ledger ledger(LocalDate asOf, PriceMode priceMode) {
         Timer.Sample sample = ObservabilityMetrics.start(meterRegistry);
-        List<TransactionEntity> transactions = transactionRepository.findAllByTradeDateLessThanEqualOrderByTradeDateAscLedgerOrderAscIdAsc(asOf);
+        List<TransactionEntity> transactions = transactionRepository
+                .findAllByTradeDateLessThanEqualOrderByTradeDateAscLedgerOrderAscIdAsc(asOf);
         try {
             List<ProviderId> priority = marketDataService.providerPriority();
             Map<UUID, List<SplitEventEntity>> splits = splitMap(transactions, asOf, priority);
             FifoCalculator.Calculation calculation = FifoCalculator.calculate(transactions, splits, asOf, priority);
+            CashLedgerCalculator.Calculation cash = CashLedgerCalculator.calculate(transactions, asOf);
             Map<UUID, InstrumentEntity> instruments = transactions.stream()
-                    .collect(Collectors.toMap(transaction -> transaction.getInstrument().getId(), TransactionEntity::getInstrument, (a, b) -> a, LinkedHashMap::new));
+                    .map(TransactionEntity::getInstrument).filter(java.util.Objects::nonNull)
+                    .collect(Collectors.toMap(InstrumentEntity::getId, instrument -> instrument,
+                            (a, b) -> a, LinkedHashMap::new));
             Map<UUID, BigDecimal> values = new LinkedHashMap<>();
             Map<UUID, PriceAtDate> prices = new HashMap<>();
-            Set<UUID> positionIds = calculation.positions().stream().map(FifoCalculator.Position::instrumentId).collect(Collectors.toSet());
+            Set<UUID> positionIds = calculation.positions().stream().map(FifoCalculator.Position::instrumentId)
+                    .collect(Collectors.toSet());
             Map<UUID, PriceAtDate> loadedPrices = priceMode == PriceMode.LIVE
                     ? loadCurrentPrices(positionIds, asOf, priority)
                     : loadRegularClosePrices(positionIds, asOf, priority);
-            BigDecimal marketValue = BigDecimal.ZERO;
+            BigDecimal securitiesValue = BigDecimal.ZERO;
             FreshnessStatus status = FreshnessStatus.FRESH;
             boolean complete = true;
             for (FifoCalculator.Position position : calculation.positions()) {
@@ -315,10 +318,12 @@ public class PortfolioService {
                 }
                 BigDecimal value = position.shares().multiply(price.price(), MC);
                 values.put(position.instrumentId(), value);
-                marketValue = marketValue.add(value, MC);
+                securitiesValue = securitiesValue.add(value, MC);
                 if (price.status() != FreshnessStatus.FRESH) status = FreshnessStatus.PARTIAL;
             }
-            return new Ledger(transactions, calculation, instruments, values, prices, marketValue, status, complete);
+            BigDecimal totalValue = securitiesValue.add(cash.cashBalance(), MC);
+            return new Ledger(transactions, calculation, cash, instruments, values, prices,
+                    securitiesValue, cash.cashBalance(), totalValue, status, complete);
         } finally {
             recordReplay(priceMode == PriceMode.LIVE ? "current" : "regular-close", transactions.size(), sample);
         }
@@ -333,14 +338,14 @@ public class PortfolioService {
     private SummaryResponse summary(Ledger ledger, LocalDate asOf) {
         BigDecimal costBasis = ledger.calculation.positions().stream().map(FifoCalculator.Position::costBasis)
                 .reduce(BigDecimal.ZERO, (a, b) -> a.add(b, MC));
-        BigDecimal unrealized = ledger.complete ? ledger.marketValue.subtract(costBasis, MC) : null;
-        BigDecimal invested = netInvested(ledger.transactions, asOf);
-        BigDecimal totalPnl = ledger.complete ? ledger.calculation.realized().add(unrealized, MC)
-                .add(ledger.calculation.dividends(), MC).subtract(ledger.calculation.standaloneFees(), MC) : null;
+        BigDecimal unrealized = ledger.complete ? ledger.securitiesValue.subtract(costBasis, MC) : null;
+        BigDecimal invested = ledger.cash.netExternalFlow();
+        BigDecimal totalPnl = ledger.complete ? ledger.marketValue.subtract(invested, MC) : null;
         BigDecimal xirr = ledger.complete
                 ? XirrCalculator.solve(cashFlows(ledger.transactions, asOf, ledger.marketValue)) : null;
         return new SummaryResponse(ledger.marketValue, costBasis, invested, unrealized, ledger.calculation.realized(),
-                ledger.calculation.dividends(), ledger.calculation.totalFees(), totalPnl, xirr, ledger.status, clock.instant());
+                ledger.calculation.dividends(), ledger.calculation.totalFees(), totalPnl, xirr, ledger.status,
+                clock.instant(), ledger.securitiesValue, ledger.cashBalance, ledger.cash.interestIncome());
     }
 
     private HoldingResponse holding(FifoCalculator.Position position, Ledger ledger, BigDecimal total) {
@@ -361,8 +366,9 @@ public class PortfolioService {
     }
 
     private Map<UUID, List<SplitEventEntity>> splitMap(List<TransactionEntity> transactions, LocalDate asOf,
-                                                      List<ProviderId> priority) {
-        Set<UUID> ids = transactions.stream().map(transaction -> transaction.getInstrument().getId()).collect(Collectors.toSet());
+                                                       List<ProviderId> priority) {
+        Set<UUID> ids = transactions.stream().map(TransactionEntity::getInstrument)
+                .filter(java.util.Objects::nonNull).map(InstrumentEntity::getId).collect(Collectors.toSet());
         if (ids.isEmpty()) return Map.of();
         Map<UUID, Map<LocalDate, SplitEventEntity>> selected = new HashMap<>();
         splitRepository.findAllByInstrumentIdInAndEffectiveDateLessThanEqualOrderByInstrumentIdAscEffectiveDateAsc(ids, asOf)
@@ -375,7 +381,8 @@ public class PortfolioService {
                 .forEach(event -> selected.computeIfAbsent(event.getInstrument().getId(), ignored -> new LinkedHashMap<>())
                         .putIfAbsent(event.getEffectiveDate(), event));
         return selected.entrySet().stream().collect(Collectors.toMap(Map.Entry::getKey,
-                entry -> entry.getValue().values().stream().sorted(Comparator.comparing(SplitEventEntity::getEffectiveDate)).toList()));
+                entry -> entry.getValue().values().stream()
+                        .sorted(Comparator.comparing(SplitEventEntity::getEffectiveDate)).toList()));
     }
 
     private Map<UUID, PriceAtDate> loadCurrentPrices(Collection<UUID> instrumentIds, LocalDate asOf,
@@ -446,28 +453,33 @@ public class PortfolioService {
         PriceDailyEntity price = best < 0 ? null : daily.get(best);
         return price == null || price.getClose() == null || price.getClose().signum() <= 0
                 ? new PriceAtDate(null, FreshnessStatus.UNAVAILABLE, null)
-                : new PriceAtDate(price.getClose(), price.getTradeDate().equals(date) ? FreshnessStatus.FRESH : FreshnessStatus.STALE, null);
+                : new PriceAtDate(price.getClose(), price.getTradeDate().equals(date)
+                ? FreshnessStatus.FRESH : FreshnessStatus.STALE, null);
     }
 
     private HistoryPoint replayHistoryPoint(LocalDate date, FifoCalculator.Calculation calculation,
-                                            BigDecimal netInvested, Map<UUID, List<PriceDailyEntity>> prices) {
-        BigDecimal marketValue = BigDecimal.ZERO;
+                                            CashLedgerCalculator.Calculation cash,
+                                            Map<UUID, List<PriceDailyEntity>> prices) {
+        BigDecimal securitiesValue = BigDecimal.ZERO;
         FreshnessStatus status = FreshnessStatus.FRESH;
         boolean complete = true;
         for (FifoCalculator.Position position : calculation.positions()) {
-            PriceAtDate price = priceAt(position.instrumentId(), date, prices.getOrDefault(position.instrumentId(), List.of()));
+            PriceAtDate price = priceAt(position.instrumentId(), date,
+                    prices.getOrDefault(position.instrumentId(), List.of()));
             if (price.price() == null) {
                 status = FreshnessStatus.PARTIAL;
                 complete = false;
                 continue;
             }
-            marketValue = marketValue.add(position.shares().multiply(price.price(), MC), MC);
+            securitiesValue = securitiesValue.add(position.shares().multiply(price.price(), MC), MC);
             if (price.status() != FreshnessStatus.FRESH) status = FreshnessStatus.PARTIAL;
         }
         BigDecimal costBasis = calculation.positions().stream().map(FifoCalculator.Position::costBasis)
                 .reduce(BigDecimal.ZERO, (a, b) -> a.add(b, MC));
-        return new HistoryPoint(date, complete ? marketValue : null, netInvested, costBasis,
-                complete ? marketValue.subtract(costBasis, MC) : null, status);
+        BigDecimal totalValue = complete ? securitiesValue.add(cash.cashBalance(), MC) : null;
+        return new HistoryPoint(date, totalValue, cash.netExternalFlow(), costBasis,
+                complete ? securitiesValue.subtract(costBasis, MC) : null, status,
+                complete ? securitiesValue : null, cash.cashBalance());
     }
 
     private boolean isUsableSnapshot(PortfolioSnapshotEntity snapshot) {
@@ -477,16 +489,20 @@ public class PortfolioService {
     }
 
     private HistoryPoint historyPoint(PortfolioSnapshotEntity snapshot) {
+        BigDecimal securitiesValue = snapshot.getSecuritiesValue() == null
+                ? snapshot.getMarketValue() : snapshot.getSecuritiesValue();
+        BigDecimal cashBalance = snapshot.getCashBalance() == null ? BigDecimal.ZERO : snapshot.getCashBalance();
         return new HistoryPoint(snapshot.getSnapshotDate(), snapshot.getMarketValue(), snapshot.getNetCashFlow(),
-                snapshot.getCostBasis(), snapshot.getUnrealizedPnl(), snapshot.getDataStatus());
+                snapshot.getCostBasis(), snapshot.getUnrealizedPnl(), snapshot.getDataStatus(),
+                securitiesValue, cashBalance);
     }
 
     private Map<UUID, List<PriceDailyEntity>> historicalPrices(Collection<UUID> instrumentIds, LocalDate asOf,
                                                                List<ProviderId> priority) {
         if (instrumentIds.isEmpty()) return Map.of();
         Map<UUID, Map<LocalDate, PriceDailyEntity>> selected = new HashMap<>();
-        priceRepository.findAllByInstrumentIdInAndTradeDateLessThanEqualOrderByInstrumentIdAscTradeDateDesc(instrumentIds, asOf)
-                .stream()
+        priceRepository.findAllByInstrumentIdInAndTradeDateLessThanEqualOrderByInstrumentIdAscTradeDateDesc(
+                        instrumentIds, asOf).stream()
                 .sorted(Comparator.comparing((PriceDailyEntity row) -> row.getInstrument().getId())
                         .thenComparing(PriceDailyEntity::getTradeDate)
                         .thenComparing(row -> ProviderPriority.rank(row.getSource(), priority))
@@ -495,45 +511,27 @@ public class PortfolioService {
                 .forEach(row -> selected.computeIfAbsent(row.getInstrument().getId(), ignored -> new LinkedHashMap<>())
                         .putIfAbsent(row.getTradeDate(), row));
         return selected.entrySet().stream().collect(Collectors.toMap(Map.Entry::getKey,
-                entry -> entry.getValue().values().stream().sorted(Comparator.comparing(PriceDailyEntity::getTradeDate)).toList()));
+                entry -> entry.getValue().values().stream()
+                        .sorted(Comparator.comparing(PriceDailyEntity::getTradeDate)).toList()));
     }
 
     private Map<UUID, List<PriceDailyEntity>> historicalPrices(List<TransactionEntity> transactions, LocalDate asOf,
                                                                List<ProviderId> priority) {
-        return historicalPrices(transactions.stream().map(transaction -> transaction.getInstrument().getId()).collect(Collectors.toSet()),
-                asOf, priority);
+        Set<UUID> ids = transactions.stream().map(TransactionEntity::getInstrument)
+                .filter(java.util.Objects::nonNull).map(InstrumentEntity::getId).collect(Collectors.toSet());
+        return historicalPrices(ids, asOf, priority);
     }
 
-    private BigDecimal netInvested(List<TransactionEntity> transactions, LocalDate asOf) {
-        BigDecimal result = BigDecimal.ZERO;
-        for (TransactionEntity transaction : transactions) {
-            if (transaction.getTradeDate().isAfter(asOf)) continue;
-            result = result.add(netInvestedChange(transaction), MC);
-        }
-        return result;
-    }
-
-    private BigDecimal netInvestedChange(TransactionEntity transaction) {
-        BigDecimal fee = DecimalMath.zeroIfNull(transaction.getFee());
-        return switch (transaction.getTransactionType()) {
-            case BUY -> transaction.getQuantity().multiply(transaction.getUnitPrice(), MC).add(fee, MC);
-            case SELL -> transaction.getQuantity().multiply(transaction.getUnitPrice(), MC).negate().add(fee, MC);
-            case DIVIDEND, FEE -> BigDecimal.ZERO;
-        };
-    }
-
-    private List<XirrCalculator.CashFlow> cashFlows(List<TransactionEntity> transactions, LocalDate asOf, BigDecimal currentValue) {
+    private List<XirrCalculator.CashFlow> cashFlows(List<TransactionEntity> transactions, LocalDate asOf,
+                                                    BigDecimal currentValue) {
         List<XirrCalculator.CashFlow> flows = new ArrayList<>();
         for (TransactionEntity transaction : transactions) {
             if (transaction.getTradeDate().isAfter(asOf)) continue;
-            BigDecimal fee = DecimalMath.zeroIfNull(transaction.getFee());
-            BigDecimal amount = switch (transaction.getTransactionType()) {
-                case BUY -> transaction.getQuantity().multiply(transaction.getUnitPrice(), MC).add(fee, MC).negate();
-                case SELL -> transaction.getQuantity().multiply(transaction.getUnitPrice(), MC).subtract(fee, MC);
-                case DIVIDEND -> transaction.getAmount();
-                case FEE -> transaction.getAmount().negate();
-            };
-            flows.add(new XirrCalculator.CashFlow(transaction.getTradeDate(), amount));
+            if (transaction.getTransactionType() == TransactionType.DEPOSIT) {
+                flows.add(new XirrCalculator.CashFlow(transaction.getTradeDate(), transaction.getAmount().negate()));
+            } else if (transaction.getTransactionType() == TransactionType.WITHDRAWAL) {
+                flows.add(new XirrCalculator.CashFlow(transaction.getTradeDate(), transaction.getAmount()));
+            }
         }
         if (currentValue != null && currentValue.signum() > 0) {
             flows.add(new XirrCalculator.CashFlow(asOf, currentValue));
@@ -560,7 +558,8 @@ public class PortfolioService {
     public record CurrentValuation(UUID instrumentId, BigDecimal marketValue, BigDecimal price,
                                    FreshnessStatus status) { }
     private record Ledger(List<TransactionEntity> transactions, FifoCalculator.Calculation calculation,
-                          Map<UUID, InstrumentEntity> instruments, Map<UUID, BigDecimal> marketValues,
-                          Map<UUID, PriceAtDate> prices, BigDecimal marketValue, FreshnessStatus status,
-                          boolean complete) { }
+                          CashLedgerCalculator.Calculation cash, Map<UUID, InstrumentEntity> instruments,
+                          Map<UUID, BigDecimal> marketValues, Map<UUID, PriceAtDate> prices,
+                          BigDecimal securitiesValue, BigDecimal cashBalance, BigDecimal marketValue,
+                          FreshnessStatus status, boolean complete) { }
 }

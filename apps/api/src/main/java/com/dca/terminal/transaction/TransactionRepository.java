@@ -13,8 +13,8 @@ import org.springframework.data.repository.query.Param;
 public interface TransactionRepository extends JpaRepository<TransactionEntity, UUID> {
     @Query("""
             select tx from TransactionEntity tx
-            join fetch tx.instrument instrument
-            where lower(instrument.symbol) = lower(coalesce(:symbol, instrument.symbol))
+            left join fetch tx.instrument instrument
+            where (:symbol is null or lower(instrument.symbol) = lower(:symbol))
               and tx.tradeDate >= coalesce(:fromDate, tx.tradeDate)
               and tx.tradeDate <= coalesce(:toDate, tx.tradeDate)
             order by tx.tradeDate asc, tx.ledgerOrder asc, tx.id asc
@@ -36,7 +36,7 @@ public interface TransactionRepository extends JpaRepository<TransactionEntity, 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
             select tx from TransactionEntity tx
-            join fetch tx.instrument
+            left join fetch tx.instrument
             where tx.id in :ids
             """)
     List<TransactionEntity> findAllByIdInForUpdate(@Param("ids") List<UUID> ids);

@@ -89,11 +89,21 @@ public class ContributionAnalysisService {
         BigDecimal unclassifiedAmount = BigDecimal.ZERO;
 
         for (TransactionEntity transaction : transactions) {
+            TransactionType type = transaction.getTransactionType();
+            if (type == TransactionType.DEPOSIT || type == TransactionType.WITHDRAWAL
+                    || type == TransactionType.INTEREST || type == TransactionType.FEE) {
+                // Contribution batches remain BUY-lot attribution. Account cash events and standalone fees do not own lots.
+                continue;
+            }
+            if (transaction.getInstrument() == null) {
+                throw new DomainException(HttpStatus.UNPROCESSABLE_ENTITY, "INVALID_TRANSACTION",
+                        type + " transaction is missing its instrument");
+            }
             UUID instrumentId = transaction.getInstrument().getId();
             instruments.putIfAbsent(instrumentId, transaction.getInstrument());
             Deque<TaggedLot> instrumentLots = lots.computeIfAbsent(instrumentId, ignored -> new ArrayDeque<>());
             applySplitsThrough(instrumentId, instrumentLots, transaction.getTradeDate(), splits, splitIndex);
-            switch (transaction.getTransactionType()) {
+            switch (type) {
                 case BUY -> {
                     BigDecimal cost = buyCost(transaction);
                     BatchKey key = batchKey(transaction, planId, cyclePeriods);
@@ -108,8 +118,11 @@ public class ContributionAnalysisService {
                     }
                 }
                 case SELL -> applySell(transaction, instrumentLots, accumulators);
-                case DIVIDEND, FEE -> {
-                    // V1 deliberately excludes dividends and standalone fees from contribution-batch P/L.
+                case DIVIDEND -> {
+                    // V1 deliberately excludes dividends from contribution-batch P/L.
+                }
+                case FEE, DEPOSIT, WITHDRAWAL, INTEREST -> {
+                    // Handled by the early skip above; listed here to keep the enum contract explicit.
                 }
             }
         }
@@ -236,8 +249,8 @@ public class ContributionAnalysisService {
     }
 
     private Map<UUID, List<SplitEventEntity>> splitMap(List<TransactionEntity> transactions, LocalDate asOf) {
-        Set<UUID> instrumentIds = transactions.stream().map(transaction -> transaction.getInstrument().getId())
-                .collect(Collectors.toSet());
+        Set<UUID> instrumentIds = transactions.stream().map(TransactionEntity::getInstrument)
+                .filter(java.util.Objects::nonNull).map(InstrumentEntity::getId).collect(Collectors.toSet());
         if (instrumentIds.isEmpty()) return Map.of();
         List<ProviderId> priority = marketDataService.providerPriority();
         Map<UUID, Map<LocalDate, SplitEventEntity>> selected = new HashMap<>();

@@ -23,6 +23,10 @@ public class PortfolioSnapshotEntity extends CreatedEntity {
     private LocalDate snapshotDate;
     @Column(name = "market_value", nullable = false, precision = 20, scale = 6)
     private BigDecimal marketValue;
+    @Column(name = "securities_value", nullable = false, precision = 20, scale = 6)
+    private BigDecimal securitiesValue;
+    @Column(name = "cash_balance", nullable = false, precision = 20, scale = 6)
+    private BigDecimal cashBalance;
     @Column(name = "cost_basis", nullable = false, precision = 20, scale = 6)
     private BigDecimal costBasis;
     @Column(name = "net_cash_flow", nullable = false, precision = 20, scale = 6)
@@ -44,6 +48,10 @@ public class PortfolioSnapshotEntity extends CreatedEntity {
     public void setSnapshotDate(LocalDate snapshotDate) { this.snapshotDate = snapshotDate; }
     public BigDecimal getMarketValue() { return marketValue; }
     public void setMarketValue(BigDecimal marketValue) { this.marketValue = marketValue; }
+    public BigDecimal getSecuritiesValue() { return securitiesValue; }
+    public void setSecuritiesValue(BigDecimal securitiesValue) { this.securitiesValue = securitiesValue; }
+    public BigDecimal getCashBalance() { return cashBalance; }
+    public void setCashBalance(BigDecimal cashBalance) { this.cashBalance = cashBalance; }
     public BigDecimal getCostBasis() { return costBasis; }
     public void setCostBasis(BigDecimal costBasis) { this.costBasis = costBasis; }
     public BigDecimal getNetCashFlow() { return netCashFlow; }

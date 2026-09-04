@@ -20,6 +20,8 @@ import java.net.InetSocketAddress;
 import java.net.Proxy;
 import java.net.URI;
 import java.time.Clock;
+import java.time.DayOfWeek;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
@@ -44,11 +46,14 @@ import org.springframework.web.client.RestClientResponseException;
 @Service
 public class BenchmarkService {
     private static final Logger log = LoggerFactory.getLogger(BenchmarkService.class);
-    private static final ZoneId MARKET_ZONE = ZoneId.of("America/New_York");
-    private static final LocalTime REGULAR_CLOSE = LocalTime.of(16, 0);
+    private static final ZoneId US_MARKET_ZONE = ZoneId.of("America/New_York");
+    private static final ZoneId CHINA_MARKET_ZONE = ZoneId.of("Asia/Shanghai");
+    private static final LocalTime US_REGULAR_CLOSE = LocalTime.of(16, 0);
+    private static final LocalTime CHINA_REGULAR_CLOSE = LocalTime.of(15, 0);
     private static final Pattern SYMBOL = Pattern.compile("[A-Za-z0-9.^=\\-]{1,24}");
     private static final String USER_AGENT = "Mozilla/5.0";
     private static final String SEARCH_OPERATION = "benchmark_search";
+    private static final String HISTORY_OPERATION = "benchmark_history";
 
     private final YahooFinanceProvider yahoo;
     private final RestClient searchClient;
@@ -93,7 +98,7 @@ public class BenchmarkService {
                         .uri(uri -> uri.path("/v6/finance/autocomplete")
                                 .queryParam("query", normalized)
                                 .queryParam("lang", "en-US")
-                                .queryParam("region", "US")
+                                .queryParam("region", searchRegion(normalized))
                                 .build())
                         .retrieve()
                         .body(JsonNode.class);
@@ -133,20 +138,25 @@ public class BenchmarkService {
             throw new DomainException(HttpStatus.BAD_REQUEST, "INVALID_BENCHMARK_SYMBOL", "Invalid benchmark symbol");
         }
         BenchmarkType resolvedType = type == null ? BenchmarkType.ETF : type;
-        ZonedDateTime now = clock.instant().atZone(MARKET_ZONE);
+        MarketProfile market = marketProfile(symbol);
+        ZonedDateTime now = clock.instant().atZone(market.zone());
         LocalDate end = now.toLocalDate();
-        LocalDate expectedCloseDate = latestCompletedRegularCloseDate(now);
+        LocalDate expectedCloseDate = latestCompletedRegularCloseDate(now, market);
         LocalDate start = rangeStart(end, range);
-        InstrumentEntity synthetic = new InstrumentEntity();
-        synthetic.setSymbol(symbol);
-        synthetic.setName(rawName == null || rawName.isBlank() ? symbol : rawName.trim());
-        synthetic.setCurrency("USD");
+        String name = rawName == null || rawName.isBlank() ? symbol : rawName.trim();
         List<PriceBar> bars;
-        try {
-            bars = yahoo.getHistoricalPrices(synthetic, start, end);
-        } catch (ProviderException exception) {
-            throw new DomainException(HttpStatus.SERVICE_UNAVAILABLE, "BENCHMARK_HISTORY_UNAVAILABLE",
-                    "Benchmark history is temporarily unavailable");
+        if (market.chinaAshare()) {
+            bars = chinaBenchmarkHistory(symbol, start, end, market);
+        } else {
+            InstrumentEntity synthetic = new InstrumentEntity();
+            synthetic.setSymbol(symbol);
+            synthetic.setName(name);
+            synthetic.setCurrency("USD");
+            try {
+                bars = yahoo.getHistoricalPrices(synthetic, start, end);
+            } catch (ProviderException exception) {
+                throw historyUnavailable();
+            }
         }
         List<PricePoint> points = new ArrayList<>();
         for (PriceBar bar : bars == null ? List.<PriceBar>of() : bars) {
@@ -159,16 +169,130 @@ public class BenchmarkService {
         LocalDate latest = points.isEmpty() ? null : points.get(points.size() - 1).date();
         FreshnessStatus status = latest == null ? FreshnessStatus.UNAVAILABLE
                 : latest.isBefore(expectedCloseDate) ? FreshnessStatus.STALE : FreshnessStatus.FRESH;
-        return new HistoryResponse(symbol, synthetic.getName(), resolvedType, "YAHOO", status, points);
+        return new HistoryResponse(symbol, name, resolvedType, "YAHOO", status, points);
     }
 
-    private static LocalDate latestCompletedRegularCloseDate(ZonedDateTime now) {
+    private List<PriceBar> chinaBenchmarkHistory(String symbol, LocalDate start, LocalDate end, MarketProfile market) {
+        for (int attempt = 1; attempt <= providerAttempts; attempt++) {
+            Timer.Sample sample = ObservabilityMetrics.start(meterRegistry);
+            String outcome = "error";
+            try {
+                JsonNode root = searchClient.get()
+                        .uri(uri -> uri.path("/v8/finance/chart/{symbol}")
+                                .queryParam("interval", "1d")
+                                .queryParam("events", "div,splits")
+                                .queryParam("period1", start.atStartOfDay(market.zone()).toEpochSecond())
+                                .queryParam("period2", end.plusDays(1).atStartOfDay(market.zone()).toEpochSecond())
+                                .build(symbol))
+                        .retrieve()
+                        .body(JsonNode.class);
+                List<PriceBar> bars = parseDailyHistory(root, start, end, market.zone());
+                outcome = bars.isEmpty() ? "empty" : "success";
+                log.info("operation={} provider=YAHOO market=CN symbol={} from={} to={} acceptedBars={} outcome={}",
+                        HISTORY_OPERATION, symbol, start, end, bars.size(), outcome);
+                return bars;
+            } catch (RestClientResponseException exception) {
+                int status = exception.getStatusCode().value();
+                boolean retryable = status == 408 || status == 429 || status >= 500;
+                log.warn("operation={} provider=YAHOO market=CN symbol={} httpStatus={} attempt={} maxAttempts={} outcome=error",
+                        HISTORY_OPERATION, symbol, status, attempt, providerAttempts);
+                if (!retryable || attempt >= providerAttempts || !pauseAfterAttempt(attempt)) {
+                    throw historyUnavailable();
+                }
+            } catch (RuntimeException exception) {
+                log.warn("operation={} provider=YAHOO market=CN symbol={} httpStatus=0 attempt={} maxAttempts={} outcome=error reason={}",
+                        HISTORY_OPERATION, symbol, attempt, providerAttempts, exception.getClass().getSimpleName());
+                if (attempt >= providerAttempts || !pauseAfterAttempt(attempt)) {
+                    throw historyUnavailable();
+                }
+            } finally {
+                ObservabilityMetrics.stop(meterRegistry, sample, ObservabilityMetrics.PROVIDER_REQUEST,
+                        "provider", "YAHOO", "operation", HISTORY_OPERATION, "outcome", outcome);
+            }
+        }
+        throw historyUnavailable();
+    }
+
+    private static List<PriceBar> parseDailyHistory(JsonNode root, LocalDate start, LocalDate end, ZoneId fallbackZone) {
+        JsonNode results = root == null ? null : root.path("chart").path("result");
+        if (results == null || !results.isArray() || results.isEmpty() || !results.get(0).isObject()) {
+            throw new IllegalStateException("Yahoo benchmark history response is malformed");
+        }
+        JsonNode chart = results.get(0);
+        JsonNode timestamps = chart.path("timestamp");
+        JsonNode quote = chart.path("indicators").path("quote").path(0);
+        JsonNode adjusted = chart.path("indicators").path("adjclose").path(0).path("adjclose");
+        if (!timestamps.isArray() || !quote.isObject()) {
+            throw new IllegalStateException("Yahoo benchmark history has no daily series");
+        }
+        ZoneId exchangeZone = exchangeZone(chart.path("meta"), fallbackZone);
+        List<PriceBar> bars = new ArrayList<>();
+        for (int i = 0; i < timestamps.size(); i++) {
+            JsonNode timestampNode = timestamps.get(i);
+            if (timestampNode == null || !timestampNode.isNumber()) continue;
+            LocalDate date = Instant.ofEpochSecond(timestampNode.asLong()).atZone(exchangeZone).toLocalDate();
+            if (date.isBefore(start) || date.isAfter(end)) continue;
+            BigDecimal close = decimalAt(quote.path("close"), i);
+            if (!positive(close)) continue;
+            bars.add(new PriceBar(date, decimalAt(quote.path("open"), i), decimalAt(quote.path("high"), i),
+                    decimalAt(quote.path("low"), i), close, decimalAt(adjusted, i), longAt(quote.path("volume"), i)));
+        }
+        return bars;
+    }
+
+    private static LocalDate latestCompletedRegularCloseDate(ZonedDateTime now, MarketProfile market) {
         LocalDate today = now.toLocalDate();
-        LocalDate latestTradingDate = MarketCalendar.latestExpectedTradingDate(today);
-        if (today.equals(latestTradingDate) && now.toLocalTime().isBefore(REGULAR_CLOSE)) {
-            return MarketCalendar.latestExpectedTradingDate(today.minusDays(1));
+        LocalDate latestTradingDate = latestExpectedTradingDate(today, market);
+        if (today.equals(latestTradingDate) && now.toLocalTime().isBefore(market.regularClose())) {
+            return latestExpectedTradingDate(today.minusDays(1), market);
         }
         return latestTradingDate;
+    }
+
+    private static LocalDate latestExpectedTradingDate(LocalDate date, MarketProfile market) {
+        if (!market.chinaAshare()) return MarketCalendar.latestExpectedTradingDate(date);
+        LocalDate candidate = date;
+        while (!isChinaTradingDay(candidate)) candidate = candidate.minusDays(1);
+        return candidate;
+    }
+
+    private static boolean isChinaTradingDay(LocalDate date) {
+        if (date == null || date.getDayOfWeek() == DayOfWeek.SATURDAY || date.getDayOfWeek() == DayOfWeek.SUNDAY) {
+            return false;
+        }
+        return !isChinaExchangeHoliday(date);
+    }
+
+    private static boolean isChinaExchangeHoliday(LocalDate date) {
+        if (date.getYear() != 2026) return false;
+        return between(date, LocalDate.of(2026, 1, 1), LocalDate.of(2026, 1, 2))
+                || between(date, LocalDate.of(2026, 2, 16), LocalDate.of(2026, 2, 23))
+                || date.equals(LocalDate.of(2026, 4, 6))
+                || between(date, LocalDate.of(2026, 5, 1), LocalDate.of(2026, 5, 5))
+                || date.equals(LocalDate.of(2026, 6, 19))
+                || date.equals(LocalDate.of(2026, 9, 25))
+                || between(date, LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 7));
+    }
+
+    private static boolean between(LocalDate date, LocalDate start, LocalDate end) {
+        return !date.isBefore(start) && !date.isAfter(end);
+    }
+
+    private static MarketProfile marketProfile(String symbol) {
+        String normalized = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+        if (normalized.endsWith(".SS") || normalized.endsWith(".SZ")) {
+            return new MarketProfile(CHINA_MARKET_ZONE, CHINA_REGULAR_CLOSE, true);
+        }
+        return new MarketProfile(US_MARKET_ZONE, US_REGULAR_CLOSE, false);
+    }
+
+    private static String searchRegion(String query) {
+        if (query == null) return "US";
+        String normalized = query.trim().toUpperCase(Locale.ROOT);
+        if (normalized.matches("\\d{6}(?:\\.(?:SS|SZ))?") || normalized.matches(".*[\\u4e00-\\u9fff].*")) {
+            return "CN";
+        }
+        return "US";
     }
 
     private static SearchParseResult parseSearch(JsonNode root) {
@@ -234,6 +358,11 @@ public class BenchmarkService {
                 "Benchmark search is temporarily unavailable");
     }
 
+    private static DomainException historyUnavailable() {
+        return new DomainException(HttpStatus.SERVICE_UNAVAILABLE, "BENCHMARK_HISTORY_UNAVAILABLE",
+                "Benchmark history is temporarily unavailable");
+    }
+
     private static boolean pauseAfterAttempt(int attempt) {
         try {
             Thread.sleep(Math.min(250L * attempt, 1_000L));
@@ -246,6 +375,25 @@ public class BenchmarkService {
 
     private static boolean positive(BigDecimal value) {
         return value != null && value.signum() > 0;
+    }
+
+    private static BigDecimal decimalAt(JsonNode array, int index) {
+        if (!array.isArray() || index >= array.size() || array.get(index).isNull()) return null;
+        return array.get(index).isNumber() ? array.get(index).decimalValue() : null;
+    }
+
+    private static Long longAt(JsonNode array, int index) {
+        if (!array.isArray() || index >= array.size() || array.get(index).isNull()) return null;
+        return array.get(index).isNumber() ? array.get(index).longValue() : null;
+    }
+
+    private static ZoneId exchangeZone(JsonNode meta, ZoneId fallback) {
+        String name = text(meta, "exchangeTimezoneName", fallback.getId());
+        try {
+            return ZoneId.of(name);
+        } catch (RuntimeException ignored) {
+            return fallback;
+        }
     }
 
     private static String text(JsonNode node, String field) {
@@ -269,4 +417,5 @@ public class BenchmarkService {
     }
 
     private record SearchParseResult(List<SearchResult> results, int rawResultCount, int droppedUnknownTypeCount) { }
+    private record MarketProfile(ZoneId zone, LocalTime regularClose, boolean chinaAshare) { }
 }

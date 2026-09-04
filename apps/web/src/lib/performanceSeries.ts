@@ -84,8 +84,10 @@ export function benchmarkPriceLevels(
   startDay: string,
   endDay: string,
 ): PerformanceLevelPoint[] {
+  // Yahoo benchmark history already contains only that instrument's trading sessions.
+  // Do not apply the US market calendar here: an A-share may trade on a US holiday and vice versa.
   return points
-    .filter((point) => point.date >= startDay && point.date <= endDay && isUsMarketTradingDay(point.date))
+    .filter((point) => point.date >= startDay && point.date <= endDay)
     .flatMap((point) => {
       const value = Number(point.value)
       return Number.isFinite(value) && value > 0 ? [{ date: point.date, value }] : []

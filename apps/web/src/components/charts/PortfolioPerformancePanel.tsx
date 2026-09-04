@@ -3,7 +3,7 @@ import { useQueries, useQuery } from '@tanstack/react-query'
 import { Eye, EyeOff, Plus, Search, X } from 'lucide-react'
 import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
-import { GridComponent, MarkLineComponent, TooltipComponent } from 'echarts/components'
+import { GridComponent, LegendComponent, MarkLineComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { useTranslation } from 'react-i18next'
 import { benchmarksApi } from '../../lib/api/benchmarks'
@@ -16,11 +16,12 @@ import { EmptyState } from '../DataState'
 import { Panel } from '../Panel'
 import './portfolio-performance.css'
 
-echarts.use([LineChart, GridComponent, TooltipComponent, MarkLineComponent, CanvasRenderer])
+echarts.use([LineChart, GridComponent, LegendComponent, TooltipComponent, MarkLineComponent, CanvasRenderer])
 
 const STORAGE_KEY = 'dca-performance-benchmarks-v1'
 const SEARCH_DEBOUNCE_MS = 300
 const BENCHMARK_STALE_REFETCH_MS = 5 * 60_000
+const BENCHMARK_FRESH_REFETCH_MS = 15 * 60_000
 
 interface StoredBenchmark extends BenchmarkSearchResult {
   visible: boolean
@@ -69,7 +70,18 @@ function PerformanceChart({ lines }: { lines: ReturnType<typeof rebasePerformanc
 
     chart.setOption({
       animationDuration: 350,
-      grid: { left: 8, right: 12, top: 20, bottom: 8, containLabel: true },
+      grid: { left: 8, right: 12, top: 48, bottom: 8, containLabel: true },
+      legend: {
+        top: 2,
+        left: 'center',
+        itemWidth: 18,
+        itemHeight: 4,
+        itemGap: 18,
+        icon: 'roundRect',
+        selectedMode: false,
+        textStyle: { color: text, fontSize: 10 },
+        formatter: (name: string) => name.split(' · ')[0],
+      },
       tooltip: {
         trigger: 'axis',
         backgroundColor: '#151c27',
@@ -104,24 +116,27 @@ function PerformanceChart({ lines }: { lines: ReturnType<typeof rebasePerformanc
         splitLine: { lineStyle: { color: grid, type: 'dashed' } },
         axisLine: { show: false },
       },
-      series: lines.map((line, index) => ({
-        name: line.label,
-        type: 'line',
-        smooth: 0.16,
-        showSymbol: false,
-        connectNulls: false,
-        z: index === 0 ? 4 : 2,
-        data: dates.map((date) => lookup.get(line.key)?.get(date) ?? null),
-        lineStyle: { width: index === 0 ? 2.6 : 1.8 },
-        emphasis: { focus: 'series' },
-        markLine: index === 0 ? {
-          silent: true,
-          symbol: 'none',
-          lineStyle: { color: grid, width: 1, type: 'solid' },
-          label: { show: false },
-          data: [{ yAxis: 0 }],
-        } : undefined,
-      })),
+      series: lines.map((line) => {
+        const portfolio = line.key === 'PORTFOLIO'
+        return {
+          name: line.label,
+          type: 'line',
+          smooth: 0.16,
+          showSymbol: false,
+          connectNulls: false,
+          z: portfolio ? 4 : 2,
+          data: dates.map((date) => lookup.get(line.key)?.get(date) ?? null),
+          lineStyle: { width: portfolio ? 2.6 : 1.8 },
+          emphasis: { focus: 'series' },
+          markLine: portfolio ? {
+            silent: true,
+            symbol: 'none',
+            lineStyle: { color: grid, width: 1, type: 'solid' },
+            label: { show: false },
+            data: [{ yAxis: 0 }],
+          } : undefined,
+        }
+      }),
     })
 
     const resize = () => chart.resize()
@@ -173,13 +188,12 @@ export function PortfolioPerformancePanel({ history }: { history: PortfolioHisto
     queries: benchmarks.map((item) => ({
       queryKey: ['benchmark-history', item.type, item.symbol, endDay ?? 'NO_PORTFOLIO_CLOSE'],
       queryFn: () => benchmarksApi.history(item),
-      staleTime: 6 * 60 * 60_000,
+      staleTime: BENCHMARK_FRESH_REFETCH_MS,
       refetchInterval: (query: { state: { data?: Awaited<ReturnType<typeof benchmarksApi.history>> } }) => {
-        const benchmark = query.state.data?.data
-        const latest = benchmark?.points.at(-1)?.date ?? null
-        return benchmark?.dataStatus === 'STALE' || (endDay != null && latest != null && latest < endDay)
+        if (!item.visible) return false
+        return query.state.data?.data?.dataStatus === 'STALE'
           ? BENCHMARK_STALE_REFETCH_MS
-          : false
+          : BENCHMARK_FRESH_REFETCH_MS
       },
       retry: 1,
     })),
@@ -221,12 +235,7 @@ export function PortfolioPerformancePanel({ history }: { history: PortfolioHisto
   const searchResults = (search.data?.data ?? []).filter((item) => !selectedKeys.has(lineKey(item)))
   const anyLoading = historyQueries.some((query, index) => benchmarks[index]?.visible && query.isLoading)
   const anyError = historyQueries.some((query, index) => benchmarks[index]?.visible && query.isError)
-  const anyStale = historyQueries.some((query, index) => {
-    if (!benchmarks[index]?.visible) return false
-    const benchmark = query.data?.data
-    const latest = benchmark?.points.at(-1)?.date ?? null
-    return benchmark?.dataStatus === 'STALE' || (endDay != null && latest != null && latest < endDay)
-  })
+  const anyStale = historyQueries.some((query, index) => benchmarks[index]?.visible && query.data?.data?.dataStatus === 'STALE')
 
   const title = isZh ? '投资表现' : 'Investment performance'
   const detail = isZh ? '剔除新增资金影响的 TWR，可叠加任意 ETF / 指数 / 股票' : 'Cash-flow-neutral TWR with any ETF / index / equity benchmarks'
@@ -260,11 +269,11 @@ export function PortfolioPerformancePanel({ history }: { history: PortfolioHisto
       </div>
     </div>
     {anyError ? <p className="performance-note performance-warning">{isZh ? '部分基准行情暂时不可用；其余曲线仍可正常比较。' : 'Some benchmark history is unavailable; remaining lines are still comparable.'}</p> : null}
-    {anyStale && !anyError ? <p className="performance-note performance-warning">{isZh ? `部分基准尚未取得 ${endDay ?? '最新交易日'} 收盘数据，正在自动刷新。` : `Some benchmarks have not published the ${endDay ?? 'latest trading day'} close yet; refreshing automatically.`}</p> : null}
+    {anyStale && !anyError ? <p className="performance-note performance-warning">{isZh ? '部分基准尚未取得其所属市场最近已完成交易日的收盘数据，正在自动刷新。' : 'Some benchmarks have not published the latest completed close for their own market yet; refreshing automatically.'}</p> : null}
     {anyLoading ? <p className="performance-note">{isZh ? '正在载入基准历史…' : 'Loading benchmark history…'}</p> : null}
     {visibleLines.length ? <PerformanceChart lines={visibleLines} /> : <EmptyState title={isZh ? '请选择至少一条可用曲线' : 'Select at least one available series'} detail={isZh ? '投资组合和每个 Benchmark 都可以独立开关。' : 'Portfolio and every benchmark can be toggled independently.'} />}
     <small className="performance-footnote">{isZh
-      ? '所有可见曲线在所选区间的第一个共同常规收盘点归零。Portfolio 使用 TWR 剔除净新增资金；ETF / 股票 Benchmark 优先使用复权收盘价，指数使用 Yahoo 可用的对应收盘/复权值。'
-      : 'All visible lines are rebased to 0% at their first common regular close. Portfolio uses TWR to remove net external capital; ETF/equity benchmarks prefer adjusted close while indices use the corresponding Yahoo close/adjusted value.'}</small>
+      ? '图例颜色与曲线一一对应。所有可见曲线在所选区间的第一个共同常规收盘点归零；Portfolio 使用 TWR 剔除净新增资金，Benchmark 按各自市场交易日和常规收盘口径比较。'
+      : 'Legend colors match each curve. All visible lines are rebased to 0% at their first common regular close; Portfolio uses TWR to remove net external capital, while benchmarks follow their own market trading dates and regular closes.'}</small>
   </Panel>
 }

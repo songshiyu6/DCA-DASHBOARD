@@ -4,7 +4,7 @@ import { CalendarDays, ChevronRight, CircleDollarSign, Download, RefreshCw, Tren
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
-import { annualizedTimeWeightedReturn, CHART_RANGE_OPTIONS, filterPortfolioHistory, livePerformanceSincePreviousTradingClose, marketBusinessDay, portfolioRangeStartDay, timeWeightedReturn, type ChartRange } from '../lib/dashboardPerformance'
+import { annualizedTimeWeightedReturn, CHART_RANGE_OPTIONS, filterPortfolioHistory, livePerformanceSincePreviousTradingClose, marketBusinessDay, portfolioRangeStartDay, timeWeightedReturn, withCurrentPortfolioPoint, type ChartRange } from '../lib/dashboardPerformance'
 import { decimal, decimalMax, decimalMin, formatDate, formatMoney, formatPeriod, formatShares, formatSignedMoney, formatSignedPercent, formatPercent, formatTime } from '../lib/format'
 import { isInitialContributionPeriod } from '../lib/initialContributionPresentation'
 import { queryKeys } from '../lib/queryKeys'
@@ -102,9 +102,16 @@ export function DashboardPage() {
   })) })
   const quoteBySymbol = useMemo(() => Object.fromEntries(quotes.map((query, index) => [symbols[index], query.data?.data])), [quotes, symbols])
   const regularHistory = useMemo(() => rawData?.portfolioHistory ?? [], [rawData?.portfolioHistory])
+  const livePerformanceHistory = useMemo(() => withCurrentPortfolioPoint(
+    regularHistory,
+    totalPortfolioValue,
+    rawData?.summary.netInvested,
+    dashboard.data?.meta.asOf ?? dashboard.data?.meta.retrievedAt,
+    dashboard.data?.meta.status ?? 'STALE',
+  ), [regularHistory, totalPortfolioValue, rawData?.summary.netInvested, dashboard.data?.meta.asOf, dashboard.data?.meta.retrievedAt, dashboard.data?.meta.status])
   const visibleHistory = useMemo(() => filterPortfolioHistory(regularHistory, chartRange), [regularHistory, chartRange])
   const fallbackCagr = useMemo(() => annualizedTimeWeightedReturn(regularHistory), [regularHistory])
-  const fallbackAllTwr = useMemo(() => timeWeightedReturn(regularHistory), [regularHistory])
+  const fallbackAllTwr = useMemo(() => timeWeightedReturn(livePerformanceHistory), [livePerformanceHistory])
   const cagr = summaryUx?.cagr ?? fallbackCagr
   const allTwr = summaryUx?.allTwr ?? fallbackAllTwr
   const chartRangeEnd = regularHistory.at(-1)?.date.slice(0, 10)

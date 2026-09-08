@@ -28,6 +28,7 @@ describe('query key and invalidation policy', () => {
       queryKeys.transactions,
       queryKeys.dashboard,
       queryKeys.portfolioPerformance,
+      queryKeys.multiCurrencyReport('ALL'),
       queryKeys.planCycles('plan-1'),
       queryKeys.recommendation('plan-1'),
       queryKeys.contributionAnalysis('plan-1'),

@@ -5,7 +5,9 @@ import com.dca.terminal.fund.AutoDcaDtos;
 import com.dca.terminal.fund.AutoDcaFrequency;
 import com.dca.terminal.fund.AutoDcaProjectionEngine;
 import com.dca.terminal.fund.AutoDcaService;
+import com.dca.terminal.fund.FundMarketCalendarDayEntity;
 import com.dca.terminal.fund.FundMarketCalendarDayRepository;
+import com.dca.terminal.fund.FundProfileEntity;
 import com.dca.terminal.fund.FundProfileRepository;
 import com.dca.terminal.fx.FxDtos;
 import com.dca.terminal.fx.FxRateEntity;
@@ -31,6 +33,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -152,6 +155,47 @@ class MultiCurrencyReportingServiceTest {
         assertThat(result.summary().combinedExternalFlowUsd()).isNull();
         assertThat(result.summary().combinedPnlUsd()).isNull();
         assertThat(result.performance().liveEndpointIncluded()).isFalse();
+    }
+
+    @Test
+    void confirmedOpenDayWithoutNavMakesReportingPartialEvenWithoutAnotherMarketEvent() {
+        UUID instrumentId = UUID.randomUUID();
+        UUID ruleId = UUID.randomUUID();
+        AutoDcaDtos.RuleResponse rule = rule(ruleId, instrumentId);
+        AutoDcaDtos.DailyExecutionResponse execution = execution("2026-09-07", "7.10", "710", "100");
+        FundProfileEntity profile = mock(FundProfileEntity.class);
+        FundMarketCalendarDayEntity openSep7 = mock(FundMarketCalendarDayEntity.class);
+        FundMarketCalendarDayEntity openSep8 = mock(FundMarketCalendarDayEntity.class);
+
+        when(portfolioService.summary()).thenReturn(usdSummary("1000", "1000", "0"));
+        when(portfolioService.history("ALL")).thenReturn(List.of(usdDay("2026-09-07", "1000", "1000")));
+        when(autoDcaService.list()).thenReturn(List.of(rule));
+        when(autoDcaService.projection(ruleId, AutoDcaProjectionEngine.GroupBy.MONTH, true))
+                .thenReturn(projection(rule, execution));
+        when(navRepository.findAllByInstrumentIdOrderByNavDateAscRetrievedAtDesc(instrumentId))
+                .thenReturn(List.of(nav("2026-09-07", "7.10")));
+        when(profile.getCalendarCode()).thenReturn("CN_SSE");
+        when(profileRepository.findById(instrumentId)).thenReturn(Optional.of(profile));
+        when(openSep7.getMarketDate()).thenReturn(LocalDate.of(2026, 9, 7));
+        when(openSep8.getMarketDate()).thenReturn(TODAY);
+        when(calendarRepository.findAllByCalendarCodeAndMarketDateBetweenOrderByMarketDateAsc(
+                "CN_SSE", LocalDate.of(2026, 9, 7), TODAY)).thenReturn(List.of(openSep7, openSep8));
+        when(fxService.usdCnyOnOrBefore(LocalDate.of(2026, 9, 7))).thenReturn(fx("2026-09-07", "7.10"));
+        when(fxService.usdCny(LocalDate.of(2026, 9, 7), TODAY)).thenReturn(new FxDtos.FxSeriesResponse(
+                "USD", "CNY", FxService.USD_CNY_SEMANTICS,
+                List.of(rate("2026-09-07", "7.10"), rate("2026-09-08", "7.20"))));
+        when(fxService.usdCnyOnOrBefore(TODAY)).thenReturn(fx("2026-09-08", "7.20"));
+        when(usdPerformanceSource.externalCashFlows()).thenReturn(List.of());
+
+        MultiCurrencyDtos.Response result = service.report("ALL");
+
+        assertThat(result.summary().status()).isEqualTo(FreshnessStatus.PARTIAL);
+        assertThat(result.summary().cnyFundValue()).isNull();
+        assertThat(result.summary().cnyFundValueUsd()).isNull();
+        assertThat(result.summary().combinedValueUsd()).isNull();
+        assertThat(result.performance().liveEndpointIncluded()).isFalse();
+        assertThat(result.performance().points())
+                .anyMatch(point -> point.date().equals(TODAY) && point.dataStatus() == FreshnessStatus.PARTIAL);
     }
 
     private static PortfolioDtos.SummaryResponse usdSummary(String value, String flow, String pnl) {

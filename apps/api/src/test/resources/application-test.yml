@@ -21,5 +21,8 @@ spring:
 dca:
   scheduler:
     enabled: false
+  fund-data:
+    scheduler:
+      enabled: false
   security:
     enabled: false

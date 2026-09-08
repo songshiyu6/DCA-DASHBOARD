@@ -57,6 +57,11 @@ services:
       YAHOO_PROXY_URL: ${YAHOO_PROXY_URL:-}
       TWELVE_DATA_API_KEY: ${TWELVE_DATA_API_KEY:-}
       ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY:-}
+      FUND_SYNC_ENABLED: ${FUND_SYNC_ENABLED:-true}
+      FUND_SYNC_CRON: "${FUND_SYNC_CRON:-0 30 22 * * MON-FRI}"
+      EASTMONEY_FUND_NAV_BASE_URL: ${EASTMONEY_FUND_NAV_BASE_URL:-https://api.fund.eastmoney.com}
+      EASTMONEY_MARKET_BASE_URL: ${EASTMONEY_MARKET_BASE_URL:-https://push2his.eastmoney.com}
+      EASTMONEY_TIMEOUT_MS: ${EASTMONEY_TIMEOUT_MS:-5000}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     expose:

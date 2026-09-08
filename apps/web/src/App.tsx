@@ -6,6 +6,7 @@ import { ContributionsPage } from './pages/ContributionsPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { EtfDetailPage } from './pages/EtfDetailPage'
 import { EtfsPage } from './pages/EtfsPage'
+import { FundsPage } from './pages/FundsPage'
 import { LoginPage } from './pages/LoginPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { PlanPage } from './pages/PlanPage'
@@ -48,6 +49,7 @@ export default function App() {
         <Route path="contributions" element={<ContributionsPage />} />
         <Route path="etfs" element={<EtfsPage />} />
         <Route path="etfs/:symbol" element={<EtfDetailPage />} />
+        <Route path="funds" element={<FundsPage />} />
         <Route path="transactions" element={<TransactionsPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="404" element={<NotFoundPage />} />

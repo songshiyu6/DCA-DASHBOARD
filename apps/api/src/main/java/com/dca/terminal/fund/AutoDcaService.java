@@ -29,15 +29,18 @@ public class AutoDcaService {
     private final FundService fundService;
     private final FundProfileRepository profileRepository;
     private final FundNavDailyRepository navRepository;
+    private final FundDataSyncService syncService;
 
     public AutoDcaService(AutoDcaRuleRepository ruleRepository,
                           FundService fundService,
                           FundProfileRepository profileRepository,
-                          FundNavDailyRepository navRepository) {
+                          FundNavDailyRepository navRepository,
+                          FundDataSyncService syncService) {
         this.ruleRepository = ruleRepository;
         this.fundService = fundService;
         this.profileRepository = profileRepository;
         this.navRepository = navRepository;
+        this.syncService = syncService;
     }
 
     @Transactional(readOnly = true)
@@ -71,14 +74,20 @@ public class AutoDcaService {
                         "Automatic DCA fund is missing its fund profile"));
         List<AutoDcaProjectionEngine.NavPoint> nav = selectedNav(instrumentId);
         AutoDcaProjectionEngine.GroupBy grouping = groupBy == null ? AutoDcaProjectionEngine.GroupBy.MONTH : groupBy;
+        LocalDate calendarEnd = confirmationCalendarEnd(rule, nav);
+        List<LocalDate> tradingDays = calendarEnd == null ? List.of()
+                : syncService.tradingDays(profile.getCalendarCode(), rule.getStartDate(), calendarEnd);
         AutoDcaProjectionEngine.Projection projection = AutoDcaProjectionEngine.project(
                 new AutoDcaProjectionEngine.RuleSpec(rule.getStartDate(), rule.getEndDate(), rule.getAmount(),
-                        rule.getPurchaseFeeRate(), profile.getConfirmationTradingDays()), nav, grouping);
+                        rule.getPurchaseFeeRate(), profile.getConfirmationTradingDays()), nav, grouping, tradingDays);
         List<DailyExecutionResponse> daily = includeDaily
                 ? projection.daily().stream().map(this::dailyResponse).toList()
                 : List.of();
+        String tradingDaySource = tradingDays.isEmpty()
+                ? "OBSERVED_FUND_NAV_DATES"
+                : "PERSISTED_CN_TRADING_DAYS_WITH_NAV_FALLBACK";
         return new ProjectionResponse(response(rule), grouping, projection.latestNav(), projection.latestNavDate(),
-                "OBSERVED_FUND_NAV_DATES", projection.summaries().stream().map(this::summaryResponse).toList(), daily);
+                tradingDaySource, projection.summaries().stream().map(this::summaryResponse).toList(), daily);
     }
 
     private void apply(AutoDcaRuleEntity entity, RuleRequest request, boolean creating) {
@@ -108,6 +117,15 @@ public class AutoDcaService {
         List<AutoDcaProjectionEngine.NavPoint> result = new ArrayList<>();
         selected.values().forEach(row -> result.add(new AutoDcaProjectionEngine.NavPoint(row.getNavDate(), row.getNav())));
         return List.copyOf(result);
+    }
+
+    private LocalDate confirmationCalendarEnd(AutoDcaRuleEntity rule, List<AutoDcaProjectionEngine.NavPoint> nav) {
+        if (nav.isEmpty()) return null;
+        LocalDate latestExecutionDate = nav.getLast().date();
+        if (rule.getEndDate() != null && rule.getEndDate().isBefore(latestExecutionDate)) {
+            latestExecutionDate = rule.getEndDate();
+        }
+        return latestExecutionDate.plusDays(30);
     }
 
     private AutoDcaRuleEntity rule(UUID id) {

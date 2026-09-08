@@ -15,8 +15,9 @@ import java.util.TreeMap;
 /**
  * Rebuildable automatic-DCA projection for China mutual funds.
  *
- * A rule is the source fact. A NAV date is treated as an observed fund valuation/open date for the
- * historical projection. No investment_transaction row is created here.
+ * A rule is the source fact. An actual execution still requires an observed NAV. When a persisted
+ * China trading calendar is available it is used only for confirmation timing; it never fills a
+ * missing NAV or creates a synthetic execution.
  */
 public final class AutoDcaProjectionEngine {
     private static final MathContext MC = DecimalMath.MC;
@@ -70,11 +71,17 @@ public final class AutoDcaProjectionEngine {
             LocalDate latestNavDate) { }
 
     public static Projection project(RuleSpec rule, List<NavPoint> navPoints, GroupBy groupBy) {
+        return project(rule, navPoints, groupBy, List.of());
+    }
+
+    public static Projection project(RuleSpec rule, List<NavPoint> navPoints, GroupBy groupBy,
+                                     List<LocalDate> tradingDays) {
         validateRule(rule);
         TreeMap<LocalDate, BigDecimal> navByDate = normalizeNav(navPoints);
         if (navByDate.isEmpty()) return new Projection(List.of(), List.of(), null, null);
 
         List<LocalDate> observedDates = new ArrayList<>(navByDate.keySet());
+        List<LocalDate> calendarDates = normalizeDates(tradingDays);
         LocalDate latestNavDate = observedDates.getLast();
         BigDecimal latestNav = navByDate.get(latestNavDate);
         LocalDate effectiveEnd = rule.endDate() == null || rule.endDate().isAfter(latestNavDate)
@@ -88,9 +95,8 @@ public final class AutoDcaProjectionEngine {
             BigDecimal net = rule.amount().divide(BigDecimal.ONE.add(rule.purchaseFeeRate(), MC), MC);
             BigDecimal fee = rule.amount().subtract(net, MC);
             BigDecimal shares = net.divide(nav, MC).setScale(DecimalMath.QUANTITY_SCALE, RoundingMode.HALF_UP);
-            int confirmationIndex = index + rule.confirmationTradingDays();
-            LocalDate confirmationDate = confirmationIndex < observedDates.size()
-                    ? observedDates.get(confirmationIndex) : null;
+            LocalDate confirmationDate = confirmationDate(navDate, index, rule.confirmationTradingDays(),
+                    observedDates, calendarDates);
             ConfirmationStatus status = confirmationDate == null
                     ? ConfirmationStatus.PENDING_CONFIRMATION : ConfirmationStatus.CONFIRMED;
             daily.add(new Execution(navDate, navDate, confirmationDate, nav,
@@ -98,6 +104,20 @@ public final class AutoDcaProjectionEngine {
         }
 
         return new Projection(List.copyOf(daily), summarize(daily, groupBy, latestNav), latestNav, latestNavDate);
+    }
+
+    private static LocalDate confirmationDate(LocalDate navDate, int observedIndex, int lag,
+                                              List<LocalDate> observedDates, List<LocalDate> calendarDates) {
+        if (lag == 0) return navDate;
+        if (!calendarDates.isEmpty()) {
+            int calendarIndex = java.util.Collections.binarySearch(calendarDates, navDate);
+            if (calendarIndex >= 0) {
+                int target = calendarIndex + lag;
+                return target < calendarDates.size() ? calendarDates.get(target) : null;
+            }
+        }
+        int observedTarget = observedIndex + lag;
+        return observedTarget < observedDates.size() ? observedDates.get(observedTarget) : null;
     }
 
     private static List<Summary> summarize(List<Execution> daily, GroupBy groupBy, BigDecimal latestNav) {
@@ -145,6 +165,11 @@ public final class AutoDcaProjectionEngine {
             result.put(point.date(), point.nav());
         }
         return result;
+    }
+
+    private static List<LocalDate> normalizeDates(List<LocalDate> dates) {
+        if (dates == null) return List.of();
+        return dates.stream().filter(java.util.Objects::nonNull).distinct().sorted().toList();
     }
 
     private static void validateRule(RuleSpec rule) {

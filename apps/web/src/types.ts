@@ -363,3 +363,119 @@ export interface TransactionImportCommit {
   importedRows: number
   transactionIds: string[]
 }
+
+export interface MutualFund {
+  id: string
+  code: string
+  name: string
+  currency: 'CNY'
+  managementFeeRate: string
+  confirmationTradingDays: number
+  shareClass: string | null
+  calendarCode: string
+}
+
+export interface MutualFundInput {
+  code: string
+  name: string
+  managementFeeRate: string
+  confirmationTradingDays: number
+  shareClass?: string | null
+}
+
+export interface FundNavPoint {
+  id: string
+  navDate: string
+  nav: string
+  source: string
+  retrievedAt: string
+}
+
+export interface FundSyncResult {
+  fundId: string
+  fundCode: string
+  source: string
+  startDate: string
+  endDate: string
+  navPointsReceived: number
+  tradingDaysReceived: number
+  missingNavCount: number
+  missingNavDates: string[]
+  latestNavDate: string | null
+  completedAt: string
+}
+
+export interface FundCalendarAudit {
+  calendarCode: string
+  startDate: string
+  endDate: string
+  source: string | null
+  calendarAvailable: boolean
+  expectedTradingDays: number
+  navDays: number
+  missingNavDates: string[]
+}
+
+export interface AutoDcaRule {
+  id: string
+  instrumentId: string
+  fundCode: string
+  fundName: string
+  amount: string
+  currency: 'CNY'
+  frequency: 'DAILY_FUND_TRADING_DAY'
+  startDate: string
+  endDate: string | null
+  purchaseFeeRate: string
+  enabled: boolean
+  editSemantics: 'REWRITE_HISTORY'
+}
+
+export interface AutoDcaRuleInput {
+  fundCode: string
+  amount: string
+  startDate: string
+  endDate?: string | null
+  purchaseFeeRate: string
+  enabled: boolean
+}
+
+export interface AutoDcaSummary {
+  period: string
+  startDate: string
+  endDate: string
+  executionCount: number
+  confirmedCount: number
+  grossAmount: string
+  purchaseFees: string
+  netSubscribedAmount: string
+  shares: string
+  averageNav: string | null
+  averageCostPerShare: string | null
+  latestNav: string | null
+  currentValue: string | null
+  currentPnl: string | null
+  returnRate: string | null
+}
+
+export interface AutoDcaDailyExecution {
+  orderDate: string
+  navDate: string
+  confirmationDate: string | null
+  nav: string
+  grossAmount: string
+  purchaseFee: string
+  netSubscribedAmount: string
+  shares: string
+  status: 'CONFIRMED' | 'PENDING_CONFIRMATION'
+}
+
+export interface AutoDcaProjection {
+  rule: AutoDcaRule
+  groupBy: 'MONTH' | 'YEAR'
+  latestNav: string | null
+  latestNavDate: string | null
+  tradingDaySource: 'OBSERVED_FUND_NAV_DATES' | 'PERSISTED_CN_TRADING_DAYS_WITH_NAV_FALLBACK'
+  summaries: AutoDcaSummary[]
+  daily: AutoDcaDailyExecution[]
+}

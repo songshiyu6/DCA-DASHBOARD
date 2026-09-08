@@ -240,7 +240,7 @@ class MultiCurrencyReportingServiceTest {
         FxRateEntity entity = new FxRateEntity();
         entity.setBaseCurrency("USD");
         entity.setQuoteCurrency("CNY");
-        entity.setRateDate(date);
+        entity.setRateDate(LocalDate.parse(date));
         entity.setRate(new BigDecimal(value));
         entity.setSource(FxService.USD_CNY_SOURCE);
         entity.setRetrievedAt(AS_OF);

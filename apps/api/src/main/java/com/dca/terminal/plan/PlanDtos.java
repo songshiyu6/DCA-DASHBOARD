@@ -8,12 +8,16 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import java.math.BigDecimal;
+import java.math.MathContext;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
 public final class PlanDtos {
+    private static final MathContext MC = new MathContext(34, RoundingMode.HALF_EVEN);
+
     private PlanDtos() { }
 
     public record PlanAssetRequest(@NotBlank String symbol, @NotNull @DecimalMin("0.00000001") BigDecimal targetWeight) { }
@@ -64,7 +68,15 @@ public final class PlanDtos {
     public record ContributionMonth(String period, BigDecimal planned, BigDecimal executed, CycleStatus status) { }
 
     public record ContributionProgress(int year, BigDecimal executed, BigDecimal planned, BigDecimal remaining,
-                                       BigDecimal executionRate, List<ContributionMonth> months) { }
+                                       BigDecimal executionRate, List<ContributionMonth> months) {
+        public ContributionProgress {
+            BigDecimal annualExecuted = executed == null ? BigDecimal.ZERO : executed;
+            BigDecimal annualPlanned = planned == null ? BigDecimal.ZERO : planned;
+            executionRate = annualPlanned.signum() == 0
+                    ? BigDecimal.ZERO
+                    : annualExecuted.divide(annualPlanned, MC);
+        }
+    }
 
     public record NextDcaResponse(String period, BigDecimal amount, int daysRemaining,
                                   List<RecommendationItem> items,

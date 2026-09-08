@@ -1,5 +1,6 @@
 import { authApi } from './auth'
 import { contributionsApi } from './contributions'
+import { fundsApi } from './funds'
 import { instrumentsApi } from './instruments'
 import { plansApi } from './plans'
 import { portfolioApi } from './portfolio'
@@ -24,6 +25,7 @@ const liveApi = {
   ...contributionsApi,
   ...transactionsApi,
   ...settingsApi,
+  ...fundsApi,
 }
 
 type DemoApi = typeof import('../demo/api').demoApi
@@ -34,6 +36,9 @@ function loadDemoApi(): Promise<DemoApi> {
   demoApiPromise ??= import('../demo/api').then(({ demoApi }) => demoApi)
   return demoApiPromise
 }
+
+const emptyDemoResult = <T>(data: T) => Promise.resolve({ data, meta: { status: 'FRESH' as const, source: 'FIXTURE' } })
+const fundDemoUnavailable = async (): Promise<never> => { throw new Error('China fund management is unavailable in demo mode') }
 
 const demoApiProxy = {
   getSession: () => loadDemoApi().then((adapter) => adapter.getSession()),
@@ -67,6 +72,17 @@ const demoApiProxy = {
   deleteTransaction: (id: string) => loadDemoApi().then((adapter) => adapter.deleteTransaction(id)),
   getSettings: () => loadDemoApi().then((adapter) => adapter.getSettings()),
   updateSettings: (patch: Parameters<typeof liveApi.updateSettings>[0]) => loadDemoApi().then((adapter) => adapter.updateSettings(patch)),
+  getFunds: () => emptyDemoResult([]),
+  createFund: (_input: Parameters<typeof liveApi.createFund>[0]) => fundDemoUnavailable(),
+  updateFund: (_id: string, _input: Parameters<typeof liveApi.updateFund>[1]) => fundDemoUnavailable(),
+  getFundNav: (_id: string) => emptyDemoResult([]),
+  putFundNav: (_id: string, _navDate: string, _nav: string) => fundDemoUnavailable(),
+  syncFund: (_id: string, _startDate?: string, _endDate?: string) => fundDemoUnavailable(),
+  getFundCalendar: (_id: string, _startDate?: string, _endDate?: string) => fundDemoUnavailable(),
+  getAutoDcaRules: () => emptyDemoResult([]),
+  createAutoDcaRule: (_input: Parameters<typeof liveApi.createAutoDcaRule>[0]) => fundDemoUnavailable(),
+  updateAutoDcaRule: (_id: string, _input: Parameters<typeof liveApi.updateAutoDcaRule>[1]) => fundDemoUnavailable(),
+  getAutoDcaProjection: (_id: string, _groupBy: 'MONTH' | 'YEAR', _includeDaily?: boolean) => fundDemoUnavailable(),
 } satisfies typeof liveApi
 
 export const api: typeof liveApi = APP_MODE === 'demo' ? demoApiProxy : liveApi

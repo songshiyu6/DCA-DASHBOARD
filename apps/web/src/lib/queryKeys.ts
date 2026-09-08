@@ -19,6 +19,11 @@ export const queryKeys = {
   transactions: ['transactions'] as const,
   transactionCycles: (id: string) => ['transaction-cycles', id] as const,
   settings: ['settings'] as const,
+  funds: ['funds'] as const,
+  fundNav: (id: string) => ['fund-nav', id] as const,
+  fundCalendar: (id: string) => ['fund-calendar', id] as const,
+  autoDcaRules: ['auto-dca-rules'] as const,
+  autoDcaProjection: (id: string, groupBy: 'MONTH' | 'YEAR', includeDaily = false) => ['auto-dca-projection', id, groupBy, includeDaily] as const,
 } as const
 
 function invalidate(queryClient: QueryClient, queryKey: QueryKey): Promise<void> {
@@ -46,6 +51,16 @@ export function invalidateInstrumentQueries(queryClient: QueryClient, symbol?: s
 export function invalidateInstrumentHistoryQueries(queryClient: QueryClient, symbol: string): Promise<void> {
   const keys: QueryKey[] = [queryKeys.instrument(symbol), queryKeys.prices(symbol), queryKeys.metrics(symbol), queryKeys.portfolioPerformance]
   return Promise.all(keys.map((queryKey) => invalidate(queryClient, queryKey))).then(() => undefined)
+}
+
+export function invalidateFundQueries(queryClient: QueryClient, fundId?: string): Promise<void> {
+  const keys: QueryKey[] = [queryKeys.funds, queryKeys.autoDcaRules]
+  if (fundId) keys.push(queryKeys.fundNav(fundId), queryKeys.fundCalendar(fundId))
+  return Promise.all(keys.map((queryKey) => invalidate(queryClient, queryKey))).then(() => undefined)
+}
+
+export function invalidateAutoDcaQueries(queryClient: QueryClient): Promise<void> {
+  return invalidate(queryClient, queryKeys.autoDcaRules)
 }
 
 export function clearUserQueryCache(queryClient: QueryClient): void {

@@ -62,6 +62,8 @@ services:
       EASTMONEY_FUND_NAV_BASE_URL: ${EASTMONEY_FUND_NAV_BASE_URL:-https://api.fund.eastmoney.com}
       EASTMONEY_MARKET_BASE_URL: ${EASTMONEY_MARKET_BASE_URL:-https://push2his.eastmoney.com}
       EASTMONEY_TIMEOUT_MS: ${EASTMONEY_TIMEOUT_MS:-5000}
+      FX_SYNC_ENABLED: ${FX_SYNC_ENABLED:-true}
+      FX_SYNC_CRON: "${FX_SYNC_CRON:-0 15 7 * * TUE-SAT}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     expose:

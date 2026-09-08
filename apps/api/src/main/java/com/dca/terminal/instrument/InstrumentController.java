@@ -1,5 +1,6 @@
 package com.dca.terminal.instrument;
 
+import com.dca.terminal.common.DomainException;
 import com.dca.terminal.marketdata.MarketDataDtos;
 import com.dca.terminal.marketdata.MarketDataService;
 import jakarta.validation.Valid;
@@ -46,7 +47,7 @@ public class InstrumentController {
 
     @GetMapping("/{symbol}")
     public InstrumentResponse detail(@PathVariable @Pattern(regexp = "[A-Za-z0-9.-]{1,16}") String symbol) {
-        return response(marketDataService.getInstrument(symbol));
+        return response(etf(symbol));
     }
 
     @DeleteMapping("/{symbol}")
@@ -55,34 +56,42 @@ public class InstrumentController {
 
     @GetMapping("/{symbol}/quote")
     public InstrumentDtos.QuoteResponse quote(@PathVariable String symbol) {
-        return marketDataService.latestQuote(marketDataService.getInstrument(symbol));
+        return marketDataService.latestQuote(etf(symbol));
     }
 
     @GetMapping("/{symbol}/metrics")
     public MetricsResponse metrics(@PathVariable String symbol) {
-        return marketDataService.metrics(marketDataService.getInstrument(symbol));
+        return marketDataService.metrics(etf(symbol));
     }
 
     @GetMapping("/{symbol}/prices")
     public PriceHistoryResponse prices(@PathVariable String symbol,
                                        @RequestParam(defaultValue = "1Y") String range) {
-        return marketDataService.prices(marketDataService.getInstrument(symbol), range);
+        return marketDataService.prices(etf(symbol), range);
     }
 
     @PostMapping("/{symbol}/sync")
     public SyncResponse sync(@PathVariable String symbol) {
-        return marketDataService.sync(marketDataService.getInstrument(symbol));
+        return marketDataService.sync(etf(symbol));
     }
 
     @PostMapping("/{symbol}/sync/full")
     public SyncResponse fullResync(@PathVariable String symbol) {
-        return marketDataService.fullResync(marketDataService.getInstrument(symbol));
+        return marketDataService.fullResync(etf(symbol));
     }
 
     @GetMapping("/providers")
     public MarketDataDtos.ProvidersResponse providers() {
         return new MarketDataDtos.ProvidersResponse(marketDataService.providerStatuses(),
                 marketDataService.primaryProvider(), marketDataService.fallbackProvider());
+    }
+
+    private InstrumentEntity etf(String symbol) {
+        InstrumentEntity instrument = marketDataService.getInstrument(symbol);
+        if (instrument.getInstrumentType() != InstrumentType.ETF) {
+            throw new DomainException(HttpStatus.NOT_FOUND, "ETF_NOT_FOUND", "ETF not found: " + symbol);
+        }
+        return instrument;
     }
 
     private InstrumentResponse response(InstrumentEntity entity) {

@@ -95,6 +95,10 @@ dca:
       nav-base-url: ${EASTMONEY_FUND_NAV_BASE_URL:https://api.fund.eastmoney.com}
       market-base-url: ${EASTMONEY_MARKET_BASE_URL:https://push2his.eastmoney.com}
       timeout-ms: ${EASTMONEY_TIMEOUT_MS:5000}
+  fx:
+    scheduler:
+      enabled: ${FX_SYNC_ENABLED:true}
+      cron: '${FX_SYNC_CRON:0 15 7 * * TUE-SAT}'
   security:
     enabled: ${APP_SECURITY_ENABLED:true}
     username: ${APP_USERNAME:admin}

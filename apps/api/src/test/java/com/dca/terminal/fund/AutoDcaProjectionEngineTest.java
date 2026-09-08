@@ -45,6 +45,32 @@ class AutoDcaProjectionEngineTest {
     }
 
     @Test
+    void usesMarketCalendarForConfirmationWithoutInventingMissingNavExecution() {
+        AutoDcaProjectionEngine.RuleSpec rule = new AutoDcaProjectionEngine.RuleSpec(
+                LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 6),
+                new BigDecimal("100"), BigDecimal.ZERO, 1);
+        List<AutoDcaProjectionEngine.NavPoint> nav = List.of(
+                nav("2026-07-01", "1"),
+                nav("2026-07-03", "1"),
+                nav("2026-07-06", "1"));
+        List<LocalDate> tradingDays = List.of(
+                LocalDate.parse("2026-07-01"),
+                LocalDate.parse("2026-07-02"),
+                LocalDate.parse("2026-07-03"),
+                LocalDate.parse("2026-07-06"),
+                LocalDate.parse("2026-07-07"));
+
+        AutoDcaProjectionEngine.Projection projection = AutoDcaProjectionEngine.project(
+                rule, nav, AutoDcaProjectionEngine.GroupBy.MONTH, tradingDays);
+
+        assertEquals(3, projection.daily().size());
+        assertEquals(LocalDate.parse("2026-07-02"), projection.daily().getFirst().confirmationDate());
+        assertEquals(LocalDate.parse("2026-07-06"), projection.daily().get(1).confirmationDate());
+        assertEquals(LocalDate.parse("2026-07-07"), projection.daily().getLast().confirmationDate());
+        assertTrue(projection.daily().stream().noneMatch(row -> row.navDate().equals(LocalDate.parse("2026-07-02"))));
+    }
+
+    @Test
     void aggregatesDailyDcaIntoMonthlyAndYearlyViews() {
         AutoDcaProjectionEngine.RuleSpec rule = new AutoDcaProjectionEngine.RuleSpec(
                 LocalDate.of(2026, 7, 1), LocalDate.of(2027, 1, 31),

@@ -1,85 +1,162 @@
 # DCA Terminal Market Data
 
-> Current baseline: `main@b6c578ee129866389efde907c10a99400da5cd4e`.
+> Current market-data model: V025.
 
 ## Provider boundary
 
-Business code depends on provider interfaces/registry rather than hard-coding one vendor throughout the domain. Current provider roles:
+Provider-specific HTTP behavior stays behind adapters. Current roles:
 
-- Yahoo Finance: default live/search/history source and benchmark source;
-- Twelve Data: optional configured fallback for supported market-data operations;
-- Alpha Vantage: optional profile capability.
+- Yahoo Finance: default US quote/history/search/benchmark source and V025 USD/CNY reporting-FX source;
+- Twelve Data: optional configured fallback for supported US market-data operations;
+- Alpha Vantage: optional profile capability;
+- EastMoney: separate China mutual-fund NAV + Shanghai open-day adapter.
 
-Provider keys remain server-side. `YAHOO_PROXY_URL` is also server-side.
+Provider keys, Yahoo proxy configuration, cookies/crumbs, and credentials remain server-side.
 
-## Data facts remain separate
+EastMoney and Yahoo `CNY=X` are external data sources, not authoritative user transaction facts. Provider failure must not be converted into financial facts.
 
-The application must continue to distinguish:
+## Facts remain separate
+
+Never collapse these into one generic price:
 
 ```text
 latest traded quote
 regular-session daily market price
-provider-adjusted close
-fund NAV
+provider adjusted close
+fund unit NAV
+confirmed China open day
+USD/CNY daily FX rate
 split event
 ```
 
-NAV is never replaced with market price. Adjusted close is used only where documented and is not a substitute for user dividend transactions.
+Persistence:
 
-## Current quote path
+```text
+market_quote_latest          latest quote
+market_price_daily           regular OHLCV + optional adjusted close
+fund_nav_daily               observed mutual-fund NAV
+fund_market_calendar_day     confirmed China open date
+fx_rate_daily                observed reporting FX
+instrument_split             split event
+```
 
-Current portfolio valuation prefers the newest valid timestamped quote candidate among regular, pre-market, post-market, extended, and overnight sessions.
+NAV is never replaced with market price. FX is never inferred from a fund/security price. Adjusted close is not a substitute for user dividend facts.
 
-The quote response still compares against the previous regular close. A current after-hours move can therefore change live account value and Today P/L while regular-close historical points remain unchanged.
+## US current quote path
 
-If live quote retrieval fails, the service may retain a stored quote or daily close with degraded freshness. Missing prices must never be treated as zero.
+Current real USD portfolio valuation prefers the newest valid timestamped quote candidate among regular, pre-market, post-market, extended, and overnight sessions.
 
-## Daily history
+The quote compares against previous regular close, so after-hours movement may change live real account value/Today P/L without rewriting regular-close history.
 
-`market_price_daily` stores regular-session OHLCV plus optional adjusted close and source. Historical portfolio replay uses raw regular close; ETF return/drawdown metrics use adjusted close where documented.
+If live retrieval fails, an older stored quote/daily close may be used only with the existing degraded freshness rules. Missing price is never zero.
 
-History is fetched incrementally and can be repaired by bounded full resync. Full resync fetches before persistence and never clears old rows first.
+## US daily history
+
+`market_price_daily` stores regular-session OHLCV, optional adjusted close, and source.
+
+- historical real portfolio replay uses raw regular close;
+- ETF return/drawdown metrics use adjusted close where documented;
+- history sync is incremental;
+- bounded full resync fetches before persistence and never clears old rows first.
 
 ## 1D intraday
 
-`GET /api/v1/instruments/{symbol}/prices?range=1D` is an on-demand provider path and is not persisted as a permanent five-minute store.
+`GET /api/v1/instruments/{symbol}/prices?range=1D` remains on-demand and non-persistent.
 
-For Yahoo US ETF intraday normalization:
+For Yahoo US ETF normalization:
 
-- date/session decisions use `America/New_York`;
-- provider `currentTradingPeriod` boundaries are respected when usable;
+- business/session zone is `America/New_York`;
+- provider current-trading-period boundaries are respected;
 - `[start,end)` session boundaries are used;
-- invalid/missing Yahoo exchange timezone falls back to New York rather than UTC;
-- a previous trading day is never relabeled as current-day data;
-- an overnight quote is never expanded into synthetic bars.
+- invalid/missing exchange timezone falls back to New York, not UTC;
+- previous-day data is never relabeled as today;
+- overnight quotes are not expanded into fabricated bars.
 
-A benign pre-open empty result, a closed market, and a post-open empty/anomalous provider result are distinct states.
+Benign pre-open empty, closed market, and post-open provider anomaly are different states.
+
+## China mutual-fund data
+
+China fund NAV/open-day synchronization is separate from the tracked-US-ETF provider path.
+
+The initial adapter uses EastMoney:
+
+- fund historical NAV endpoint for six-digit China fund codes;
+- Shanghai-market daily kline dates as confirmed historical open dates.
+
+The synchronization service fetches the requested provider data before writing. Upstream failure must preserve existing local NAV/calendar facts.
+
+A confirmed open date without NAV is a visible gap:
+
+```text
+open day + exact NAV -> eligible auto-DCA execution
+open day + no NAV    -> gap; no synthetic purchase
+closed day           -> no expected execution
+```
+
+Published fund NAV already reflects fund-level accrued management expenses; the application must not subtract annual management fee again.
+
+The weekday fund refresh runs in `Asia/Shanghai` and re-fetches a recent rolling window so delayed NAV publication can be repaired.
+
+## V025 USD/CNY FX
+
+`fx_rate_daily` is a first-class fact table. Current convention:
+
+```text
+base  = USD
+quote = CNY
+rate  = CNY units per 1 USD
+source = YAHOO:CNY=X
+```
+
+Example:
+
+```text
+USD/CNY 7.10 => 1 USD = 7.10 CNY
+CNY 710 / 7.10 = USD 100
+```
+
+APIs:
+
+```text
+GET  /api/v1/fx/usd-cny?startDate=...&endDate=...
+POST /api/v1/fx/usd-cny/sync?startDate=...&endDate=...
+```
+
+Reporting reads local `fx_rate_daily` only. It does not call Yahoo on a page read. Explicit/scheduled synchronization is the network boundary.
+
+The V025 scheduler refreshes a recent USD/CNY window. A recent provider response with no usable rates is treated as a failure rather than evidence that FX does not exist. Existing rows are preserved on failure.
+
+For reporting conversion, latest FX on/before target date may be used only within a seven-calendar-day carry window. Older data is treated as missing for combined reporting.
+
+Yahoo `CNY=X` is a market reporting rate. It is not represented as an official PBOC fixing, card-network rate, or executable bank FX quote.
 
 ## Retry / fallback
 
-Retry is bounded and only for retryable conditions such as timeout, HTTP 408/429/5xx, and post-open intraday anomalies that no longer represent a benign empty session.
+US provider retry is bounded to retryable conditions such as timeout, HTTP 408/429/5xx, and relevant post-open anomalies.
 
-Configured fallback is used only when distinct and usable. `fallbackProvider=NONE` is authoritative.
+Configured US fallback is used only when distinct and usable. `fallbackProvider=NONE` is authoritative.
 
-A successful fallback is reported with its actual provider source.
+China fund and V025 FX adapters are currently separate source paths and do not pretend to have a fallback that is not implemented.
 
 ## Freshness
 
 Common states:
 
-- `FRESH` — usable data within expected age/current-session rules;
-- `STALE` — an older value is deliberately retained;
-- `PARTIAL` — request is valid but legitimately incomplete;
-- `UNAVAILABLE` — no honest value can be produced from configured sources;
-- `INSUFFICIENT_HISTORY` — calculation lacks required historical endpoints.
+- `FRESH` — complete usable data within the relevant age/session rules;
+- `STALE` — older value deliberately retained;
+- `PARTIAL` — request valid but legitimately incomplete;
+- `UNAVAILABLE` — no honest value can be produced;
+- `INSUFFICIENT_HISTORY` — historical endpoints are insufficient.
 
-Provider outage must not be converted into a fake fresh value.
+Provider outage must not produce a fake fresh value.
+
+For V025 combined reporting, required FX/NAV incompleteness produces `PARTIAL`; a fabricated converted value/live endpoint is forbidden.
 
 ## Benchmark data
 
-Benchmark search/history is intentionally isolated from tracked instruments and portfolio facts.
+Benchmark search/history remains isolated from tracked portfolio facts.
 
-Current benchmark types:
+Types:
 
 ```text
 ETF
@@ -87,40 +164,35 @@ INDEX
 EQUITY
 ```
 
-Yahoo benchmark search accepts the provider's compact/full type forms and routes China-style six-digit/`.SS`/`.SZ` queries to the CN search region where implemented.
+Yahoo benchmark history retains each benchmark's own market dates.
 
-Benchmark history preserves the benchmark's own trading dates rather than forcing every series through the US ETF calendar.
+### US/default benchmark freshness
 
-### US benchmark freshness
-
-US/default benchmark history uses `America/New_York` and regular-close completion at 16:00 ET. Before the close, a current-day partial bar is not treated as a completed daily close.
+Uses `America/New_York` and completed 16:00 ET regular close.
 
 ### A-share benchmark freshness
 
-Yahoo `.SS` / `.SZ` benchmark history uses `Asia/Shanghai` and the 15:00 Shanghai regular-close boundary. Shanghai calendar boundaries are used for Yahoo period requests and returned daily timestamps are mapped using exchange-local trade dates.
+`.SS` / `.SZ` history uses `Asia/Shanghai` and the 15:00 Shanghai regular-close boundary. Exchange-local trade dates are preserved. Current implementation includes explicit 2026 SSE closure handling used by tests.
 
-The current implementation includes explicit 2026 SSE closure handling used by benchmark freshness tests. This is benchmark-specific calendar logic and does not change the US ETF portfolio business zone.
+Benchmark-specific calendar behavior does not change the real USD portfolio's New York business zone or the China-fund persisted calendar.
 
-## Benchmark refresh behavior
+## Portfolio vs benchmark vs reporting
 
-The Web invalidates/refetches benchmark history when the latest fresh portfolio regular-close date advances. Fresh visible benchmarks refresh periodically; stale benchmarks retry more frequently until they catch up.
+Three concepts should not be conflated:
 
-This solves the case where a portfolio curve advances while a cached benchmark remains one close behind.
-
-## Current portfolio vs benchmark performance
-
-The portfolio performance engine can include a live FRESH current endpoint. Benchmark history remains regular-close data. UI comparison logic must label/rebase series honestly and must not fabricate a live benchmark close from intraday data.
+1. real USD portfolio performance may append a complete FRESH live endpoint;
+2. benchmark history remains regular-close and must not fabricate a live close;
+3. V025 Reporting creates a separate USD-converted performance source from real USD + derived CNY + FX facts.
 
 ## Provider observability
 
-Logs/metrics may record low-cardinality operational facts such as provider, operation, outcome, status, latency, retry attempt, and safe intraday normalization counts.
+Safe low-cardinality operational fields include provider, operation, outcome, status, latency, and retry attempt.
 
-Do not log:
+Never log:
 
 - API keys;
 - Yahoo cookie/crumb material;
-- authorization headers;
-- session/cookie values;
+- auth/session values;
 - proxy credentials;
 - database credentials;
 - SQL;
@@ -128,30 +200,37 @@ Do not log:
 
 ## Synchronization
 
-The weekday market-data scheduler remains tied to the New York market zone and rebuilds a regular-close portfolio snapshot after its instrument sync batch.
+Current scheduled paths are independent:
 
-Current account valuation and performance can refresh independently of that scheduled snapshot through live quote/current-summary paths.
+```text
+US market sync       New York market zone
+China fund sync      Asia/Shanghai
+USD/CNY FX sync      recent daily reporting FX refresh
+```
+
+A scheduler failure should leave already-persisted facts intact and surface through logs/monitoring rather than deleting data.
 
 ## Repair rules
 
-For a full-history repair:
+For material history repair:
 
 1. take and verify a PostgreSQL backup;
-2. record current row/date/adjusted-close controls;
-3. run the authenticated full-sync endpoint;
-4. verify source, row counts, representative close/adjusted-close values, and dependent metrics;
+2. record current row/date/control totals;
+3. fetch before replacing/upserting;
+4. verify source/date/value controls and dependent calculations;
 5. restore from verified backup if validation fails.
 
-Never clear history first, use current holdings to synthesize history, copy raw close into missing adjusted close, or use NAV as market price.
+Never clear history first, synthesize old portfolio values from current holdings, copy raw close into missing adjusted close, use NAV as price, or infer FX from unrelated instruments.
 
 ## Known reliability gaps
 
-Current product still lacks first-class user/operator views for:
+First-class operator views still need to cover:
 
-- tracked-instrument expected trading-day gap audit;
-- adjusted-close completeness audit;
+- expected US trading-day and adjusted-close gaps;
 - provider health history;
-- bounded observable repair queue;
-- protected management metrics suitable for long-running operations.
+- EastMoney fund-source health/fallback;
+- USD/CNY FX completeness/gap/source health;
+- bounded observable repair queues;
+- protected management metrics for long-running operations.
 
-These remain roadmap items rather than documented existing functionality.
+These are roadmap work, not existing guarantees.

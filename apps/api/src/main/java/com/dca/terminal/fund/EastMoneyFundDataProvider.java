@@ -64,9 +64,10 @@ public class EastMoneyFundDataProvider implements ChinaFundDataProvider {
                     .build(true)
                     .toUri();
             JsonNode root = get(uri, "https://fundf10.eastmoney.com/jjjz_" + fundCode + ".html");
+            requireNavShape(root);
             List<NavPoint> page = parseNavPage(root);
             page.forEach(point -> points.put(point.date(), point));
-            int totalCount = root.path("TotalCount").asInt(page.size());
+            int totalCount = parseTotalCount(root, page.size());
             if (page.isEmpty() || pageIndex * NAV_PAGE_SIZE >= totalCount) break;
             pageIndex++;
         }
@@ -88,6 +89,7 @@ public class EastMoneyFundDataProvider implements ChinaFundDataProvider {
                 .build(true)
                 .toUri();
         JsonNode root = get(uri, null);
+        requireTradingDayShape(root);
         return parseTradingDays(root);
     }
 
@@ -124,6 +126,29 @@ public class EastMoneyFundDataProvider implements ChinaFundDataProvider {
             }
         }
         return result.stream().distinct().sorted().toList();
+    }
+
+    private void requireNavShape(JsonNode root) {
+        if (!root.path("Data").path("LSJZList").isArray() || root.path("TotalCount").isMissingNode()) {
+            throw new FundDataProviderException("EastMoney NAV response schema is unavailable or changed");
+        }
+    }
+
+    private int parseTotalCount(JsonNode root, int fallback) {
+        JsonNode totalCount = root.path("TotalCount");
+        if (totalCount.isIntegralNumber()) return totalCount.asInt();
+        try {
+            return Integer.parseInt(totalCount.asText());
+        } catch (RuntimeException exception) {
+            if (fallback == 0) return 0;
+            throw new FundDataProviderException("EastMoney NAV TotalCount is invalid", exception);
+        }
+    }
+
+    private void requireTradingDayShape(JsonNode root) {
+        if (!root.path("data").path("klines").isArray()) {
+            throw new FundDataProviderException("EastMoney market calendar response schema is unavailable or changed");
+        }
     }
 
     private JsonNode get(URI uri, String referer) {

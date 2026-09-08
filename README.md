@@ -1,81 +1,172 @@
 # DCA Terminal
 
-Personal ETF investing and DCA execution dashboard.
+> Current documentation baseline: `main@b6c578ee129866389efde907c10a99400da5cd4e` (PR #42, 2026-09-04).
+> Current Flyway chain: `V001` through `V022`.
 
-## What this project does
+DCA Terminal is a single-user, USD-first ETF investing and DCA execution dashboard. It is designed to answer four questions with auditable data:
 
-DCA Terminal is a focused single-user terminal for long-term US ETF investors:
+1. What actually happened in the account?
+2. What does the account own and how much cash is available now?
+3. Is the monthly DCA plan being executed as intended?
+4. What investment performance remains after external funding and withdrawals are removed?
 
-- market quotes, five years of locally cached daily history, ETF profile data,
-  performance metrics, and data freshness;
-- a transaction ledger for BUY, SELL, DIVIDEND, and FEE records, including
-  fractional shares;
-- current holdings calculated from transactions with split-aware FIFO lots;
-- monthly budget and target allocation plans with frozen plan cycles;
-- actual-versus-planned DCA progress and contribution-first recommendations;
-- explicit `INITIAL`, `DCA`, and `UNPLANNED` BUY classification, with initial
-  capital separated from recurring DCA; and
-- contribution-batch analysis for principal, current value, cumulative P/L,
-  cumulative ROI, and cost-weighted days invested.
+The project is not a broker, order-entry system, trading terminal, research product, or financial-advice service. It deliberately excludes broker APIs, automatic order placement, options, cryptocurrency, individual-stock research, technical indicators, price prediction, news, social features, paper trading, tax calculation, and multi-user SaaS.
 
-Transactions are the source of truth. Holdings, portfolio values, allocation,
-P/L, XIRR, cycle execution, and daily snapshots are calculated projections.
-There is no editable holdings state and no portfolio update endpoint.
+## Current product
 
-This is not a broker, order-entry tool, trading chart clone, research product,
-or financial advice service. The current product deliberately excludes broker APIs, options,
-individual-stock research, cryptocurrency, news, AI advice, price prediction,
-WebSocket ticks, Level 2, technical indicators, multi-user SaaS, social
-features, paper trading, backtesting, multi-currency assets, and tax
-calculation.
+The authenticated Web application exposes these workspaces:
+
+- **Dashboard** — cash-inclusive account value, security holdings, Today P/L, plan progress, allocation, and investment-performance chart.
+- **Plan** — one active monthly USD plan, frozen monthly cycles, execution windows, target weights, progress, and contribution-first recommendations.
+- **Contributions** — plan-scoped `INITIAL`/`DCA` BUY-lot analysis, unclassified legacy BUY queue, classification preview/commit, and audit history.
+- **ETFs** — tracked ETF identity, quote, NAV when available, daily/intraday history, metrics, sync, and provider freshness.
+- **Transactions** — `DEPOSIT`, `WITHDRAWAL`, `INTEREST`, `BUY`, `SELL`, `DIVIDEND`, and `FEE`, plus server-authoritative CSV preview/commit.
+- **Settings** — theme and market-data provider selection/configuration status.
+
+The performance panel supports `1M`, `3M`, `1Y`, `YTD`, and `ALL`, and can overlay arbitrary Yahoo-searchable ETF, index, or equity benchmarks without adding those benchmarks to the tracked-instrument/portfolio domain.
+
+## Source of truth
+
+The transaction ledger is the source of truth for account activity. There is no editable holdings state and no editable cash-balance state.
+
+```text
+transactions + splits + market data
+             |
+             +--> security FIFO lots / holdings
+             +--> cash ledger
+             |
+             v
+      cash-inclusive portfolio value
+             |
+             +--> dashboard / allocation / snapshots
+             +--> TWR / CAGR / XIRR / drawdown
+             `--> plan/contribution projections
+```
+
+Daily portfolio snapshots are rebuildable caches. They may be invalidated after backdated transaction, split, or historical-price changes and must never become a second fact source.
+
+### Cash ledger
+
+Cash is replayed from the same ordered transaction ledger:
+
+| Event | Cash effect | External performance flow? |
+| --- | ---: | --- |
+| `DEPOSIT` | `+amount` | yes |
+| `WITHDRAWAL` | `-amount` | yes |
+| `BUY` | `-(quantity * price + fee)` | no |
+| `SELL` | `+(quantity * price - fee)` | no |
+| `DIVIDEND` | `+amount` | no |
+| `FEE` | `-amount` | no |
+| `INTEREST` | `+amount` | no |
+
+Only `DEPOSIT` and `WITHDRAWAL` are external capital flows. Buying or selling a security moves value between cash and securities inside the account and therefore must not create or remove investment performance.
+
+The current summary contract is:
+
+```text
+securitiesValue = sum(open shares * current security price)
+cashBalance     = replay(all cash effects)
+marketValue     = securitiesValue + cashBalance
+netInvested     = cumulative DEPOSIT - WITHDRAWAL
+totalPnl        = marketValue - netInvested        # when valuation is complete
+```
+
+`marketValue` is therefore total account value, despite the historical field name.
+
+### Legacy cash migration
+
+`V022__introduce_cash_ledger.sql` preserves the economic meaning of pre-cash-ledger accounts by inserting deterministic bridge cash events around legacy BUY/SELL rows:
+
+- a legacy BUY receives a preceding synthetic `DEPOSIT` for its cash outlay;
+- a legacy SELL receives a following synthetic `WITHDRAWAL` for its net proceeds;
+- unusual negative SELL proceeds are bridged defensively;
+- existing snapshots are invalidated because pre-V022 history did not contain explicit cash.
+
+These rows are migration facts used to preserve compatibility. Do not delete them just because they are system-generated.
+
+## Performance semantics
+
+Portfolio performance is now calculated by the backend `performance` module and exposed at:
+
+```text
+GET /api/v1/performance/portfolio?range=1M|3M|1Y|YTD|ALL
+```
+
+The engine uses:
+
+- regular-close cash-inclusive portfolio valuations for historical points;
+- at most one current live endpoint;
+- only a complete `FRESH` live valuation, so a missing quote cannot manufacture a loss;
+- `DEPOSIT - WITHDRAWAL` as the external-flow stream;
+- TWR for capital-flow-neutral performance;
+- XIRR for money-weighted personal return;
+- CAGR and maximum drawdown from the performance level series.
+
+The dashboard may retain local calculation code as a compatibility fallback, but the server performance endpoint is the canonical live contract.
+
+Today performance is anchored to the previous completed regular close, not midnight and not the newest same-day stored close. `V020` created an experimental midnight-settlement table; `V021` removed it while preserving forward-only Flyway history.
+
+## Contribution semantics
+
+Plan execution and contribution-batch analysis are still based on actual BUY transactions:
+
+- a cycle-linked BUY is `DCA`;
+- an `INITIAL` BUY is linked to a plan and must occur on the plan start date;
+- `UNPLANNED` BUYs remain outside plan contribution totals;
+- legacy unclassified BUYs can be previewed and committed through the classification workflow;
+- SELL uses the same global split-aware FIFO lots and can realize P/L from an attributed batch.
+
+`DEPOSIT` is funding, not DCA execution. The backend can store `INITIAL`/`DCA`/`UNPLANNED` funding attribution on DEPOSIT rows, but the current Contributions projection remains BUY-lot based. Do not silently reinterpret a deposit as an executed purchase.
+
+## Market-data semantics
+
+Market price, adjusted close, and fund NAV are different facts and remain separate.
+
+- **Current valuation** prefers the newest valid timestamped regular/pre-market/post-market/extended/overnight quote.
+- **Historical portfolio valuation** uses regular-session raw closes and historical ledger replay.
+- **ETF return metrics** use adjusted close where documented.
+- **NAV** is stored separately and is never replaced with market price.
+- **1D chart** uses on-demand provider bars and is not persisted as a five-minute database.
+- Provider errors, a valid pre-open empty response, a closed market, and a post-open data anomaly are distinct states.
+
+Benchmark history is isolated from tracked instruments and portfolio facts. ETF/index/equity benchmark selection is read-only and browser-persisted; it does not create an instrument, holding, or transaction.
 
 ## Repository layout
 
 ```text
 .
 ├── apps/
-│   ├── web/                 # React + TypeScript + Vite (app agent)
-│   └── api/                 # Spring Boot 3 + Java 21 (app agent)
+│   ├── web/                 # React 19 + TypeScript + Vite
+│   └── api/                 # Spring Boot 3.5.16 + Java 21
 ├── deploy/
 │   ├── docker-compose.yml   # web, api, postgres, caddy
 │   ├── docker-compose.e2e.yml
 │   ├── Caddyfile
 │   ├── .env.example
-│   └── scripts/             # PostgreSQL backup and restore
-├── e2e/                     # Playwright vs mock Yahoo, isolated volumes
+│   └── scripts/             # backup, restore, deployment smoke
+├── e2e/                     # Playwright against isolated mock-provider stack
 ├── docs/
 │   ├── architecture.md
 │   ├── api.md
-│   ├── market-data.md
 │   ├── calculations.md
+│   ├── market-data.md
 │   ├── operations-runbook.md
 │   ├── agent-handoff.md
 │   └── next-development-plan.md
-├── .github/workflows/ci.yml
-└── README.md
+└── .github/workflows/ci.yml
 ```
 
-The deployment and CI configuration uses the application-owned
-`apps/web/Dockerfile` and `apps/api/Dockerfile`. The web image serves port 80;
-the API image serves port 8080 and exposes `/actuator/health` for the Compose
-healthcheck. The deployment layer does not modify application source files.
+The API is a modular monolith. Current modules include `benchmark`, `instrument`, `marketdata`, `transaction`, `portfolio`, `performance`, `plan`, `settings`, `security`, and `observability`.
 
-## Prerequisites
+## Runtime and configuration
 
-For the full Compose stack:
+Expected local toolchain:
 
-- Docker Engine with Docker Compose v2;
-- a DNS A/AAAA record for the deployment hostname pointing to the host;
-- inbound TCP 80 and 443 for Caddy's ACME certificate flow;
-- a real `APP_PASSWORD_HASH` and database password stored only in
-  `deploy/.env`.
+- Node.js 22 for `apps/web`;
+- Java 21 for `apps/api`;
+- Docker Engine + Docker Compose v2 for the full stack.
 
-For local app development, use the versions declared by the app projects. The
-expected baseline is Node.js 22 for the web app and Java 21 for the API. Docker
-provides its own build JDK, but the Gradle wrapper does not: direct
-`./gradlew`/`bootRun` commands still require a Java 21 `JAVA_HOME` and `PATH`.
-
-## Configuration
+Production Compose defaults to PostgreSQL `18.6-alpine`. PostgreSQL 18+ uses the parent `/var/lib/postgresql` mount with a versioned data directory beneath it. A data directory from PostgreSQL 16 or another major version must be upgraded with logical dump/restore; changing only the image tag is not an upgrade.
 
 Create the untracked deployment environment file:
 
@@ -84,262 +175,138 @@ cp deploy/.env.example deploy/.env
 ${EDITOR:-vi} deploy/.env
 ```
 
-Set at least `APP_DOMAIN`, `CADDY_EMAIL`, `POSTGRES_PASSWORD`, and
-`APP_PASSWORD_HASH`. The current application uses Spring's
-`BCryptPasswordEncoder`, so this value must be a BCrypt hash; Argon2id and
-delegating `{id}` prefixes are not accepted by the current code. Generate it
-outside the repository and do not put a plaintext password in Git. If the hash
-contains `$`, quote the value in `deploy/.env`, for example
-`APP_PASSWORD_HASH='$2b$...'`, because the backup scripts source that file.
+Set real values for at least `APP_DOMAIN`, `CADDY_EMAIL`, `POSTGRES_PASSWORD`, `APP_USERNAME`, and `APP_PASSWORD_HASH`. The application currently uses Spring BCrypt password encoding; do not commit plaintext passwords, password hashes, provider keys, cookies, sessions, or database credentials.
 
-`TWELVE_DATA_API_KEY` and `ALPHA_VANTAGE_API_KEY` are optional provider
-fallback keys. They are read only by the API container. They are never Vite
-variables, frontend metadata, API response fields, logs, or GitHub Actions
-secrets.
+`TWELVE_DATA_API_KEY` and `ALPHA_VANTAGE_API_KEY` are optional server-side provider credentials. `YAHOO_PROXY_URL` is also server-side. Provider credentials must never become Vite variables or browser-visible API fields.
 
-The web runtime is `live` by default. In live mode every account, plan,
-transaction, holding, and market-data value must come from the API; an API
-network failure is shown as an error and is never replaced with demo data.
-Set `VITE_APP_MODE=demo` only for an explicitly non-account local preview.
-Demo mode reads deterministic fixture data, writes only to browser-local demo
-storage, and shows a persistent `Demo data` warning. Do not use a demo build
-for a real account. `apps/web/Dockerfile` rejects any mode other than `live`
-or `demo`.
-
-Business dates, plan execution windows, and the market-data scheduler use the
-fixed `America/New_York` zone; database timestamps remain UTC. There is no
-runtime timezone setting and no `APP_TIMEZONE` input. The container `TZ` value
-is an operating-system/logging concern and does not change business-date
-semantics. `VITE_API_BASE_URL=/api/v1` keeps the production web app same-origin
-behind Caddy. Compose defaults PostgreSQL to `postgres:18.6-alpine`.
-
-## PostgreSQL major-version upgrades
-
-The named `postgres_data` volume is a PostgreSQL data directory, not a
-portable database export. Compose mounts the PostgreSQL 18.6 volume at
-`/var/lib/postgresql`; the image stores data below the versioned
-`/var/lib/postgresql/18/docker` directory. A data directory initialized by
-PostgreSQL 16 cannot be mounted directly into PostgreSQL 18.6; the newer
-server will reject it as an incompatible major-version directory. Updating
-`POSTGRES_IMAGE` alone is not an upgrade procedure.
-
-For an existing PostgreSQL 16 deployment, use the checked-in logical backup
-scripts:
-
-1. Run `deploy/scripts/backup-postgres.sh` while the old stack is healthy and
-   verify the dump with `gzip -t`.
-2. Stop the stack with `docker compose down`, never `docker compose down -v`.
-   Inspect and rename the old project volume so it remains recoverable. The
-   old volume was used at the legacy `/var/lib/postgresql/data` mount; the new
-   Compose file uses the PostgreSQL 18+ parent mount.
-3. Set `POSTGRES_IMAGE=postgres:18.6-alpine` in `deploy/.env` and start the
-   PostgreSQL service; Compose creates a new empty volume.
-4. Restore the verified dump with
-   `deploy/scripts/restore-postgres.sh --confirm <backup-file.sql.gz>`.
-5. Start the full stack and verify Flyway, transaction counts, portfolio
-   totals, healthchecks, and market-data freshness.
-
-The volume name includes `COMPOSE_PROJECT_NAME`, so confirm the exact name with
-`docker volume ls` before renaming. Keep the old volume until the new database
-has passed the restore checks. The plain SQL dump is portable across these
-PostgreSQL major versions.
+Business dates, plan windows, US market-session boundaries, and portfolio day rollover use `America/New_York`. Database timestamps remain UTC. There is no user-configurable business timezone.
 
 ## Development
 
-Validate the deployment graph without starting containers:
+Web:
+
+```bash
+cd apps/web
+npm ci
+npm run lint
+npm run typecheck
+npm test -- --run
+npm run build
+```
+
+API:
+
+```bash
+cd apps/api
+./gradlew test build --no-daemon
+./gradlew postgresTest --no-daemon
+```
+
+Deployment graph:
 
 ```bash
 docker compose --env-file deploy/.env -f deploy/docker-compose.yml config --quiet
 ```
 
-Start the complete stack after both app Dockerfiles exist:
+Isolated E2E:
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml up --build -d
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
-curl -fsS https://invest.example.com/api/health
-```
-
-Replace the hostname in the `curl` command with `APP_DOMAIN`. Caddy will
-obtain a public certificate when DNS and ports 80/443 are correct. For a
-local-only check, use `APP_DOMAIN=localhost`; Caddy will use its local
-certificate authority, so a browser may need local trust setup.
-
-Run the app projects directly when developing their source:
-
-```bash
-cd apps/web
-npm ci
-npm run dev
-```
-
-```bash
-cd apps/api
-./gradlew bootRun
-```
-
-The exact scripts belong to the app projects. The root CI workflow requires a
-lockfile and the Gradle wrapper so local and CI dependency resolution stay
-repeatable.
-
-## Tests and CI
-
-The checked-in workflow at `.github/workflows/ci.yml` runs on pushes and pull
-requests. It performs:
-
-- web `npm ci`, lint, typecheck, test, and production build;
-- API Gradle test and build with Java 21;
-- Testcontainers PostgreSQL 18.6 Flyway + Hibernate `validate`;
-- `docker compose config --quiet` using generated CI-only placeholder values;
-- PostgreSQL dump → new volume → restore smoke;
-- Caddy/API deployment smoke;
-- Playwright e2e smoke (PR default) against a mock Yahoo stack on
-  `127.0.0.1:38080`; `workflow_dispatch` can run the full suite;
-- repository checks for Dockerfiles, backup scripts, and the e2e runner.
-
-The CI job does not use repository secrets and does not call live market-data
-providers. Provider tests must use mock HTTP responses. Flyway is the only
-schema source; the current chain is `V001`–`V017`. `V013` adds the atomic
-ledger-order sequence, `V014` adds PostgreSQL-backed HTTP sessions, `V015`
-removes the obsolete timezone setting, and `V016` adds contribution source and
-plan attribution fields. `V017` backfills deterministic cycle-linked legacy
-BUYs, enforces contribution-source combinations, and adds classification audit
-storage. These are forward migrations and cannot be undone by rolling back only
-the application image.
-
-Current account valuations prefer the newest valid timestamped regular,
-pre-market, extended, post-market, or overnight quote. Historical portfolio
-charts, snapshots, YTD, and TWR remain regular-close based, so an after-hours
-move changes live value/P&L without rewriting close-based performance history.
-
-The required financial unit-test surface is documented in
-`docs/calculations.md` and includes YTD, CAGR, drawdown, split, FIFO, P/L,
-XIRR, cycle status, allocation, recommendation rounding, initial-capital cycle
-behavior, and contribution-batch attribution.
-
-Run the same checks locally once app files are present:
-
-```bash
-cd apps/web && npm ci && npm audit --omit=dev && npm run lint && npm run typecheck && npm test -- --run && npm run build
-cd ../api && ./gradlew test build postgresTest --no-daemon
-cd ../.. && docker compose --env-file deploy/.env -f deploy/docker-compose.yml config --quiet
 DCA_E2E_SUITE=smoke bash e2e/run.sh
+# or explicitly request the full suite
+DCA_E2E_SUITE=full bash e2e/run.sh
 ```
 
-E2E uses isolated Compose volumes and never attaches to the acceptance stack
-on ports 80/443/18080. Install Playwright Chromium through
-`http://127.0.0.1:7890` when a proxy is required, then unset proxy variables
-before the tests so `127.0.0.1` is not proxied. Do not run `e2e/run.sh` from a
-worktree that contains `apps/api/build`; copy the local Gradle output into the
-API image context and the healthcheck can fail. A root `.dockerignore`
-excludes `build` and `node_modules`.
+Do not run E2E against a production volume or production `.env`.
 
-The web project defines an ESLint-based `lint` script. CI runs lint, typecheck,
-tests, and the production build as separate steps.
+## CI
 
-## Deployment
+`.github/workflows/ci.yml` currently checks:
 
-The production topology is:
+- Web install, production dependency audit, lint, typecheck, unit tests, and build;
+- API tests/build on Java 21;
+- PostgreSQL 18.6 Flyway + Hibernate validation through `postgresTest`;
+- Compose and shell-script validation;
+- PostgreSQL backup/restore smoke;
+- temporary Caddy/API deployment smoke;
+- isolated Playwright E2E;
+- repository whitespace hygiene.
+
+The npm production-audit gate fails on actual vulnerability findings but treats recognized npm-registry/audit-service outages as a warning rather than misreporting them as dependency success or failure.
+
+A missing GitHub status response is not evidence that CI passed. Release claims must reference a concrete current workflow run or equivalent verified evidence.
+
+## Flyway state
+
+Current published chain: `V001`–`V022`.
+
+Key recent migrations:
+
+| Migration | Purpose |
+| --- | --- |
+| `V013` | atomic transaction ledger-order sequence |
+| `V014` | PostgreSQL-backed HTTP sessions |
+| `V015` | remove obsolete timezone setting |
+| `V016` | contribution tracking fields |
+| `V017` | contribution-source constraints, legacy backfill, classification audit |
+| `V018` | latest-quote session classification |
+| `V019` | remove snapshots that could not be trusted under corrected replay semantics |
+| `V020` | create experimental midnight settlement table |
+| `V021` | remove midnight settlement; restore previous-regular-close daily semantics |
+| `V022` | explicit cash ledger, new cash transaction types, cash-inclusive snapshots/performance |
+
+Migrations are forward-only. Never edit an already published migration to make a later application version look compatible.
+
+## Deployment and backups
+
+Production topology:
 
 ```text
-Internet -> Caddy (HTTPS) -> web static files
-                         \-> /api/* -> Spring Boot -> PostgreSQL
+Internet -> Caddy (80/443) -> web
+                         `-> /api/* -> Spring Boot -> PostgreSQL
 ```
 
-Only Caddy publishes host ports. PostgreSQL is on an internal Docker network
-and is accessed by the API and the backup scripts through `docker compose
-exec`. Flyway owns schema migrations and the API must use
-`spring.jpa.hibernate.ddl-auto=validate`; do not use Hibernate schema update
-in production.
+Only Caddy publishes host ports. PostgreSQL stays on the internal network.
 
-Deploy or update the stack:
-
-```bash
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml pull postgres caddy
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml up --build -d
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml logs --tail=100 api
-```
-
-Before first public exposure, verify that `/api/health` responds, the API
-healthcheck is healthy, Caddy has issued the expected certificate, and the
-application login works. Provider outages must leave the dashboard available
-with `STALE`, `PARTIAL`, or `UNAVAILABLE` data status.
-
-HTTP sessions are stored in PostgreSQL. An API container restart therefore
-does not normally sign the user out when the same database and cookie settings
-remain in use; logout deletes the server-side session. Backup/restore includes
-the session tables, so operators must explicitly decide whether restored
-sessions should remain valid before reopening access.
-
-## Backups and restore
-
-The backup script writes restrictive, compressed plain SQL files under
-`deploy/backups/` by default. It keeps seven daily files and four weekly files;
-the directory is ignored by Git.
+Before an upgrade that can change schema or financial projections:
 
 ```bash
 deploy/scripts/backup-postgres.sh
+gzip -t deploy/backups/daily/<backup>.sql.gz
 ```
 
-Install the checked-in systemd timer on the host after adjusting the deployment
-path and service user as needed:
+Then rebuild the stack without deleting volumes:
 
 ```bash
-sudo install -m 0644 deploy/systemd/dca-terminal-backup.service /etc/systemd/system/
-sudo install -m 0644 deploy/systemd/dca-terminal-backup.timer /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now dca-terminal-backup.timer
-systemctl list-timers dca-terminal-backup.timer
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --build
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
 ```
 
-The service runs the backup after the stack is started; the script itself
-checks PostgreSQL readiness. A weekly file is created on `BACKUP_WEEKLY_DAY`
-(default Sunday, UTC). `BACKUP_DIR`,
-`BACKUP_RETENTION_DAILY`, and `BACKUP_RETENTION_WEEKLY` can be overridden in
-`deploy/.env`.
+Never use `docker compose down -v` as a normal upgrade step.
 
-Restore requires an explicit confirmation flag and first takes a safety backup
-unless `DCA_RESTORE_SKIP_SAFETY_BACKUP=1` is deliberately set:
+See `docs/operations-runbook.md` for backup, restore, PostgreSQL-major-upgrade, session, and smoke procedures.
 
-```bash
-deploy/scripts/restore-postgres.sh --confirm deploy/backups/daily/dca-terminal-YYYYMMDDTHHMMSSZ.sql.gz
-```
+## Current known gaps
 
-Restore replaces database objects from the selected `pg_dump`. Stop public
-traffic or put the application into maintenance mode, verify the selected file
-with `gzip -t`, restore, then check `/api/health`, Flyway state, transaction
-count, portfolio totals, and provider freshness before reopening traffic.
+The current code is functional, but the next development plan still includes important cleanup and product work:
 
-## Design rules
+- live transaction, plan, and CSV forms still contain fixed sample/default facts that should be removed;
+- the UI needs a concentrated DCA action queue for open/partial/missed cycles;
+- cash-funding attribution and BUY-lot contribution analysis need clearer user-facing reconciliation;
+- provider health history and market-data gap audit are not yet first-class operator views;
+- full account export/recovery evidence is incomplete;
+- transaction list/history paths still need capacity-oriented pagination/range work;
+- some contribution/transaction copy remains outside the i18n catalog.
 
-The implementation must preserve these rules:
+The authoritative prioritized list is `docs/next-development-plan.md`.
 
-1. Transactions are the source of truth; never persist editable holdings as
-   primary state.
-2. Market price and ETF NAV are separate facts and separate tables. Never use
-   market price as NAV.
-3. Backend and database financial values use `BigDecimal`/`NUMERIC`; do not
-   introduce Java `double` or floating-point database columns. Financial
-   response values are plain decimal JSON strings, and frontend calculations
-   use `decimal.js-light`. Counts and calendar-day values remain JSON numbers.
-4. Historical data is persisted locally and updated incrementally. Performance
-   uses adjusted close where documented; portfolio valuation uses raw market
-   close and historical transaction replay.
-5. Provider access goes through a registry with bounded retry and fallback;
-   API keys never reach the frontend.
-6. Initial capital and recurring DCA are transaction classifications, not a
-   second cash ledger. Only actual classified BUY transactions contribute to
-   contribution totals; unclassified and `UNPLANNED` buys remain visible but do
-   not silently enter plan analytics.
-7. Legacy BUY classification is a two-phase operation: preview first, then
-   commit the exact preview hash atomically. Every committed row is recorded in
-   the contribution-classification audit table.
+## Documentation map
 
-Detailed contracts and formulas live in:
+- [Architecture](docs/architecture.md) — boundaries, modules, facts, projections, schema, runtime.
+- [API](docs/api.md) — current HTTP contract.
+- [Calculations](docs/calculations.md) — cash, portfolio, performance, ETF, FIFO, plan, contribution formulas.
+- [Market data](docs/market-data.md) — provider, quote/history/intraday/benchmark, retry, freshness.
+- [Operations runbook](docs/operations-runbook.md) — deploy, upgrade, backup, restore, smoke, rollback.
+- [Agent handoff](docs/agent-handoff.md) — current implementation state and takeover rules.
+- [Next development plan](docs/next-development-plan.md) — current gaps, priorities, release gates.
 
-- [Architecture](docs/architecture.md)
-- [API](docs/api.md)
-- [Market data](docs/market-data.md)
-- [Calculations](docs/calculations.md)
-- [Current state and next development plan](docs/next-development-plan.md)
+Files named `docs/sa-*.md` are dated historical evidence for the commits they name. They are intentionally not rewritten into current-state documents.

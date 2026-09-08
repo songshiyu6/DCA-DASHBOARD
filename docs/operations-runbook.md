@@ -1,108 +1,150 @@
-# DCA Terminal 运维运行手册
+# DCA Terminal Operations Runbook
 
-本手册覆盖当前 `deploy/docker-compose.yml` 的单机部署。所有命令都在仓库根目录执行。部署凭据、数据库密码、provider key 和 session cookie 只通过受保护的环境或 secret manager 传递，不写入 Git、浏览器 bundle 或命令输出。
+> Current baseline: `main@b6c578ee129866389efde907c10a99400da5cd4e`.
+> Current Flyway chain: `V001`–`V022`.
 
-## 0. 安全边界
+This runbook covers the current single-host Compose deployment. All commands are executed from the repository root unless noted otherwise.
 
-- 生产使用 `APP_SECURITY_ENABLED=true`、`APP_COOKIE_SECURE=true`、HTTPS 和 `APP_PASSWORD_HASH`。当前代码只注册 `BCryptPasswordEncoder`，因此该值必须是 BCrypt hash，不接受 Argon2id 或 delegating `{id}` 格式。Hash 使用批准的 secret manager 注入；不要把明文密码或 hash 提交到仓库。
-- `APP_LOGIN_MAX_ATTEMPTS` 和 `APP_LOGIN_THROTTLE_WINDOW_SECONDS` 控制同一用户名与来源地址的登录失败窗口。成功登录会清除该窗口，过期窗口会被淘汰；canonical Compose 已把这两个变量透传给 API 容器，缺省值仍是 5/900。
-- HTTP session 由 Spring Session 持久化在 PostgreSQL 中。API 容器重启通常不会注销现有用户；logout 会删除服务端 session。数据库备份也会包含 session，因此 restore 后必须明确决定是保留还是统一失效旧 session。
-- smoke 只能使用临时数据库、临时 Docker volume 和临时测试凭据。不得把 `DCA_ENV_FILE` 指向生产 `.env`，不得把 smoke 指向生产 volume。
-- 执行 curl 时不要使用 `--verbose`，不要打印 response headers/body、cookie、CSRF token 或密码。脚本把这些内容写入权限为 `0700` 的临时目录并在退出时删除。
-- 当前 compose 的 `postgres_data` 使用 PostgreSQL 18+ 的版本化数据目录。PostgreSQL major 变更必须走 dump/restore，不能把旧 major 的数据目录直接挂到新 major。
+## Security boundaries
 
-## 1. 首次部署
+- Use `APP_SECURITY_ENABLED=true`, HTTPS, secure cookies, and a real BCrypt `APP_PASSWORD_HASH` for production.
+- Do not commit or print plaintext passwords, hashes, provider keys, session cookies, CSRF tokens, proxy credentials, or database credentials.
+- PostgreSQL-backed Spring Session survives ordinary API restart. Logout deletes server session state.
+- Backup/restore also includes session tables; after restoring an old/security-sensitive point, explicitly decide whether to invalidate restored sessions.
+- Smoke tests must use temporary/test credentials and must not attach to production volumes.
 
-1. 从已审查的版本检出仓库，确认工作树干净，并复制环境模板。仅首次部署执行第二条命令；已有 `.env` 时不要覆盖它。
+## Current runtime
 
-   ```bash
-   cd /opt/dca-terminal
-   git status --short --branch
-   test ! -e deploy/.env
-   umask 077
-   install -m 600 deploy/.env.example deploy/.env
-   ```
+```text
+Caddy -> web
+      `-> /api/* -> Spring Boot -> PostgreSQL 18.6
+```
 
-2. 编辑 `deploy/.env`，至少替换 `APP_DOMAIN`、`CADDY_EMAIL`、`POSTGRES_PASSWORD`、`APP_USERNAME` 和 `APP_PASSWORD_HASH`，并确认 `APP_SECURITY_ENABLED=true`、`APP_COOKIE_SECURE=true`、`FLYWAY_ENABLED=true`。生产不要把 market provider key 放到 web 构建参数。
+Only Caddy publishes host ports. PostgreSQL remains internal.
 
-3. 在启动前只做配置校验，不把解析后的配置输出到日志：
+## First deployment
 
-   ```bash
-   docker compose --env-file deploy/.env -f deploy/docker-compose.yml config --quiet
-   ```
+Create the protected environment file:
 
-4. 启动并确认四个服务健康。首次构建按仓库代理策略配置 `HTTP_PROXY`/`HTTPS_PROXY`；需要代理时使用 `localhost:7890`，不要绕过既定代理。
+```bash
+cd /opt/dca-terminal
+umask 077
+install -m 600 deploy/.env.example deploy/.env
+${EDITOR:-vi} deploy/.env
+```
 
-   ```bash
-   docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --build
-   docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
-   ```
+Set at least:
 
-5. 用与当前 `APP_PASSWORD_HASH` 匹配的登录密码运行部署 smoke。`deploy/.env` 不会自动把变量导出到当前 shell，因此显式输入非敏感的 base URL/username，并通过隐藏交互读取密码。不要把密码写入脚本、文档或 shell 命令行，也不要在 smoke 失败时打印临时目录内容。
+```text
+APP_DOMAIN
+CADDY_EMAIL
+POSTGRES_PASSWORD
+APP_USERNAME
+APP_PASSWORD_HASH
+```
 
-   ```bash
-   read -r DCA_SMOKE_BASE_URL
-   read -r DCA_SMOKE_USERNAME
-   read -r -s DCA_SMOKE_PASSWORD
-   printf '\n' >&2
-   export DCA_SMOKE_BASE_URL DCA_SMOKE_USERNAME DCA_SMOKE_PASSWORD
-   DCA_SMOKE_EXPECT_SECURE_COOKIES=1 bash deploy/scripts/smoke-deployment.sh
-   unset DCA_SMOKE_BASE_URL DCA_SMOKE_USERNAME DCA_SMOKE_PASSWORD
-   ```
+Validate Compose without printing expanded secrets:
 
-   例如 base URL 输入 `https://invest.example.com`，不要附加 `/api`。正式 HTTPS 部署保持 `DCA_SMOKE_EXPECT_SECURE_COOKIES=1`。
+```bash
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml config --quiet
+```
 
-   成功标准是 Caddy `/`、API health、未登录 session、CSRF bootstrap、login、settings、dashboard 和 logout 全部通过，且 logout 后旧 session/CSRF mutation 被拒绝。局域网 HTTP 预览只能显式设置 `DCA_SMOKE_EXPECT_SECURE_COOKIES=0` 并使用与之匹配的 `APP_COOKIE_SECURE=false`；不能把这种配置用于公网。
+Start:
 
-6. 安装每日备份 timer（路径需与实际部署目录一致）：
+```bash
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --build
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
+```
 
-   ```bash
-   sudo install -m 0644 deploy/systemd/dca-terminal-backup.service /etc/systemd/system/
-   sudo install -m 0644 deploy/systemd/dca-terminal-backup.timer /etc/systemd/system/
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now dca-terminal-backup.timer
-   systemctl list-timers dca-terminal-backup.timer
-   ```
+Then run the authenticated deployment smoke using temporary shell variables, not credentials embedded in command history.
 
-## 2. 日常升级
+## Normal upgrade
 
-1. 选择已经审查并可回滚的 commit，确认 `deploy/.env` 保留在主机且权限为 `600`。不要执行 `down -v`。
+Before changing a deployed version:
 
-   ```bash
-   git status --short --branch
-   git rev-parse --verify HEAD
-   docker compose --env-file deploy/.env -f deploy/docker-compose.yml config --quiet
-   ```
+1. identify the exact target commit;
+2. confirm the working tree and untracked deployment overrides you intend to preserve;
+3. create a verified database backup;
+4. inspect migration compatibility;
+5. build/start without deleting volumes;
+6. run smoke and business control checks.
 
-2. 构建并启动应用，升级后重新运行第 1 节的 smoke：
+Never use `docker compose down -v` as a normal upgrade command.
 
-   ```bash
-   docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --build api web caddy
-   docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
-   ```
+Recommended flow:
 
-3. Flyway migration 是前进式的。升级前保存经过验证的备份；不要编辑或删除已经应用的 migration，也不要把旧应用直接用于不兼容的新 schema。
+```bash
+git status --short --branch
+git rev-parse HEAD
 
-4. 升级到当前代码时，Flyway 应到 `V017`。除常规 dashboard smoke 外，至少确认：交易响应包含 contribution source 字段，投入分析页面可读取活动计划，初始资金月不会同时接受 DCA 交易，未归类 BUY 能先 preview 再 commit，audit endpoint 可读取对应批次。不要通过直接更新持仓或手工改 snapshot 来修复这些投影。
+deploy/scripts/backup-postgres.sh
+latest_backup="$(find deploy/backups/daily -maxdepth 1 -type f -name '*.sql.gz' -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
+gzip -t -- "$latest_backup"
 
-   用只读组合计数检查 legacy/非法 attribution，不输出 symbol、金额或 notes：
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml config --quiet
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --build
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
+```
 
-   ```sql
-   SELECT transaction_type,
-          contribution_type,
-          plan_cycle_id IS NOT NULL AS has_cycle,
-          contribution_plan_id IS NOT NULL AS has_contribution_plan,
-          count(*) AS rows
-   FROM investment_transaction
-   GROUP BY transaction_type, contribution_type, has_cycle, has_contribution_plan
-   ORDER BY transaction_type, contribution_type, has_cycle, has_contribution_plan;
-   ```
+## V022 upgrade notes
 
-   `V017` 会把 cycle-linked/null-type BUY 确定性回填为 DCA，然后审计其余 source/type/link 组合；发现非法行时 migration 会列出最多 20 个 transaction ID 并终止，不会猜测修复。应先恢复到升级前备份，在隔离环境按交易事实修正后重试。不得编辑已应用的 `V016` 或 `V017`。
+V022 is a meaningful accounting migration, not just a schema rename.
 
-## 3. Backup verification
+It introduces:
 
-执行备份脚本会先检查 Compose/PostgreSQL，就地生成 gzip plain SQL，并执行 `gzip -t`：
+- transaction types `DEPOSIT`, `WITHDRAWAL`, `INTEREST`;
+- cash ledger replay;
+- cash-inclusive portfolio total value;
+- `securities_value` / `cash_balance` snapshot columns;
+- external flow defined by DEPOSIT/WITHDRAWAL only;
+- deterministic compatibility bridge rows around legacy BUY/SELL activity;
+- invalidation of pre-V022 portfolio snapshots.
+
+### Why legacy bridge rows exist
+
+Before V022, BUY/SELL implicitly represented cash entering/leaving the account. V022 creates explicit rows so migrated accounts preserve their previous economic meaning:
+
+- DEPOSIT immediately before a legacy BUY;
+- WITHDRAWAL immediately after positive legacy SELL proceeds;
+- defensive DEPOSIT for negative legacy SELL proceeds.
+
+Do not delete these system-generated rows simply because they were created by migration.
+
+### Required post-V022 controls
+
+After upgrading an existing account, verify at minimum:
+
+- Flyway reports V022 applied successfully;
+- transaction ledger contains only allowed type/field combinations;
+- no invalid security FIFO oversell exists;
+- cash balance matches expected historical funding/economic behavior;
+- `marketValue = securitiesValue + cashBalance` for complete current summary;
+- `netInvested = cumulative DEPOSIT - WITHDRAWAL`;
+- performance endpoint returns the expected `externalFlowModel`;
+- historical snapshots rebuild after V022 invalidation;
+- current holdings and contribution attribution remain consistent.
+
+A useful read-only transaction-shape audit is:
+
+```sql
+SELECT transaction_type,
+       contribution_type,
+       plan_cycle_id IS NOT NULL AS has_cycle,
+       contribution_plan_id IS NOT NULL AS has_contribution_plan,
+       instrument_id IS NOT NULL AS has_instrument,
+       count(*) AS rows
+FROM investment_transaction
+GROUP BY transaction_type, contribution_type,
+         has_cycle, has_contribution_plan, has_instrument
+ORDER BY transaction_type, contribution_type,
+         has_cycle, has_contribution_plan, has_instrument;
+```
+
+Do not dump notes, symbols, amounts, credentials, or full ledger rows into routine logs unless specifically required for a controlled investigation.
+
+## Backup verification
+
+Create and verify:
 
 ```bash
 DCA_ENV_FILE=deploy/.env deploy/scripts/backup-postgres.sh
@@ -112,57 +154,11 @@ gzip -t -- "$latest_backup"
 stat -c '%a %n' -- "$latest_backup"
 ```
 
-确认输出权限至少不允许其他用户读取，并把备份复制到与主机不同的受保护位置。只看到 `Backup created` 和路径即可；不要解压到公共目录或把 SQL 内容放进日志。
+Keep a protected off-host copy.
 
-## 4. PostgreSQL major upgrade
+## Restore drill
 
-下面以从当前 major 升级到新 major 为例。`NEW_PROJECT` 必须是新的 Compose project，这会创建新的 `postgres_data` volume；旧 project/volume 保留到恢复验收完成。不要让新 major 直接打开旧 volume。
-
-1. 在停止写入前创建并验证旧数据库备份：
-
-   ```bash
-   cd /opt/dca-terminal
-   DCA_ENV_FILE=deploy/.env deploy/scripts/backup-postgres.sh
-   latest_backup="$(find deploy/backups/daily -maxdepth 1 -type f -name '*.sql.gz' -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
-   gzip -t -- "$latest_backup"
-   ```
-
-2. 停止旧 project，但不要删除 volume。复制 `.env` 到权限受限的临时文件，改用新 project 和目标 PostgreSQL image；`NEW_POSTGRES_IMAGE` 应是已批准的目标 major。
-
-   ```bash
-   old_compose=(docker compose --env-file deploy/.env -f deploy/docker-compose.yml)
-   upgrade_env="$(mktemp)"
-   umask 077
-   cp -- deploy/.env "$upgrade_env"
-   chmod 600 "$upgrade_env"
-   NEW_PROJECT=dca-terminal-pg-major-upgrade
-   NEW_POSTGRES_IMAGE='postgres:<approved-version>-alpine'
-   sed -i \
-     -e "s/^COMPOSE_PROJECT_NAME=.*/COMPOSE_PROJECT_NAME=${NEW_PROJECT}/" \
-     -e "s#^POSTGRES_IMAGE=.*#POSTGRES_IMAGE=${NEW_POSTGRES_IMAGE}#" \
-     "$upgrade_env"
-   "${old_compose[@]}" stop caddy web api
-   "${old_compose[@]}" down --remove-orphans
-   ```
-
-3. 启动新 PostgreSQL。它使用新 project 的新 volume；先等 healthcheck，再恢复备份。新空 volume 不需要 safety backup，所以这里只在已确认目标为空时使用 `DCA_RESTORE_SKIP_SAFETY_BACKUP=1`。
-
-   ```bash
-   new_compose=(docker compose --env-file "$upgrade_env" -f deploy/docker-compose.yml)
-   "${new_compose[@]}" up -d postgres
-   "${new_compose[@]}" ps
-   DCA_ENV_FILE="$upgrade_env" DCA_RESTORE_SKIP_SAFETY_BACKUP=1 \
-     deploy/scripts/restore-postgres.sh --confirm "$latest_backup"
-   "${new_compose[@]}" up -d --build
-   ```
-
-4. 用第 1 节 smoke 和最小数据库核对完成验收后，再把经过验证的 project/image 配置提升为新的部署配置，并重新安装 systemd service 中的 `DCA_ENV_FILE`。升级失败时，停止新 project、保留新 volume 供调查，用原 `deploy/.env` 启动旧 project；旧 volume 从未被覆盖。
-
-5. 验收完成后才删除临时 env 和旧资源。删除前确认备份已在异机保存；不要使用没有明确 project 名称的递归删除命令。
-
-## 5. Restore drill
-
-Restore 是破坏性操作。先进入维护窗口，停止会写数据库的 API，保留 PostgreSQL 容器运行，然后创建 safety backup。默认 restore 脚本会创建 safety backup；只有在第 4 节的新空 volume 流程中才跳过它。
+Restore is destructive to the target database state. Enter a maintenance window and stop application writers first.
 
 ```bash
 compose=(docker compose --env-file deploy/.env -f deploy/docker-compose.yml)
@@ -173,62 +169,94 @@ DCA_ENV_FILE=deploy/.env deploy/scripts/restore-postgres.sh --confirm "$BACKUP_F
 "${compose[@]}" ps
 ```
 
-恢复后依次确认 API health、最新 Flyway version、关键关联数据、contribution attribution 和 portfolio 总计，再运行部署 smoke。验证未完成前不要删除旧 volume、safety backup 或原始 dump。需要可重复的全流程验证时，在没有生产 `.env`、volume 或 provider key 的环境运行：
+Post-restore verification must now include V022-era controls:
+
+- Flyway version;
+- transaction counts/types;
+- contribution classification/audit;
+- cash balance;
+- security value;
+- total account value;
+- external net invested;
+- representative performance response;
+- login/session policy decision.
+
+For repeatable isolated verification:
 
 ```bash
 bash deploy/scripts/backup-restore-smoke.sh
 ```
 
-该脚本会在两个独立临时 Compose project 中真实执行 PostgreSQL 18.6 dump、gzip 校验、新 volume restore、Flyway 启动校验和关联数据断言，不调用 market provider。
+## Session invalidation after restore
 
-Restore 会一并恢复 `SPRING_SESSION` 和 `SPRING_SESSION_ATTRIBUTES`。如果恢复点较旧、访问边界已变化，或不能证明原 session 应继续有效，在维护窗口、API 停止状态下清除它们，再重新登录：
+If restored sessions should not remain valid, with the API stopped and the target database explicitly confirmed:
 
 ```sql
 TRUNCATE TABLE spring_session_attributes, spring_session;
 ```
 
-这只失效登录 session，不删除交易、计划、行情或投资组合数据。执行前仍需确认目标数据库和维护窗口，不能把该语句指向未确认的实例。
+This does not delete transaction/plan/market data.
 
-## 6. Full market-history resync
+## PostgreSQL major upgrade
 
-只有在 provider 配置、代理和配额确认可用时执行 full resync。provider key 只在 API 容器环境中，不能放进 web 环境或浏览器请求。不要用 fixture、当前持仓、raw close 或零值补齐历史。
+The PostgreSQL 18+ image uses a versioned data directory under the parent mount `/var/lib/postgresql`. Major-version directories are not binary-compatible.
 
-正常操作优先使用 ETF detail 页的 Retry/同步动作。需要审计 API 响应时，在已认证的临时 shell 中使用已有 session/CSRF 变量；不要把它们写入命令历史或输出：
+Use logical dump/restore into a new project/volume. Never point a new PostgreSQL major directly at an old major's data directory.
 
-```bash
-curl --silent --show-error --fail \
-  --cookie "$COOKIE_JAR" \
-  --header "$CSRF_HEADER: $CSRF_TOKEN" \
-  --request POST "https://${APP_DOMAIN}/api/v1/instruments/${SYMBOL}/sync/full" \
-  --output "$RESYNC_RESPONSE"
-```
+Keep the old project/volume until the restored environment passes smoke and financial control totals.
 
-检查返回的 `status`、`barsSaved`、`splitsSaved`、`completedAt`、可选 `message` 和数据库行数；另从受影响行情行核对实际 `source`。Provider 不可达时应保留明确的 unavailable/stale 状态并重试，不得把失败伪装成新鲜数据。
+## Application rollback
 
-## 7. Application image rollback
+Application image rollback does not roll back Flyway. If the database has already advanced to a schema an older application cannot understand, use a matching verified database restore rather than forcing the old binary onto the new schema.
 
-回滚只针对应用版本，不删除数据库 volume，不回滚已应用 schema。当前 compose 从检出的 revision 构建应用，因此回滚到已验证的旧 revision 后执行：
+V022 in particular changes transaction types and accounting semantics, so pre-V022 application rollback against a V022 database should not be assumed safe.
 
-```bash
-git status --short --branch
-git rev-parse --verify KNOWN_GOOD_COMMIT
-# 在维护窗口检出已验证 revision 后：
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --build api web caddy
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
-```
+## Market-history repair
 
-如果旧应用不能读取当前 schema，立即停止继续回滚，恢复兼容的应用版本或按 Restore drill 将数据库恢复到匹配快照。任何 rollback 都必须重新执行 health、session/CSRF/login/logout smoke；不要用 `docker compose down -v`。
+Before full history resync:
 
-## 8. 何时不能回滚 schema
+1. verify provider/proxy/key configuration;
+2. create/verify backup;
+3. record row/date/adjusted-close controls;
+4. call authenticated full resync;
+5. verify saved bars/splits/source and dependent metrics;
+6. restore if validation fails.
 
-- 不编辑、删除或重排已经发布的 Flyway migration，不执行“向下 migration”来配合旧应用。
-- 当前最新 migration 是 `V017__enforce_contribution_source_contract.sql`。`V013` 增加 ledger-order sequence，`V014` 增加持久 HTTP session 表，`V015` 删除旧 timezone setting，`V016` 增加 contribution 字段，`V017` 回填确定性 legacy DCA、增加跨字段 CHECK/partial index 和 classification audit table，并把旧 initial-capital 列标为兼容废弃。已经应用这些 migration 的数据库不能靠检出更早镜像“撤掉”变更。
-- 新 migration 已改变列含义、约束、索引、关联关系或删除数据时，schema 不能靠旧镜像回滚。
-- 优先发布向前兼容的修复 migration；若数据已损坏或必须回到历史状态，使用已验证 dump/restore 到隔离 volume，再以匹配的应用版本验收。
-- 任何恢复或迁移都要记录 Flyway version、transaction/plan/contribution/price/snapshot 关联行和 portfolio 关键总计，避免只凭页面是否打开判断成功。
+Do not clear history first or synthesize adjusted values.
 
-## 9. 浏览器兼容与 headers 审计
+## CI / release evidence
 
-在添加 Caddy headers 前已核对当前 web 构建：Google Fonts 使用 `fonts.googleapis.com`/`fonts.gstatic.com`，React 使用 inline style，ECharts 使用 canvas/HTML tooltip，Lightweight Charts 使用 canvas，API 请求为同源 `/api`。因此 Caddy 当前只发送 `Content-Security-Policy-Report-Only`，允许这些已审计资源和 `connect-src 'self'`；不会以 CSP enforcement 阻断 Vite bundle、图表、样式或 API。HTTPS 才发送 HSTS；HTTP 局域网预览不会收到 HSTS。
+The current CI workflow includes:
 
-浏览器 smoke 时打开 DevTools Console/Issues，确认 report-only 没有未预期的资源违规，再按需要收紧策略。不得把 report-only 改成 enforcement，除非重新完成资源审计和真实浏览器验证。
+- Web install/audit/lint/typecheck/test/build;
+- API test/build;
+- PostgreSQL 18.6 `postgresTest` Flyway/Hibernate validation;
+- Compose and shell checks;
+- backup/restore smoke;
+- temporary HTTPS deployment smoke;
+- Playwright E2E;
+- repository whitespace checks.
+
+Release claims must reference a concrete run for the exact commit. An empty status API response is not proof of success.
+
+## Deployment smoke contract
+
+The checked-in deployment smoke exercises health, unauthenticated/authenticated session flow, CSRF/login, settings/dashboard access, logout, and rejection of stale authenticated mutation state.
+
+After V022, manual release verification should additionally open/check:
+
+- a cash-inclusive dashboard summary;
+- transaction creation paths for at least DEPOSIT and BUY;
+- `/api/v1/performance/portfolio`;
+- a regular-close history response;
+- contribution analysis for the active plan if one exists.
+
+## Do not do these
+
+- Do not use `down -v` for routine upgrades.
+- Do not edit a published Flyway migration.
+- Do not delete V022 legacy bridge rows as cleanup.
+- Do not modify holdings/cash/snapshots directly to repair transaction truth.
+- Do not treat BUY as an external performance flow post-V022.
+- Do not print secrets/tokens/cookies in diagnostics.
+- Do not run production smoke/E2E against temporary test scripts that delete volumes.

@@ -1,397 +1,309 @@
 # DCA Terminal Calculation Rules
 
-This document is the source of truth for financial calculation behavior. All
-rules use exact decimal arithmetic (`BigDecimal` in Java and `NUMERIC` in
-PostgreSQL). Intermediate calculations use a high precision context; values
-are rounded only at the documented display or cash-allocation boundary.
-Frontend formulas use `decimal.js-light` after normalization. Financial API
-responses are plain decimal strings; regressions cover the full allowed
-`NUMERIC(20,6/8)` boundaries from raw JSON through the Web normalizers.
+> Current baseline: `main@b6c578ee129866389efde907c10a99400da5cd4e`.
+> This document reflects the post-V022 cash-ledger model.
+
+All financial arithmetic uses exact decimal values (`BigDecimal` / PostgreSQL `NUMERIC`) except the documented positive fractional-power boundary for CAGR. API financial values are decimal JSON strings; Web calculations normalize them with `decimal.js-light`.
 
 ## Time and price conventions
 
-- The market calendar and plan execution window use `America/New_York`.
+- Business date and US plan/market decisions use `America/New_York`.
 - Database timestamps are UTC.
-- A trading-date lookup for a target calendar date selects the latest available
-  trading date `<= targetDate`.
-- A missing price is not replaced by a future price, a current price, or zero.
-- Performance return metrics use provider-adjusted closes where available.
+- A historical lookup for target date `d` uses the latest available trading date `<= d`.
+- A missing required value is never replaced by a future price, current price, NAV, or zero.
+- Current account valuation can use the newest valid regular/pre/post/extended/overnight quote.
+- Historical portfolio replay and persisted snapshots use regular-session raw market closes.
+- ETF historical return metrics use adjusted close where documented.
+
+## Cash ledger
+
+Cash is a projection of the ordered transaction ledger:
+
+```text
+cashChange(DEPOSIT)    = +amount
+cashChange(WITHDRAWAL) = -amount
+cashChange(BUY)        = -(quantity * unitPrice + fee)
+cashChange(SELL)       = +(quantity * unitPrice - fee)
+cashChange(DIVIDEND)   = +amount
+cashChange(FEE)        = -amount
+cashChange(INTEREST)   = +amount
+```
+
+All cash events are replayed in trade-date / ledger-order sequence.
+
+The external-capital stream used for portfolio performance is deliberately narrower:
+
+```text
+externalFlow(DEPOSIT)    = +amount
+externalFlow(WITHDRAWAL) = -amount
+externalFlow(other)      = 0
+```
+
+Therefore BUY/SELL do not create investment performance merely by moving money between cash and securities.
+
+## Split-aware FIFO
+
+A split with ratio `numerator / denominator` changes open lot shares while preserving lot total cost:
+
+```text
+shares_after = shares_before * numerator / denominator
+per_share_cost_after = per_share_cost_before * denominator / numerator
+```
+
+BUY lot cost:
+
+```text
+buy cost = quantity * unitPrice + fee
+```
+
+SELL proceeds and realized P/L:
+
+```text
+sell proceeds = quantity * unitPrice - fee
+realized P/L  = sell proceeds - FIFO cost consumed
+```
+
+A SELL exceeding available split-adjusted shares is invalid.
+
+## Portfolio values
+
+For valuation date `d`, replay only ledger events and splits visible by `d`.
+
+```text
+securitiesValue = sum(open shares * selected raw market price)
+cashBalance     = cash-ledger balance
+marketValue     = securitiesValue + cashBalance
+costBasis       = sum(open security-lot cost)
+unrealizedPnl   = securitiesValue - costBasis
+netInvested     = cumulative DEPOSIT - WITHDRAWAL
+```
+
+`marketValue` now means total account value, despite the historical field name.
+
+When the security valuation is complete:
+
+```text
+totalPnl = marketValue - netInvested
+```
+
+This account-level P/L naturally includes realized security gains/losses, unrealized P/L, dividends, interest, and standalone fees because all of them affect total account value while only deposits/withdrawals affect external capital.
+
+The backend still exposes component fields such as realized P/L, unrealized P/L, dividend income, interest income, and total fees for audit/presentation. Those components must not be recombined in a way that double-counts trade fees.
+
+## Current vs historical valuation
+
+Current security prices are loaded from live/latest quotes when possible. If a live refresh cannot produce a usable price, stored quote or prior daily close may be used with degraded freshness according to current portfolio logic.
+
+Historical daily account values use the ledger as it existed on each date plus that date's regular-session price. Current holdings multiplied by old prices are forbidden because they introduce look-ahead bias.
+
+Snapshots are rebuildable read models. Backdated transaction changes invalidate snapshots from the affected date forward.
+
+## Portfolio performance engine
+
+Canonical endpoint:
+
+```text
+GET /api/v1/performance/portfolio?range=1M|3M|1Y|YTD|ALL
+```
+
+The engine consumes a sequence of account valuations:
+
+```text
+V_t = total account value at t
+F_t = cumulative external flow at t
+```
+
+For adjacent valid valuations, period gross factor is:
+
+```text
+externalFlow_t = F_t - F_(t-1)
+gross_t        = (V_t - externalFlow_t) / V_(t-1)
+level_t        = level_(t-1) * gross_t
+```
+
+Only complete positive valuations participate. A PARTIAL current valuation is not appended as a live endpoint.
+
+### Inception baseline
+
+If the requested range starts at or before the first valuation, the theoretical inception level begins from cumulative external capital rather than forcing the first visible account mark to exactly 1. This preserves performance earned between initial funding and the first regular-close/live valuation.
+
+### TWR
+
+For the selected range, levels are rebased to the selected baseline:
+
+```text
+rebasedLevel_t = level_t / baselineLevel
+TWR            = terminal rebasedLevel - 1
+```
+
+TWR removes deposits/withdrawals from investment performance.
+
+### CAGR
+
+CAGR is annualized from inception level history using elapsed calendar days and a 365.2425-day year:
+
+```text
+CAGR = terminalLevel ^ (1 / years) - 1
+years = elapsedDays / 365.2425
+```
+
+The implementation validates a positive terminal level and uses an isolated `Math.pow` boundary for the fractional exponent.
+
+### Maximum drawdown
+
+For selected performance points:
+
+```text
+peak_t     = max(level_0 ... level_t)
+drawdown_t = level_t / peak_t - 1
+maxDD      = min(drawdown_t)
+```
+
+### XIRR
+
+Current portfolio XIRR uses only external capital events plus current total account value:
+
+```text
+DEPOSIT    = -amount
+WITHDRAWAL = +amount
+valuation  = +current total account value
+```
+
+BUY, SELL, DIVIDEND, FEE, and INTEREST are internal account events and are not separate XIRR cash flows in the post-V022 model.
+
+The XIRR solver uses dated cash flows with a 365-day exponent basis, deterministic root bracketing, and bisection. If there is no valid sign-changing bracket or result is non-finite, return null rather than NaN/HTTP 500.
+
+## Today performance
+
+Today is anchored to the previous completed regular-close portfolio point strictly before the current New York business date.
+
+Conceptually:
+
+```text
+Today investment P/L = current total value
+                     - prior regular-close total value
+                     - external capital flow since that close
+```
+
+This baseline is retained throughout pre-market, regular trading, and after-hours on the same New York date. It rolls on the next New York calendar day.
+
+The experimental midnight-settlement runtime path was removed by V021.
 
 ## ETF metrics
 
 ### Today / 1D
 
 ```text
-Today Return = latest market price / previous close - 1
+ETF Today Return = latest market price / previous regular close - 1
 ```
 
-The quote's current traded price and previous close are used. This is a market
-move, not a dividend-adjusted long-term return.
+### 1M / 3M / 1Y
 
-### 1M, 3M, and 1Y
-
-For each target range, calculate the calendar target date and select the latest
-stored trading date on or before it. Use adjusted close for both endpoints:
+Use adjusted close at the latest available trading date `<=` target date:
 
 ```text
-Period Return = latest adjusted close / target-date adjusted close - 1
+period return = latest adjusted close / target adjusted close - 1
 ```
-
-If no endpoint exists, return null with `INSUFFICIENT_HISTORY`/`PARTIAL` rather
-than using the next trading day.
 
 ### YTD
 
-YTD is not simply the first quote observed in the current year. Select the last
-available trading date in the previous calendar year and the latest adjusted
-close:
+Use the final available prior-calendar-year adjusted close as baseline:
 
 ```text
-YTD = latest adjusted close / previous-year-last-trading-day adjusted close - 1
+YTD = latest adjusted close / previous-year final adjusted close - 1
 ```
-
-If the ETF did not have a prior-year bar, the metric is unavailable.
 
 ### 3Y CAGR
 
-Select the adjusted close at the latest trading date on or before three years
-before the latest date. Use the exact elapsed day count and a 365.2425-day
-year:
-
 ```text
 3Y CAGR = (end adjusted close / start adjusted close)
-          ^ (365.2425 / elapsed days) - 1
+          ^ (365.2425 / elapsedDays) - 1
 ```
 
-The implementation uses a high-precision `BigDecimal` context for ratios and
-integer powers. Java's standard library has no arbitrary-precision fractional
-power operation, so the isolated fractional-exponent boundary converts the
-positive base and exponent to finite `double`, calls `Math.pow`, and immediately
-converts the result back to the application `MathContext`. This is the only
-intentional floating-point boundary and is covered by tolerance-based tests.
-Return null if the start value is non-positive or history is insufficient.
+### 52-week high / low
 
-### 52-week high and low
+Use raw daily `high` / `low` over the latest 365 calendar days.
 
-Use the most recent 365 calendar days of daily bars. These two fields use raw
-`high` and raw `low`, not adjusted close:
+### ETF drawdown
+
+Use adjusted close and running peak. Missing adjusted close must degrade the metric instead of substituting raw close.
+
+## Allocation
+
+Security holdings allocation is a securities-only concept:
 
 ```text
-52W High = max(raw high)
-52W Low  = min(raw low)
+actualWeight_i = securityMarketValue_i / totalSecuritiesValue
 ```
 
-If high/low data is missing for a required bar, mark the result partial rather
-than silently substituting close.
+Cash is displayed separately and is not a pseudo security in the allocation service.
 
-### Drawdown
-
-Current drawdown uses adjusted close and the running peak over all available
-stored history:
+For plan assets:
 
 ```text
-runningPeak[t] = max(adjustedClose[0..t])
-currentDrawdown = latest adjusted close / historical running peak - 1
+drift_i = actualWeight_i - targetWeight_i
 ```
 
-Maximum drawdown for the ETF detail's one-year view uses the latest 365
-calendar days:
+Unplanned holdings remain visible but do not silently change plan target weights.
+
+## Plan cycles
+
+A monthly cycle freezes plan intent. Actual execution is the cash outlay of linked BUY rows:
 
 ```text
-drawdown[t] = adjustedClose[t] / runningPeak[t] - 1
-maxDrawdown1Y = min(drawdown[t])
+executedAmount = sum(quantity * unitPrice + fee for linked BUYs)
 ```
 
-The current UI does not claim an all-history maximum drawdown field unless the
-requested range is explicitly extended in a later version.
+DEPOSIT funding does not complete a cycle.
 
-## Split-aware ledger and FIFO
-
-A split event with ratio `numerator / denominator` applies on its effective
-date. When replaying a position after that date:
+Statuses remain deterministic:
 
 ```text
-shares after split = shares before split * numerator / denominator
-per-share cost after split = per-share cost before split
-                          * denominator / numerator
+before window                         -> UPCOMING
+inside window, executed = 0          -> OPEN
+inside window, 0 < executed < plan   -> PARTIAL
+inside/after, executed >= plan       -> COMPLETED
+after window, executed = 0           -> SKIPPED
 ```
 
-The original transaction remains unchanged in the ledger. The replay layer
-applies the event to open lots and to historical quantities. Provider-adjusted
-prices must not be split-adjusted a second time.
-
-For each instrument, valid BUY transactions create FIFO lots ordered by trade
-date and the server-assigned `ledgerOrder` (with created timestamp and ID as
-legacy tie-breakers). A BUY lot's cost includes its execution fee:
-
-```text
-buy lot cost = quantity * unit price + buy fee
-```
-
-A SELL consumes the oldest available lots first. Its realized P/L is:
-
-```text
-sell proceeds = quantity * unit price - sell fee
-realized P/L = sell proceeds - FIFO cost of consumed shares
-```
-
-The remaining cost basis is the sum of open lot costs after split adjustment.
-A SELL that exceeds available split-adjusted shares is rejected. DIVIDEND is a
-positive cash-flow/income fact and does not automatically reinvest. A separate
-BUY represents reinvestment. A standalone FEE has a positive `amount` field
-and is tracked separately from trade execution fees.
-
-## Portfolio values
-
-At valuation date `d`, only transactions with `trade_date <= d` and split
-events effective by `d` are replayed:
-
-```text
-market value = sum(open split-adjusted shares * raw market close)
-cost basis   = sum(open lot cost)
-unrealized P/L = market value - cost basis
-```
-
-Realized P/L is the accumulated FIFO result from SELL transactions. Dividend
-income is the sum of DIVIDEND amounts. Trade execution fees are already
-included once in lot cost or sell proceeds; standalone FEE transactions are
-subtracted separately. Therefore the displayed total is:
-
-```text
-total P/L = realized P/L + unrealized P/L + dividend income
-            - standalone FEE transactions
-```
-
-The UI may show total trade fees and standalone fees as separate audit fields;
-it must not subtract BUY/SELL fees a second time.
-
-`net invested` for the portfolio chart is cumulative BUY cash outlay less
-SELL net proceeds. Dividends are income cash flows, not a new external
-contribution. DCA contribution progress counts only BUY cash outlay linked to
-the relevant cycle/plan period.
-
-## Portfolio history
-
-Daily `portfolio_snapshot_daily` rows are a rebuildable cache, not a fact
-source. History for a requested range reuses valid snapshots that cover a date
-and replays missing dates in order. A non-empty snapshot list must not short-
-circuit the range. Backdated ledger mutations invalidate snapshots from the
-affected date forward; earlier dates stay.
-
-For every requested snapshot date, the service replays transactions known on
-that date and uses that date's market price. A transaction bought in 2026 must
-not affect a 2025 portfolio value. Current holdings multiplied by old prices
-are explicitly forbidden because that introduces look-ahead bias.
-
-If one or more required daily bars are missing, the service may carry forward
-the previous valid EOD close for continuity only when it marks the snapshot
-`PARTIAL` and records the missing instruments. It must not carry a price before
-the instrument's first available bar.
-
-## Dashboard time-weighted performance
-
-Dashboard Today, YTD, and annualized portfolio performance are calculated in
-the web client from the API's portfolio-history projection plus the current
-summary point. For adjacent valid points, external flow is the change in
-`netInvested`:
-
-```text
-external flow[t] = netInvested[t] - netInvested[t-1]
-period factor[t] = (marketValue[t] - external flow[t]) / marketValue[t-1]
-TWR              = product(period factor) - 1
-```
-
-Today's P/L is `current market value - prior market value - external flow`.
-YTD uses the last point before January 1 when one exists; when the portfolio
-started during the current year, YTD P/L is current market value minus current
-net invested. The annualized display uses the complete available history:
-
-```text
-annualized TWR = product(period factor) ^ (365.2425 / elapsed days) - 1
-```
-
-The first valid point contributes `marketValue / netInvested` when both are
-positive. Missing market-value points are excluded. For a non-annualized range,
-a segment with a non-positive opening or adjusted ending value is skipped; the
-result is null when no valid segment remains. The annualized calculation is
-stricter: it requires at least two dated points, a positive first value and net
-investment, a positive adjusted ending value for every included segment, and a
-positive total factor. An invalid date range or any failed annualized condition
-returns null rather than a fabricated zero. This time-weighted display is
-distinct from account XIRR below.
-
-## XIRR / personal return
-
-XIRR uses dated cash flows and the 365-day year basis:
-
-```text
-BUY       = -(quantity * unit price + fee)
-SELL      =  (quantity * unit price - fee)
-DIVIDEND  =  amount
-FEE       = -amount
-valuation = +current market value on the valuation date
-```
-
-For cash flow `CF_i` on date `d_i`, with `d_0` the first cash-flow date:
-
-```text
-NPV(r) = sum(CF_i / (1 + r)^((d_i - d_0) / 365))
-```
-
-The implementation brackets roots over a deterministic bounded probe range and
-solves the selected sign-changing interval with bisection. If multiple roots
-exist, the current service selects the root whose interval midpoint has the smallest absolute
-rate, then the lower interval as a deterministic tie-breaker. This is a product
-convention, not a claim that XIRR is globally unique. If cash flows do not
-contain both positive and negative values, no bracket is found, or the result
-is non-finite, return null with an explanatory status instead of NaN or an
-HTTP 500. The rate is not capped for calculation; formatting applies a
-reasonable display precision.
-
-## Allocation and drift
-
-For active-plan assets:
-
-```text
-actualWeight[i] = current market value[i] / total portfolio market value
-drift[i]        = actualWeight[i] - targetWeight[i]
-```
-
-Unplanned holdings remain visible in the overall portfolio. They are marked
-unplanned and do not silently change the active plan's target weights. If the
-portfolio value is zero, actual weights and drift are null.
-
-## Plan cycles and execution
-
-For a monthly cycle, `planned_amount` is the frozen plan budget. `executed_amount`
-is the sum of linked BUY cash outlay:
-
-```text
-BUY execution = quantity * unit price + fee
-```
-
-The real transaction ledger accepts only trade dates on or before the
-application-local current date. A future-dated transaction is rejected with
-`FUTURE_TRADE_DATE_NOT_ALLOWED`; cycle status and executed amount never use a
-future transaction to advance a cycle before its execution window.
-
-Statuses are deterministic:
-
-```text
-before execution window, no matter the execution  -> UPCOMING
-inside window, executed amount = 0                -> OPEN
-inside window, 0 < executed < planned             -> PARTIAL
-inside/after window, executed >= planned          -> COMPLETED
-after window, executed = 0                         -> SKIPPED
-```
-
-The UI may show over-execution as `COMPLETED` with an overage indicator; it
-must not reduce the executed amount to the plan budget.
-
-Annual execution rate uses started cycles and caps the display at 100%:
-
-```text
-execution rate = sum(min(executed, planned)) / sum(planned)
-```
-
-Upcoming cycles are excluded from the denominator. Annual contribution
-progress can show the actual amount above the annual planned amount while the
-rate remains understandable.
-
-An actual `INITIAL` BUY changes the opening-month DCA presentation. If that
-plan month has initial capital and no linked DCA execution, its DCA cycle is
-reported as `SKIPPED` with effective planned amount zero. The API rejects a DCA
-BUY linked to that month. A plan start month with no actual initial-capital BUY
-uses the ordinary status rules above.
+An actual INITIAL BUY in the plan start month can suppress ordinary DCA execution for that month according to current plan rules.
 
 ## Contribution-batch analysis
 
-Contribution batches attribute actual BUY lots to one plan without creating a
-new fact source:
+Contribution analysis remains BUY-lot based.
 
-- `INITIAL`: a BUY explicitly linked to the requested plan as initial capital;
-- `DCA`: a BUY linked to one of the requested plan's cycles, grouped by the
-  cycle's `YYYY-MM` period;
-- `UNPLANNED` or unclassified: visible to the user but excluded from plan
-  contribution totals and batches.
+Attributed batches:
 
-The principal of each attributed BUY includes its execution fee:
+- `INITIAL`: explicit initial BUY for the plan;
+- `DCA`: BUY linked to a plan cycle;
+- `UNPLANNED` and unclassified BUYs are excluded from attributed plan totals.
+
+Principal:
 
 ```text
-batch principal += quantity * unit price + buy fee
+principal = BUY quantity * unitPrice + fee
 ```
 
-Global instrument FIFO order is preserved across all sources. A SELL therefore
-consumes the oldest open lot even when that crosses from initial capital into a
-later DCA batch. Sell fees are allocated pro rata across the consumed shares:
+SELL consumes global FIFO lots and assigns realized P/L to the lot's original batch.
+
+For a complete open lot valuation:
 
 ```text
-attributed realized P/L = allocated net sell proceeds - consumed lot cost
-```
-
-Splits change the quantity of each attributed open lot but not its total cost.
-At the analysis date, an open lot contributes:
-
-```text
-open value = split-adjusted open quantity * current usable price
-open P/L   = open value - open lot cost
-batch P/L  = realized P/L + open P/L
+batch P/L = attributed realized P/L + openValue - openCost
 batch value = principal + batch P/L
-batch cumulative ROI = batch P/L / principal
+batch ROI = batch P/L / principal
 ```
 
-ROI is cumulative and deliberately not annualized. DIVIDEND and standalone FEE
-transactions are currently excluded from batch P/L. If any open attributed lot
-lacks a usable current price, its batch and aggregate bucket return null for
-value/P&L/ROI and use `PARTIAL` status instead of treating the price as zero.
+Current contribution analysis deliberately excludes DIVIDEND, INTEREST, account-level FEE, DEPOSIT, and WITHDRAWAL from batch attribution. These facts still affect account cash/performance, so batch totals are not expected to equal full account P/L without an explicit reconciliation bridge.
 
-`averageMarketDays` is a cost-weighted count of calendar days, despite the UI's
-short label "market age". Closed lot cost is weighted through the sell date;
-open lot cost is weighted through the analysis date:
+The current `averageMarketDays`/weighted-day field is cost-weighted calendar days, not exchange trading days.
 
-```text
-average days = sum(lot cost * calendar days held) / total batch principal
-```
+## V022 legacy bridge semantics
 
-Actual `initial.principal`, total invested, holdings, and cycle behavior derive
-only from classified transactions. The old nullable
-`investment_plan.initial_capital` column is retained for database compatibility
-but is no longer mapped or exposed by the application.
+Before explicit cash existed, legacy BUY/SELL rows implicitly injected or removed external money. V022 inserts synthetic bridge events to preserve that economic history:
 
-## Contribution-first recommendation
+- before each positive legacy BUY cash outlay: matching DEPOSIT;
+- after each positive legacy SELL net proceeds: matching WITHDRAWAL;
+- defensive DEPOSIT for a legacy SELL whose fee exceeded gross proceeds.
 
-For contribution `C`, current total portfolio value `V`, current value of
-asset `i` as `A_i`, and target weight `w_i`:
-
-```text
-new portfolio value = V + C
-target value[i]     = (V + C) * w_i
-gap[i]              = target value[i] - A_i
-positive gap[i]     = max(gap[i], 0)
-```
-
-If the sum of positive gaps is non-zero, allocate the contribution by positive
-gap proportion. Assets with a negative gap receive zero. This is contribution-
-first rebalancing: it does not sell an overweight asset.
-
-Monetary suggestions are rounded to cents using `HALF_UP`. The final cent
-remainder is allocated by largest remainder, with deterministic symbol order
-as the tie-breaker. The sum of suggestions must equal `C` exactly. If a plan
-asset has no reliable current price, the response is `PARTIAL` and the
-recommendation is disabled rather than estimated.
-
-## Display rounding and auditability
-
-Display formatting is separate from calculation precision:
-
-- prices and monetary values: two decimal places with currency symbol;
-- quantities: up to eight decimal places, trimming trailing zeroes;
-- rates: two decimal places by default;
-- AUM: compact units only after exact calculation.
-
-Raw decimal values remain available in API responses and database rows. Unit
-tests must cover YTD boundary dates, missing trading days, adjusted versus raw
-prices, split quantities, FIFO partial sells, fees, XIRR invalid roots,
-weight tolerance, cycle status, recommendation sum/overweight behavior,
-initial/DCA lot attribution, contribution FIFO sells, missing contribution
-prices, and the initial-capital opening-month rule.
+These bridge events make the post-V022 external-flow model economically equivalent to the old implicit model for migrated accounts. They must remain part of ledger replay.

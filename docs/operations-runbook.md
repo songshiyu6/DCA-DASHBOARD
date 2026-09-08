@@ -1,30 +1,27 @@
 # DCA Terminal Operations Runbook
 
-> Current baseline: `main@b6c578ee129866389efde907c10a99400da5cd4e`.
-> Current Flyway chain: `V001`–`V022`.
+> Current Flyway chain: `V001`–`V025`.
 
-This runbook covers the current single-host Compose deployment. All commands are executed from the repository root unless noted otherwise.
+This runbook covers the current single-host Compose deployment. Execute commands from the repository root unless noted otherwise.
 
 ## Security boundaries
 
-- Use `APP_SECURITY_ENABLED=true`, HTTPS, secure cookies, and a real BCrypt `APP_PASSWORD_HASH` for production.
-- Do not commit or print plaintext passwords, hashes, provider keys, session cookies, CSRF tokens, proxy credentials, or database credentials.
-- PostgreSQL-backed Spring Session survives ordinary API restart. Logout deletes server session state.
-- Backup/restore also includes session tables; after restoring an old/security-sensitive point, explicitly decide whether to invalidate restored sessions.
-- Smoke tests must use temporary/test credentials and must not attach to production volumes.
+- Production: `APP_SECURITY_ENABLED=true`, HTTPS, secure cookies, real BCrypt `APP_PASSWORD_HASH`.
+- Never commit/print plaintext passwords, hashes, provider keys, session cookies, CSRF tokens, proxy credentials, or DB credentials.
+- PostgreSQL-backed Spring Session survives normal API restart; logout invalidates server session.
+- Backup/restore includes session tables; explicitly decide whether restored sessions should remain valid.
+- Smoke/E2E must use isolated credentials/volumes.
 
-## Current runtime
+## Runtime
 
 ```text
 Caddy -> web
       `-> /api/* -> Spring Boot -> PostgreSQL 18.6
 ```
 
-Only Caddy publishes host ports. PostgreSQL remains internal.
+Only Caddy publishes host ports.
 
 ## First deployment
-
-Create the protected environment file:
 
 ```bash
 cd /opt/dca-terminal
@@ -43,35 +40,38 @@ APP_USERNAME
 APP_PASSWORD_HASH
 ```
 
-Validate Compose without printing expanded secrets:
+Review provider/scheduler settings as applicable:
+
+```text
+MARKET_SYNC_ENABLED / MARKET_SYNC_CRON
+FUND_SYNC_ENABLED / FUND_SYNC_CRON
+FX_SYNC_ENABLED / FX_SYNC_CRON
+YAHOO_PROXY_URL
+TWELVE_DATA_API_KEY
+ALPHA_VANTAGE_API_KEY
+EASTMONEY_*
+```
+
+Validate/start:
 
 ```bash
 docker compose --env-file deploy/.env -f deploy/docker-compose.yml config --quiet
-```
-
-Start:
-
-```bash
 docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --build
 docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
 ```
-
-Then run the authenticated deployment smoke using temporary shell variables, not credentials embedded in command history.
 
 ## Normal upgrade
 
 Before changing a deployed version:
 
-1. identify the exact target commit;
-2. confirm the working tree and untracked deployment overrides you intend to preserve;
-3. create a verified database backup;
-4. inspect migration compatibility;
-5. build/start without deleting volumes;
+1. identify exact target commit;
+2. confirm working tree/deployment overrides;
+3. create and verify DB backup;
+4. inspect forward migration compatibility;
+5. start without deleting volumes;
 6. run smoke and business control checks.
 
 Never use `docker compose down -v` as a normal upgrade command.
-
-Recommended flow:
 
 ```bash
 git status --short --branch
@@ -86,45 +86,74 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --build
 docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
 ```
 
-## V022 upgrade notes
+## Accounting migration history
 
-V022 is a meaningful accounting migration, not just a schema rename.
+### V022 real USD cash ledger
 
-It introduces:
+V022 introduced:
 
-- transaction types `DEPOSIT`, `WITHDRAWAL`, `INTEREST`;
-- cash ledger replay;
-- cash-inclusive portfolio total value;
-- `securities_value` / `cash_balance` snapshot columns;
-- external flow defined by DEPOSIT/WITHDRAWAL only;
-- deterministic compatibility bridge rows around legacy BUY/SELL activity;
-- invalidation of pre-V022 portfolio snapshots.
+- DEPOSIT/WITHDRAWAL/INTEREST;
+- cash replay;
+- cash-inclusive real USD account value;
+- securities/cash snapshot columns;
+- external flow = DEPOSIT/WITHDRAWAL only;
+- deterministic compatibility bridge cash rows around legacy BUY/SELL;
+- invalidation of pre-V022 snapshots.
 
-### Why legacy bridge rows exist
+Legacy bridge rows preserve prior economic meaning and must not be deleted as cleanup.
 
-Before V022, BUY/SELL implicitly represented cash entering/leaving the account. V022 creates explicit rows so migrated accounts preserve their previous economic meaning:
+Required real USD controls after upgrade:
 
-- DEPOSIT immediately before a legacy BUY;
-- WITHDRAWAL immediately after positive legacy SELL proceeds;
-- defensive DEPOSIT for negative legacy SELL proceeds.
-
-Do not delete these system-generated rows simply because they were created by migration.
-
-### Required post-V022 controls
-
-After upgrading an existing account, verify at minimum:
-
-- Flyway reports V022 applied successfully;
-- transaction ledger contains only allowed type/field combinations;
-- no invalid security FIFO oversell exists;
-- cash balance matches expected historical funding/economic behavior;
-- `marketValue = securitiesValue + cashBalance` for complete current summary;
+- legal transaction shapes;
+- no FIFO oversell;
+- expected cash balance;
+- `marketValue = securitiesValue + cashBalance` when complete;
 - `netInvested = cumulative DEPOSIT - WITHDRAWAL`;
-- performance endpoint returns the expected `externalFlowModel`;
-- historical snapshots rebuild after V022 invalidation;
-- current holdings and contribution attribution remain consistent.
+- `/performance/portfolio` external flow model `CASH_LEDGER_DEPOSIT_WITHDRAWAL`;
+- snapshots rebuild;
+- holdings/contribution attribution remain consistent.
 
-A useful read-only transaction-shape audit is:
+### V023–V024 China fund projection
+
+These migrations add CNY fund metadata/rules and confirmed China open dates. They do **not** turn the real transaction ledger into CNY.
+
+Post-upgrade controls if China funds exist:
+
+- fund instrument currency is CNY;
+- fund NAV rows have positive NAV and source provenance;
+- confirmed open dates exist for synchronized periods;
+- `/funds/{id}/calendar` surfaces open-day NAV gaps;
+- an open day without NAV does not create derived auto-DCA execution;
+- automatic-DCA rule edit semantics are understood as `REWRITE_HISTORY`.
+
+### V025 FX / unified reporting
+
+V025 adds `fx_rate_daily` for reporting conversion. Current convention:
+
+```text
+USD/CNY
+1 USD = rate CNY
+source = YAHOO:CNY=X
+```
+
+V025 does not create real CNY cash balances or manual real CNY transactions.
+
+After upgrading, if CNY auto-DCA history exists, verify:
+
+- Flyway reports V025 applied;
+- positive USD/CNY facts exist for the required history/current period after explicit/scheduled sync;
+- source/date semantics are correct;
+- no FX fact is stored in security-price or fund-NAV tables;
+- `GET /api/v1/reporting/multicurrency?range=ALL` reports `USD` as reporting currency;
+- CNY historical external flow is translated at flow-date FX rather than current FX;
+- current CNY market value uses valuation-date FX;
+- Reporting external-flow model is `USD_CASH_LEDGER_PLUS_CNY_AUTO_DCA_AT_HISTORICAL_USDCNY` when CNY activity exists;
+- missing/stale FX or open-day missing NAV degrades combined status to `PARTIAL` instead of fabricating a value/live endpoint;
+- the original real USD Dashboard and `/performance/portfolio` remain numerically/semantically unchanged.
+
+If no CNY activity exists, Reporting should reduce to the real USD account and should not require FX.
+
+## Read-only transaction-shape audit
 
 ```sql
 SELECT transaction_type,
@@ -140,11 +169,49 @@ ORDER BY transaction_type, contribution_type,
          has_cycle, has_contribution_plan, has_instrument;
 ```
 
-Do not dump notes, symbols, amounts, credentials, or full ledger rows into routine logs unless specifically required for a controlled investigation.
+Do not dump notes, amounts, credentials, or full ledger rows into routine logs.
+
+## FX operational checks
+
+Explicit refresh:
+
+```text
+POST /api/v1/fx/usd-cny/sync
+```
+
+Read persisted facts:
+
+```text
+GET /api/v1/fx/usd-cny?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+```
+
+Operational expectations:
+
+- reporting reads local persisted FX only;
+- provider failure must not delete existing FX facts;
+- Reporting only carries a prior FX rate forward up to seven calendar days;
+- an old rate older than that must not be treated as current conversion;
+- Yahoo `CNY=X` is a reporting market rate, not an official PBOC fixing or executable bank quote.
+
+If FX sync is failing, inspect proxy/egress/provider availability before changing data. Do not hand-edit historical FX merely to make Reporting turn green without a verified source.
+
+## China fund operational checks
+
+Explicit fund sync:
+
+```text
+POST /api/v1/funds/{id}/sync
+```
+
+Audit:
+
+```text
+GET /api/v1/funds/{id}/calendar?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+```
+
+EastMoney is an unofficial external source. Failure should preserve existing local fund NAV/calendar facts.
 
 ## Backup verification
-
-Create and verify:
 
 ```bash
 DCA_ENV_FILE=deploy/.env deploy/scripts/backup-postgres.sh
@@ -158,7 +225,7 @@ Keep a protected off-host copy.
 
 ## Restore drill
 
-Restore is destructive to the target database state. Enter a maintenance window and stop application writers first.
+Restore is destructive to the target state. Stop writers and use a maintenance window.
 
 ```bash
 compose=(docker compose --env-file deploy/.env -f deploy/docker-compose.yml)
@@ -169,19 +236,18 @@ DCA_ENV_FILE=deploy/.env deploy/scripts/restore-postgres.sh --confirm "$BACKUP_F
 "${compose[@]}" ps
 ```
 
-Post-restore verification must now include V022-era controls:
+Post-restore verify:
 
-- Flyway version;
-- transaction counts/types;
-- contribution classification/audit;
-- cash balance;
-- security value;
-- total account value;
-- external net invested;
-- representative performance response;
+- Flyway through expected version;
+- real transaction types/counts and contribution audit;
+- real cash/security/total account controls;
+- real performance response/model;
+- fund profiles/rules/NAV/open days if present;
+- FX facts/source/date controls if present;
+- unified Reporting response if CNY activity exists;
 - login/session policy decision.
 
-For repeatable isolated verification:
+Repeatable isolated verification:
 
 ```bash
 bash deploy/scripts/backup-restore-smoke.sh
@@ -189,74 +255,77 @@ bash deploy/scripts/backup-restore-smoke.sh
 
 ## Session invalidation after restore
 
-If restored sessions should not remain valid, with the API stopped and the target database explicitly confirmed:
+With API stopped and target DB explicitly confirmed:
 
 ```sql
 TRUNCATE TABLE spring_session_attributes, spring_session;
 ```
 
-This does not delete transaction/plan/market data.
+This does not delete account/plan/market/fund/FX facts.
 
 ## PostgreSQL major upgrade
 
-The PostgreSQL 18+ image uses a versioned data directory under the parent mount `/var/lib/postgresql`. Major-version directories are not binary-compatible.
+PostgreSQL 18+ uses a versioned data directory beneath `/var/lib/postgresql`. Major versions are not binary-compatible.
 
-Use logical dump/restore into a new project/volume. Never point a new PostgreSQL major directly at an old major's data directory.
-
-Keep the old project/volume until the restored environment passes smoke and financial control totals.
+Use logical dump/restore into a new volume/project. Keep the old volume until restored environment passes smoke and financial controls.
 
 ## Application rollback
 
-Application image rollback does not roll back Flyway. If the database has already advanced to a schema an older application cannot understand, use a matching verified database restore rather than forcing the old binary onto the new schema.
+Application rollback does not roll back Flyway. If DB advanced beyond an older application's supported schema, restore a matching verified DB backup rather than forcing the old binary onto the new schema.
 
-V022 in particular changes transaction types and accounting semantics, so pre-V022 application rollback against a V022 database should not be assumed safe.
+Pre-V022 binaries are not assumed safe against V022+ databases. Likewise, a pre-V025 binary should not be assumed to understand V025 reporting functionality even if unrelated real-USD endpoints still compile.
 
-## Market-history repair
+## Market/fund/FX history repair
 
-Before full history resync:
+Before material repair:
 
 1. verify provider/proxy/key configuration;
 2. create/verify backup;
-3. record row/date/adjusted-close controls;
-4. call authenticated full resync;
-5. verify saved bars/splits/source and dependent metrics;
+3. record row/date/source/control totals;
+4. fetch upstream data before replacing/upserting;
+5. verify dependent calculations;
 6. restore if validation fails.
 
-Do not clear history first or synthesize adjusted values.
+Never clear history first, synthesize adjusted close, invent fund NAV for an open day, or infer FX from unrelated prices.
 
 ## CI / release evidence
 
-The current CI workflow includes:
+CI includes:
 
 - Web install/audit/lint/typecheck/test/build;
 - API test/build;
-- PostgreSQL 18.6 `postgresTest` Flyway/Hibernate validation;
-- Compose and shell checks;
+- PostgreSQL 18.6 Flyway/Hibernate validation;
+- Compose/shell checks;
 - backup/restore smoke;
 - temporary HTTPS deployment smoke;
 - Playwright E2E;
 - repository whitespace checks.
 
-Release claims must reference a concrete run for the exact commit. An empty status API response is not proof of success.
+Release claims must reference a concrete successful run for the **exact target head**. Empty/stale status output is not proof.
 
 ## Deployment smoke contract
 
-The checked-in deployment smoke exercises health, unauthenticated/authenticated session flow, CSRF/login, settings/dashboard access, logout, and rejection of stale authenticated mutation state.
+Checked-in smoke validates health, session/auth/CSRF, settings/dashboard access, logout, and stale mutation rejection.
 
-After V022, manual release verification should additionally open/check:
+Manual V025 release verification should additionally check:
 
-- a cash-inclusive dashboard summary;
-- transaction creation paths for at least DEPOSIT and BUY;
-- `/api/v1/performance/portfolio`;
-- a regular-close history response;
-- contribution analysis for the active plan if one exists.
+- real USD cash-inclusive Dashboard;
+- DEPOSIT then BUY behavior;
+- `/api/v1/performance/portfolio` real USD flow model;
+- China Funds page if configured;
+- FX explicit sync/read if CNY reporting is used;
+- Reporting combined value/P&L/performance/provenance;
+- PARTIAL behavior when deliberately testing missing required FX/NAV in an isolated environment.
 
 ## Do not do these
 
 - Do not use `down -v` for routine upgrades.
-- Do not edit a published Flyway migration.
-- Do not delete V022 legacy bridge rows as cleanup.
-- Do not modify holdings/cash/snapshots directly to repair transaction truth.
-- Do not treat BUY as an external performance flow post-V022.
+- Do not edit published Flyway migrations.
+- Do not delete V022 bridge rows.
+- Do not directly edit holdings/cash/snapshots to repair transaction truth.
+- Do not treat BUY as external real USD performance flow.
+- Do not treat derived CNY auto-DCA purchases as real ledger rows.
+- Do not use today's FX to rewrite historical CNY contributions.
+- Do not fabricate NAV/FX to hide provider gaps.
 - Do not print secrets/tokens/cookies in diagnostics.
-- Do not run production smoke/E2E against temporary test scripts that delete volumes.
+- Do not run destructive E2E/smoke against production volumes.

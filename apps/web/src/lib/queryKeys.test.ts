@@ -18,7 +18,7 @@ describe('query key and invalidation policy', () => {
     ])
   })
 
-  it('invalidates linked plan and realtime performance projections after a transaction mutation', async () => {
+  it('invalidates linked plan and every multi-currency reporting range after a transaction mutation', async () => {
     const queryClient = new QueryClient()
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries').mockResolvedValue(undefined)
 
@@ -28,6 +28,7 @@ describe('query key and invalidation policy', () => {
       queryKeys.transactions,
       queryKeys.dashboard,
       queryKeys.portfolioPerformance,
+      queryKeys.multiCurrencyReports,
       queryKeys.planCycles('plan-1'),
       queryKeys.recommendation('plan-1'),
       queryKeys.contributionAnalysis('plan-1'),

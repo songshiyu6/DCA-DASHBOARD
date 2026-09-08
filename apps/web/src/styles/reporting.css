@@ -1,0 +1,70 @@
+.reporting-page { gap: 22px; }
+
+.reporting-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.reporting-metric {
+  display: flex;
+  min-height: 130px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 20px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  background: var(--surface-raised);
+}
+
+.reporting-metric small,
+.reporting-definition-list dt,
+.reporting-metric span {
+  color: var(--text-muted);
+}
+
+.reporting-metric strong {
+  font-size: clamp(1.35rem, 2vw, 1.9rem);
+  font-variant-numeric: tabular-nums;
+}
+
+.reporting-metric span { margin-top: auto; font-size: 0.82rem; }
+
+.reporting-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.reporting-definition-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+
+.reporting-definition-list > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.reporting-definition-list > div:last-child { border-bottom: 0; }
+.reporting-definition-list dt { font-size: 0.88rem; }
+.reporting-definition-list dd { margin: 0; text-align: right; font-weight: 650; font-variant-numeric: tabular-nums; }
+.reporting-definition-list dd small { display: block; margin-top: 3px; color: var(--text-muted); font-weight: 400; }
+
+.table-subline { display: block; margin-top: 3px; color: var(--text-muted); font-weight: 400; }
+.empty-copy { margin: 0; color: var(--text-muted); }
+
+@media (max-width: 1050px) {
+  .reporting-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 760px) {
+  .reporting-metric-grid,
+  .reporting-grid { grid-template-columns: 1fr; }
+  .reporting-definition-list > div { gap: 12px; }
+}

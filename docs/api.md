@@ -1,6 +1,6 @@
 # DCA Terminal API
 
-> Current Flyway chain: `V001`–`V024`.
+> Current Flyway chain: `V001`–`V025`.
 
 Financial `BigDecimal` values are serialized as plain decimal strings. Dates are ISO `YYYY-MM-DD`; timestamps are UTC ISO-8601 strings. Null response properties may be omitted.
 
@@ -98,7 +98,77 @@ shares           = net subscription / NAV
 
 Fund management fee remains metadata only because published NAV already reflects accrued fund-level expenses.
 
-CNY mutual funds remain outside the real USD cash ledger and portfolio performance engine in this phase.
+The real transaction/cash ledger remains USD-only. CNY funds enter the V025 **reporting projection** only; they do not become real ledger rows.
+
+## FX
+
+V025 stores daily FX facts separately from security prices and fund NAV.
+
+```text
+GET  /api/v1/fx/usd-cny?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+POST /api/v1/fx/usd-cny/sync?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+```
+
+The current rate convention is explicit:
+
+```text
+1 USD = rate CNY
+```
+
+The initial provider adapter uses Yahoo `CNY=X`. `POST /sync` defaults to five years when dates are omitted. Reporting reads persisted FX facts and does not call the provider implicitly.
+
+CNY-to-USD conversion is:
+
+```text
+USD amount = CNY amount / USD_CNY_rate
+```
+
+Historical CNY automatic-DCA external flows use the FX fact on or immediately before each execution date. Valuation uses the FX fact on or immediately before the valuation date. Reporting bounds FX carry-forward to seven calendar days; older stored FX does not qualify as a usable conversion.
+
+## Unified reporting
+
+```text
+GET /api/v1/reporting/multicurrency?range=1M|3M|1Y|YTD|ALL
+```
+
+This is a USD **reporting projection**, not a multi-currency ledger endpoint. It combines:
+
+- the established real USD account;
+- CNY automatic-fund-DCA derived shares/NAV;
+- persisted historical USD/CNY rates.
+
+Summary fields include:
+
+```text
+reportingCurrency
+usdAccountValue
+cnyFundValue
+cnyFundValueUsd
+combinedValueUsd
+usdExternalFlow
+cnyAutoDcaExternalFlowUsd
+combinedExternalFlowUsd
+combinedPnlUsd
+usdCnyRate
+usdCnyRateDate
+status
+asOf
+funds[]
+```
+
+The nested performance response uses the existing backend `PerformanceEngine` and returns TWR, CAGR, XIRR, maximum drawdown, dates/status, live-endpoint flag, and points.
+
+The reporting external-flow model is:
+
+```text
+USD_CASH_LEDGER_PLUS_CNY_AUTO_DCA_AT_HISTORICAL_USDCNY
+```
+
+Missing/stale FX or an open-day fund NAV gap makes the combined projection `PARTIAL`; the API does not guess a converted value or fabricate a live performance endpoint.
+
+If there is no CNY automatic-DCA history, the endpoint deliberately reduces to the existing USD account and does not require FX data.
+
+See `docs/multicurrency-phase3.md` for the full calculation and source-of-truth contract.
 
 ## Benchmarks
 
@@ -161,6 +231,7 @@ Rules:
 - DEPOSIT/WITHDRAWAL/INTEREST must not carry an instrument.
 - Future trade dates are rejected using the New York business date.
 - `fee` is only meaningful for BUY/SELL; non-trade cash events use `amount`.
+- The current real transaction API remains USD-only even though the database row has a currency column.
 
 Contribution source may be `INITIAL`, `DCA`, `UNPLANNED`, or null where permitted. Current contribution-analysis batches remain BUY-lot based; a DEPOSIT does not by itself complete a DCA cycle.
 
@@ -182,6 +253,8 @@ GET  /api/v1/portfolio/history?range=...
 POST /api/v1/portfolio/rebuild-snapshot
 ```
 
+These endpoints retain **real USD-account** semantics in V025.
+
 Current summary semantics:
 
 ```text
@@ -199,7 +272,7 @@ totalPnl         marketValue - netInvested when complete
 xirr             money-weighted return on DEPOSIT/WITHDRAWAL + current value
 ```
 
-`marketValue` is kept for compatibility but now means total account value.
+`marketValue` is kept for compatibility but means total account value.
 
 ## Dashboard
 
@@ -207,7 +280,7 @@ xirr             money-weighted return on DEPOSIT/WITHDRAWAL + current value
 GET /api/v1/dashboard
 ```
 
-The dashboard combines current portfolio views, all portfolio history, active-plan next DCA/progress, holdings, and allocation.
+The Dashboard remains the real USD-account workspace. The separate Web Reporting workspace consumes `/reporting/multicurrency` for the V025 cross-currency projection.
 
 ## Performance
 
@@ -215,9 +288,9 @@ The dashboard combines current portfolio views, all portfolio history, active-pl
 GET /api/v1/performance/portfolio?range=1M|3M|1Y|YTD|ALL
 ```
 
-Response fields include range, requested/baseline/inception/endpoint dates, as-of, TWR, CAGR, XIRR, maximum drawdown, data status, live-endpoint flag, external-flow model, and points.
+This endpoint also retains real USD-account semantics. Response fields include range, requested/baseline/inception/endpoint dates, as-of, TWR, CAGR, XIRR, maximum drawdown, data status, live-endpoint flag, external-flow model, and points.
 
-Current external-flow model is `CASH_LEDGER_DEPOSIT_WITHDRAWAL`. A live point is included only when current total account valuation is complete, positive, and `FRESH`.
+Current real-account external-flow model is `CASH_LEDGER_DEPOSIT_WITHDRAWAL`. A live point is included only when current total account valuation is complete, positive, and `FRESH`.
 
 ## Plans
 

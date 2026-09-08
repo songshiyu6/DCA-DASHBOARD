@@ -10,6 +10,7 @@ import { FundsPage } from './pages/FundsPage'
 import { LoginPage } from './pages/LoginPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { PlanPage } from './pages/PlanPage'
+import { ReportingPage } from './pages/ReportingPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { TransactionsPage } from './pages/TransactionsPage'
 import { api } from './lib/api'
@@ -45,6 +46,7 @@ export default function App() {
     <Route element={<RequireSession />}>
       <Route element={<AppShell />}>
         <Route index element={<DashboardPage />} />
+        <Route path="reporting" element={<ReportingPage />} />
         <Route path="plan" element={<PlanPage />} />
         <Route path="contributions" element={<ContributionsPage />} />
         <Route path="etfs" element={<EtfsPage />} />

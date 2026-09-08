@@ -10,6 +10,7 @@ import './styles/cash-performance-ux.css'
 import './styles/contributions.css'
 import './styles/initial-contribution.css'
 import './styles/funds.css'
+import './styles/reporting.css'
 import App from './App'
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false }, mutations: { retry: false } } })

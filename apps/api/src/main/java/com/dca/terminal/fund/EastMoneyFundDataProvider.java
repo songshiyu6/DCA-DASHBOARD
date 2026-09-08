@@ -7,7 +7,6 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.TreeMap;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
@@ -52,7 +51,7 @@ public class EastMoneyFundDataProvider implements ChinaFundDataProvider {
 
     @Override
     public List<NavPoint> navHistory(String fundCode, LocalDate startDate, LocalDate endDate) {
-        TreeMap<LocalDate, BigDecimal> points = new TreeMap<>();
+        TreeMap<LocalDate, NavPoint> points = new TreeMap<>();
         int pageIndex = 1;
         while (pageIndex <= 1000) {
             URI uri = UriComponentsBuilder.fromUriString(navBaseUrl)
@@ -66,7 +65,7 @@ public class EastMoneyFundDataProvider implements ChinaFundDataProvider {
                     .toUri();
             JsonNode root = get(uri, "https://fundf10.eastmoney.com/jjjz_" + fundCode + ".html");
             List<NavPoint> page = parseNavPage(root);
-            page.forEach(point -> points.put(point.date(), point.nav()));
+            page.forEach(point -> points.put(point.date(), point));
             int totalCount = root.path("TotalCount").asInt(page.size());
             if (page.isEmpty() || pageIndex * NAV_PAGE_SIZE >= totalCount) break;
             pageIndex++;

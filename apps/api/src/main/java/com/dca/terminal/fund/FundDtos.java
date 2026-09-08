@@ -10,6 +10,7 @@ import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 public final class FundDtos {
@@ -43,4 +44,27 @@ public final class FundDtos {
             BigDecimal nav,
             String source,
             Instant retrievedAt) { }
+
+    public record FundSyncResponse(
+            UUID fundId,
+            String fundCode,
+            String source,
+            LocalDate startDate,
+            LocalDate endDate,
+            int navPointsReceived,
+            int tradingDaysReceived,
+            int missingNavCount,
+            List<LocalDate> missingNavDates,
+            LocalDate latestNavDate,
+            Instant completedAt) { }
+
+    public record FundCalendarResponse(
+            String calendarCode,
+            LocalDate startDate,
+            LocalDate endDate,
+            String source,
+            boolean calendarAvailable,
+            int expectedTradingDays,
+            int navDays,
+            List<LocalDate> missingNavDates) { }
 }

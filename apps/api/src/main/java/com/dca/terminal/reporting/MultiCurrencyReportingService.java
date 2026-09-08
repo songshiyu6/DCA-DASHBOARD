@@ -21,6 +21,7 @@ import java.math.MathContext;
 import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -38,6 +39,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class MultiCurrencyReportingService {
     private static final MathContext MC = new MathContext(34, RoundingMode.HALF_EVEN);
     private static final String FLOW_MODEL = "USD_CASH_LEDGER_PLUS_CNY_AUTO_DCA_AT_HISTORICAL_USDCNY";
+    private static final long MAX_FX_CARRY_DAYS = 7;
 
     private final PortfolioService portfolioService;
     private final CashLedgerPortfolioPerformanceSource usdPerformanceSource;
@@ -87,7 +89,7 @@ public class MultiCurrencyReportingService {
         boolean flowComplete = true;
         for (RuleState state : states) {
             for (AutoDcaDtos.DailyExecutionResponse execution : state.projection().daily()) {
-                BigDecimal rate = floor(fxRates, execution.navDate());
+                BigDecimal rate = fxRate(fxRates, execution.navDate());
                 if (rate == null || rate.signum() <= 0) {
                     flowComplete = false;
                     continue;
@@ -108,6 +110,7 @@ public class MultiCurrencyReportingService {
         states.forEach(state -> {
             valuationDates.addAll(state.navByDate().keySet());
             valuationDates.addAll(state.cumulativeShares().keySet());
+            valuationDates.addAll(state.openDates());
         });
         if (valuationDates.isEmpty()) valuationDates.add(today);
 
@@ -131,9 +134,9 @@ public class MultiCurrencyReportingService {
             combinedHistory.add(new PortfolioPerformanceSource.DailyValuation(date, totalValue, cumulativeFlow, status));
         }
 
-        FxRateEntity currentRate = fxService.usdCnyOnOrBefore(today);
+        FxRateEntity currentRate = currentFxRate(today);
         Valuation currentFunds = fundValuation(states, fxRates, today);
-        BigDecimal cnyValue = currentFundValueCny(states, today);
+        BigDecimal cnyValue = currentFunds.complete() ? currentFundValueCny(states, today) : null;
         BigDecimal cnyValueUsd = currentFunds.valueUsd();
         BigDecimal combinedValue = cnyValueUsd == null || usdSummary.marketValue() == null
                 ? null : usdSummary.marketValue().add(cnyValueUsd, MC);
@@ -236,8 +239,15 @@ public class MultiCurrencyReportingService {
         return result;
     }
 
+    private FxRateEntity currentFxRate(LocalDate date) {
+        FxRateEntity rate = fxService.usdCnyOnOrBefore(date);
+        if (rate == null || rate.getRateDate() == null
+                || ChronoUnit.DAYS.between(rate.getRateDate(), date) > MAX_FX_CARRY_DAYS) return null;
+        return rate;
+    }
+
     private Valuation fundValuation(List<RuleState> states, TreeMap<LocalDate, BigDecimal> fxRates, LocalDate date) {
-        BigDecimal rate = floor(fxRates, date);
+        BigDecimal rate = fxRate(fxRates, date);
         BigDecimal total = BigDecimal.ZERO;
         boolean complete = true;
         for (RuleState state : states) {
@@ -268,7 +278,7 @@ public class MultiCurrencyReportingService {
 
     private List<MultiCurrencyDtos.FundPosition> currentFundPositions(
             List<RuleState> states, TreeMap<LocalDate, BigDecimal> fxRates, LocalDate date) {
-        BigDecimal rate = floor(fxRates, date);
+        BigDecimal rate = fxRate(fxRates, date);
         Map<String, FundPositionAccumulator> grouped = new LinkedHashMap<>();
         for (RuleState state : states) {
             BigDecimal shares = floor(state.cumulativeShares(), date);
@@ -297,6 +307,12 @@ public class MultiCurrencyReportingService {
             cumulative.put(entry.getKey(), running);
         }
         return cumulative;
+    }
+
+    private static BigDecimal fxRate(TreeMap<LocalDate, BigDecimal> map, LocalDate date) {
+        Map.Entry<LocalDate, BigDecimal> entry = map.floorEntry(date);
+        if (entry == null || ChronoUnit.DAYS.between(entry.getKey(), date) > MAX_FX_CARRY_DAYS) return null;
+        return entry.getValue();
     }
 
     private static BigDecimal floor(TreeMap<LocalDate, BigDecimal> map, LocalDate date) {

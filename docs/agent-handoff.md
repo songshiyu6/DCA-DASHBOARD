@@ -1,79 +1,63 @@
 # DCA Terminal Current Agent Handoff
 
-> Current code baseline: `main@b6c578ee129866389efde907c10a99400da5cd4e`
+> Current feature state: V025 multi-currency USD reporting projection.
 >
-> Current merge: PR #42, 2026-09-04
->
-> Current Flyway chain: `V001`–`V022`
+> Current Flyway chain: `V001`–`V025`.
 >
 > Next priorities: [`next-development-plan.md`](./next-development-plan.md)
 
-This is the current technical handoff entry point. Dated `sa-*.md` files are historical evidence only. If anything conflicts, use current source/migrations/tests/runtime evidence first.
+This is the technical takeover entry point. Dated `sa-*.md` files are historical evidence only. When anything conflicts, use current source/migrations/tests/exact runtime or CI evidence first.
 
 ## 1. Current conclusion
 
-DCA Terminal is a working single-user ETF DCA/account terminal with explicit cash accounting and backend portfolio-performance calculation.
-
-The largest semantic change since the previous 2026-08-31 handoff is V022 + PR #42:
-
-- cash is now a first-class projection of the transaction ledger;
-- total account value includes securities + cash;
-- DEPOSIT/WITHDRAWAL are the only external performance cash flows;
-- BUY/SELL are internal transfers between cash and securities;
-- current performance is served by the backend performance engine;
-- legacy accounts are migrated with deterministic bridge cash rows so their historical economic meaning is preserved.
-
-Do not continue using the pre-V022 "BUY/SELL change in net invested" model for current performance work.
-
-## 2. Canonical repository and source priority
-
-Canonical repository:
+DCA Terminal now has three deliberately separate accounting/reporting layers:
 
 ```text
-https://github.com/songshiyu6/DCA-DASHBOARD
+1. real USD transaction/cash account
+2. derived CNY China-fund automatic-DCA subportfolio
+3. V025 USD reporting projection that combines 1 + 2 using historical USD/CNY
 ```
 
-Current source priority:
+Do not collapse these layers.
+
+The real ledger is still USD-only. A CNY fund position shown in Reporting is not a real transaction, cash balance, or broker holding.
+
+## 2. Source priority
 
 ```text
 current source + published migration
 > current tests
-> current runtime / CI evidence
+> current runtime / exact CI evidence
 > living docs
 > dated sa-*.md reports
 ```
 
-Do not rewrite historical SA evidence to look current.
+Never rewrite historical SA evidence to look current.
 
-## 3. Current product surface
+## 3. Current Web surface
 
-| Workspace | Current capability |
+| Workspace | Meaning |
 | --- | --- |
-| Dashboard | cash-inclusive account total, current holdings, Today, plan progress, allocation, performance chart/benchmarks |
-| Plan | one active monthly USD plan, target weights, frozen cycles, execution status, contribution-first recommendation |
-| Contributions | INITIAL/DCA BUY-lot attribution, unclassified BUY queue, preview/commit classification, audit |
-| ETFs | tracked ETF search/profile/quote/NAV/history/metrics/sync/freshness |
-| Transactions | DEPOSIT/WITHDRAWAL/INTEREST/BUY/SELL/DIVIDEND/FEE CRUD + CSV preview/commit |
-| Settings | theme and provider selection/configuration status |
-| Auth | single-user PostgreSQL-backed session + CSRF + throttle |
+| Dashboard | real USD account total/cash/securities, Today, allocation, plan progress, canonical USD performance |
+| Reporting | V025 USD reporting projection over real USD + derived CNY fund subportfolio + historical FX |
+| Plan | one active monthly USD plan, frozen cycles, execution status, recommendations |
+| Contributions | real INITIAL/DCA BUY-lot attribution, classification workflow/audit |
+| ETFs | tracked US ETF quote/history/metrics/sync/freshness |
+| China Funds | fund metadata, EastMoney NAV/open-day sync, gap audit, auto-DCA rules and summaries |
+| Transactions | real USD DEPOSIT/WITHDRAWAL/INTEREST/BUY/SELL/DIVIDEND/FEE + CSV |
+| Settings | theme/provider configuration state |
 
-Benchmark comparison supports Yahoo-searchable ETF, INDEX, and EQUITY without adding them to tracked portfolio instruments.
+Reporting is hidden in Demo mode because Demo must not invent FX/CNY facts.
 
-## 4. Non-negotiable domain rules
+## 4. Non-negotiable real-ledger rules
 
-### 4.1 Ledger truth
-
-There is no editable holdings or cash balance state.
+There is no editable holdings or cash state.
 
 ```text
-transactions + splits + prices -> holdings / cash / portfolio / performance
+transactions + splits + prices -> FIFO holdings / cash / real USD portfolio / USD performance
 ```
 
-Snapshots are disposable caches. Fix bad facts at the transaction/market-data layer, not by editing snapshots.
-
-### 4.2 Current cash semantics
-
-Cash change:
+Real USD cash change:
 
 ```text
 DEPOSIT      +amount
@@ -85,7 +69,7 @@ FEE          -amount
 INTEREST     +amount
 ```
 
-External performance flow:
+Real external performance flow:
 
 ```text
 DEPOSIT      +amount
@@ -93,162 +77,255 @@ WITHDRAWAL   -amount
 all others    0
 ```
 
-Current total account value:
-
 ```text
 marketValue = securitiesValue + cashBalance
 netInvested = cumulative DEPOSIT - WITHDRAWAL
+totalPnl    = marketValue - netInvested   # complete valuation
 ```
 
-For a complete valuation:
+V022 bridge cash rows around legacy BUY/SELL are compatibility facts. Do not delete them as synthetic noise.
 
-```text
-totalPnl = marketValue - netInvested
-```
+## 5. Real USD performance
 
-### 4.3 V022 bridge rows
-
-V022 inserts system-generated legacy cash rows around existing BUY/SELL records. They are required compatibility facts, not disposable noise.
-
-Do not delete or deduplicate them without proving the full migrated economic history remains identical.
-
-### 4.4 Performance
-
-Canonical endpoint:
+Canonical endpoint remains:
 
 ```text
 GET /api/v1/performance/portfolio?range=1M|3M|1Y|YTD|ALL
 ```
 
-Backend engine calculates TWR/CAGR/XIRR/max drawdown from cash-inclusive valuations and DEPOSIT/WITHDRAWAL external flow.
+It uses the backend `PerformanceEngine`, real USD cash-inclusive valuations, and DEPOSIT/WITHDRAWAL external flows.
 
-Only a complete FRESH live total account valuation can extend regular-close performance history.
+External-flow model:
 
-### 4.5 Contribution vs funding
+```text
+CASH_LEDGER_DEPOSIT_WITHDRAWAL
+```
 
-DEPOSIT funds the account. BUY executes a security purchase.
+Only complete FRESH current valuation may extend regular-close performance with a live point.
 
-A DCA cycle is completed by linked BUY execution, not by deposit funding.
+## 6. China fund projection
 
-Contribution analysis remains BUY-lot based even though DEPOSIT may carry source attribution in the current schema/API.
+V023 introduced CNY mutual-fund profiles and `auto_dca_rule`.
 
-### 4.6 Decimal/time
+V024 added:
 
-- financial values: BigDecimal/NUMERIC;
-- API financial values: decimal JSON strings;
-- Web financial math: decimal.js-light;
-- timestamps: UTC;
-- US business/plan date: America/New_York.
+- EastMoney NAV sync;
+- persisted confirmed China open dates;
+- open-day NAV gap audit;
+- China Funds Web workspace;
+- T+n confirmation based on persisted open days;
+- recent scheduled refresh.
 
-Do not introduce Java/DB binary floating-point for financial values.
+Derived purchase rule:
 
-### 4.7 Market-data truth
+```text
+execution date requires exact observed NAV
+open day without NAV -> gap, no execution
+```
 
-Keep latest quote, daily raw close, adjusted close, NAV, and split events separate.
+Gross CNY DCA amount:
 
-Current valuation may move after-hours; historical regular-close performance does not retroactively become intraday/overnight data.
+```text
+net subscription = gross / (1 + purchaseFeeRate)
+purchase fee     = gross - net subscription
+shares           = net subscription / NAV
+```
 
-## 5. Current schema state
+Management fee remains metadata-only because published NAV already reflects fund-level expenses.
 
-Current Flyway: `V001`–`V022`.
+Rule edits currently have `REWRITE_HISTORY` semantics. Derived daily purchases are not `investment_transaction` rows.
 
-Recent sequence:
+## 7. V025 FX and reporting
+
+V025 adds `fx_rate_daily`.
+
+Current pair/convention:
+
+```text
+USD/CNY
+1 USD = rate CNY
+source = YAHOO:CNY=X
+```
+
+FX endpoints:
+
+```text
+GET  /api/v1/fx/usd-cny
+POST /api/v1/fx/usd-cny/sync
+```
+
+Reporting endpoint:
+
+```text
+GET /api/v1/reporting/multicurrency?range=1M|3M|1Y|YTD|ALL
+```
+
+Core rule:
+
+```text
+historical CNY external flow -> translate at its flow-date FX
+CNY market value             -> translate at valuation-date FX
+```
+
+Therefore later FX movement affects investment performance instead of retroactively rewriting historical contributions.
+
+```text
+combinedValueUsd
+  = realUsdAccountValue
+  + derivedCnyFundValueUsd
+
+combinedExternalFlowUsd
+  = realUsdDepositsMinusWithdrawals
+  + sum(CNY DCA gross / historical flow-date FX)
+
+combinedPnlUsd
+  = combinedValueUsd - combinedExternalFlowUsd
+```
+
+Combined performance reuses the same `PerformanceEngine` through a different `PortfolioPerformanceSource`.
+
+Reporting external-flow model when CNY activity exists:
+
+```text
+USD_CASH_LEDGER_PLUS_CNY_AUTO_DCA_AT_HISTORICAL_USDCNY
+```
+
+If there is no CNY auto-DCA history, Reporting must reduce exactly to the real USD account and require no FX.
+
+FX carry-forward for reporting is bounded to seven calendar days. Missing required FX or an open-day NAV gap makes combined reporting `PARTIAL`; do not guess a converted value or fabricate a live endpoint.
+
+## 8. Market-data truth
+
+Keep separate:
+
+```text
+latest quote
+raw daily close
+adjusted close
+fund NAV
+China open day
+USD/CNY FX
+split event
+```
+
+- US current account valuation can use extended/overnight quote candidates;
+- real USD historical performance remains regular-close;
+- fund NAV and China calendar are separate persisted facts;
+- FX is separate from prices/NAV;
+- Reporting page reads persisted local facts and does not call Yahoo/EastMoney implicitly.
+
+Provider failures must preserve existing local facts.
+
+## 9. Plan / contribution boundaries
+
+DEPOSIT funds the real USD account. BUY executes a real security purchase. A USD DCA cycle is completed by linked BUY execution, not by funding.
+
+Real contribution analysis remains BUY-lot/FIFO based. The derived CNY auto-DCA subportfolio is not silently inserted into that real contribution analysis.
+
+## 10. Current schema
+
+Recent Flyway sequence:
 
 | Migration | Meaning |
 | --- | --- |
-| V017 | contribution constraints / audit |
+| V017 | contribution constraints/backfill/audit |
 | V018 | quote session |
-| V019 | remove untrusted snapshots |
+| V019 | invalidate untrusted snapshots |
 | V020 | experimental midnight settlement |
 | V021 | remove midnight settlement |
-| V022 | explicit cash ledger and cash-inclusive account model |
+| V022 | explicit real USD cash ledger + bridge rows |
+| V023 | CNY mutual-fund + auto-DCA foundation |
+| V024 | China open-day calendar/gap audit |
+| V025 | daily FX fact table for reporting conversion |
 
-V020/V021 remain in history even though the final runtime semantics use previous regular close, not midnight settlement.
+`portfolio_snapshot_daily` remains the real USD-account cache. There is no persisted combined-account snapshot table in V025.
 
-## 6. Current APIs added since the old handoff
+## 11. Decimal/time rules
 
-Important current surfaces include:
+- financial values: `BigDecimal` / `NUMERIC`;
+- financial JSON: decimal strings;
+- timestamps: UTC;
+- US business/market decisions: `America/New_York`;
+- China fund calendar/provider semantics: `Asia/Shanghai`.
 
-```text
-/api/v1/benchmarks/search
-/api/v1/benchmarks/history
-/api/v1/performance/portfolio
-```
+Do not introduce binary floating-point for stored financial values.
 
-Portfolio summary/history now expose cash/securities breakdown while retaining compatibility field names.
+## 12. Current known gaps
 
-Transactions now accept account cash events.
+1. Real transaction/cash ledger is still USD-only; no manual real CNY cash/fund transactions yet.
+2. Reporting currency is currently USD and the FX pair is USD/CNY only.
+3. Yahoo `CNY=X` and EastMoney need first-class provider-health/gap/fallback operations.
+4. CNY AUTO vs future MANUAL fund activity is not unified.
+5. Auto-DCA edits rewrite derived history instead of using effective-dated versions.
+6. China persisted open-day history is not a future official holiday calendar.
+7. Transaction/Plan/CSV live forms still contain submit-able fixed sample/default facts.
+8. No concentrated DCA action queue.
+9. Funding vs BUY-lot contribution analytics still need stronger UI reconciliation.
+10. Full export/recovery package is incomplete.
+11. Transaction/history paths still need capacity/pagination work.
+12. Exact current CI evidence must be checked before release; absence of status is not a pass.
 
-## 7. Current known gaps
+## 13. Recommended next sequence
 
-The important open gaps are now:
+After V025 is released:
 
-1. **Live form sample facts remain unsafe UX**: transaction form still defaults to `2026-08-27`/VOO, plan form to `Core ETF Plan`/1500/`2026-01-01`/VOO 100%, CSV modal still contains submit-able 2026-09-01 example rows.
-2. No concentrated action queue for open/partial/missed DCA cycles.
-3. Funding attribution vs BUY-lot contribution analytics is not yet fully reconciled in user-facing explanation.
-4. Contribution batch P/L still excludes dividends, interest, and standalone fees; UI needs an explicit bridge rather than hidden mismatch.
-5. Provider health history and expected market-data gap audit are not first-class views.
-6. Full user export/recovery package remains incomplete.
-7. Current valuation/history/transaction list still have capacity work: wide history reads, no transaction pagination, some client-side range/filter behavior.
-8. Some transaction/contribution labels remain outside i18n catalogs.
-9. Remote CI for a given commit must be explicitly verified; absence of returned status is not a pass.
+1. **Real CNY ledger design**: define currency-aware cash accounts and manual China-fund transactions without breaking USD FIFO/cash semantics.
+2. Keep reporting projection provenance explicit while real CNY facts gradually replace synthetic assumptions.
+3. Remove submit-able sample facts and build the DCA action queue.
+4. Add provider-health / NAV / FX gap operator views.
+5. Add funding/contribution/account reconciliation and export/recovery evidence.
+6. Do measured pagination/capacity cleanup.
 
-## 8. Recommended next sequence
+Do not open arbitrary currencies or real CNY writes merely because `investment_transaction.currency` exists.
 
-1. Remove live submit-able sample facts from Transaction / Plan / CSV forms.
-2. Build the DCA action queue on existing plan/cycle facts.
-3. Add a clear cash-funding vs BUY-execution vs performance/contribution explanation bridge.
-4. Build market-data gap/provider-health operator views in parallel.
-5. Add export/recovery audit package.
-6. Only then prioritize capacity/performance cleanup where measurements justify it.
+## 14. Validation expectations
 
-See `next-development-plan.md` for acceptance gates.
+Every functional change should pass:
 
-## 9. Validation expectations
-
-For every functional change:
-
-- Web lint, typecheck, unit tests, production build;
-- API test/build;
-- `postgresTest` for JPA/Flyway/schema-sensitive changes;
+- Web lint/typecheck/unit tests/build;
+- API tests/build;
+- PostgreSQL 18.6 `postgresTest` for schema/JPA-sensitive changes;
 - relevant isolated E2E;
-- `git diff --check`;
-- no provider live calls in deterministic CI tests.
+- repository whitespace hygiene;
+- backup/restore and deployment smoke for release candidates.
 
-For accounting/performance changes, add regression cases that explicitly separate:
+For V025 accounting/reporting work specifically, keep regressions for:
 
 ```text
-DEPOSIT funding
-BUY execution
-SELL proceeds
-WITHDRAWAL external flow
-DIVIDEND / INTEREST internal return
-FEE internal drag
+no CNY activity -> exact USD compatibility
+CNY contribution -> historical flow-date FX
+later FX move -> performance, not rewritten contribution
+missing FX -> PARTIAL
+open China day without NAV -> PARTIAL/no fabricated execution
 ```
 
-Do not accept a test that passes only because BUY is still being treated as external capital.
+CI tests must not depend on live provider availability.
 
-## 10. Release/operations boundary
+## 15. Operations boundary
 
-Before production deployment of V022-era code:
+Before deploying V025:
 
-- verified backup;
-- Flyway V022 confirmation;
-- current cash/securities/total controls;
-- performance externalFlowModel check;
-- transaction/contribution consistency check;
-- deployment smoke;
-- explicit current CI evidence.
+- take/verify PostgreSQL backup;
+- confirm Flyway through V025;
+- verify real USD cash/securities/total controls;
+- verify real USD `CASH_LEDGER_DEPOSIT_WITHDRAWAL` flow model;
+- verify Reporting external-flow model when CNY activity exists;
+- verify stored USD/CNY date/rate provenance;
+- verify fund NAV/open-day gaps are not hidden;
+- run deployment smoke and exact-head CI.
 
-Never use `down -v` for routine deployment.
+Never use `docker compose down -v` for routine deployment.
 
-## 11. Documentation map
+## 16. Documentation map
 
 - `README.md` — current product/runtime entry point.
-- `architecture.md` — current facts, projections, modules, schema.
-- `api.md` — current HTTP contract.
-- `calculations.md` — post-V022 formulas.
-- `market-data.md` — provider/quote/history/intraday/benchmark rules.
-- `operations-runbook.md` — deploy/backup/restore/V022 validation.
-- `next-development-plan.md` — current prioritized roadmap.
+- `architecture.md` — facts/projections/modules/schema.
+- `api.md` — HTTP contracts.
+- `calculations.md` — USD + CNY + V025 reporting formulas.
+- `market-data.md` — provider/fact/freshness/sync rules.
+- `cn-fund-auto-dca-phase1.md` — V023 contract.
+- `cn-fund-phase2.md` — V024 provider/calendar/UI contract.
+- `multicurrency-phase3.md` — V025 FX/reporting contract.
+- `operations-runbook.md` — deploy/backup/restore.
+- `next-development-plan.md` — current roadmap.
 - `sa-*.md` — dated historical evidence only.

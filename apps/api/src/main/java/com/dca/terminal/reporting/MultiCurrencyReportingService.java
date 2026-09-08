@@ -73,8 +73,15 @@ public class MultiCurrencyReportingService {
         PortfolioDtos.SummaryResponse usdSummary = portfolioService.summary();
         List<PortfolioDtos.HistoryPoint> usdHistory = portfolioService.history("ALL");
         List<RuleState> states = ruleStates(today);
-        LocalDate firstDate = firstDate(usdHistory, states, today);
-        TreeMap<LocalDate, BigDecimal> fxRates = fxRates(firstDate, today);
+        boolean hasCnyActivity = states.stream().anyMatch(state -> !state.projection().daily().isEmpty());
+        if (!hasCnyActivity) return usdOnlyReport(range, usdSummary);
+
+        LocalDate firstFxDate = states.stream()
+                .flatMap(state -> state.projection().daily().stream())
+                .map(AutoDcaDtos.DailyExecutionResponse::navDate)
+                .min(LocalDate::compareTo)
+                .orElse(today);
+        TreeMap<LocalDate, BigDecimal> fxRates = fxRates(firstFxDate, today);
 
         List<PortfolioPerformanceSource.ExternalCashFlow> fundFlows = new ArrayList<>();
         boolean flowComplete = true;
@@ -90,6 +97,7 @@ public class MultiCurrencyReportingService {
             }
         }
         fundFlows.sort(Comparator.comparing(PortfolioPerformanceSource.ExternalCashFlow::date));
+        final boolean reportingFlowComplete = flowComplete;
 
         TreeMap<LocalDate, BigDecimal> cumulativeFundFlow = cumulativeFlows(fundFlows);
         TreeMap<LocalDate, PortfolioDtos.HistoryPoint> usdByDate = new TreeMap<>();
@@ -117,8 +125,9 @@ public class MultiCurrencyReportingService {
             if (!fundValuation.complete()) status = FreshnessStatus.PARTIAL;
             BigDecimal totalValue = fundValuation.valueUsd() == null ? null : usdValue.add(fundValuation.valueUsd(), MC);
             BigDecimal fundFlow = floor(cumulativeFundFlow, date);
-            BigDecimal cumulativeFlow = !flowComplete ? null : usdFlow.add(fundFlow == null ? BigDecimal.ZERO : fundFlow, MC);
-            if (!flowComplete) status = FreshnessStatus.PARTIAL;
+            BigDecimal cumulativeFlow = !reportingFlowComplete
+                    ? null : usdFlow.add(fundFlow == null ? BigDecimal.ZERO : fundFlow, MC);
+            if (!reportingFlowComplete) status = FreshnessStatus.PARTIAL;
             combinedHistory.add(new PortfolioPerformanceSource.DailyValuation(date, totalValue, cumulativeFlow, status));
         }
 
@@ -130,38 +139,58 @@ public class MultiCurrencyReportingService {
                 ? null : usdSummary.marketValue().add(cnyValueUsd, MC);
         BigDecimal fundExternalFlow = floor(cumulativeFundFlow, today);
         if (fundExternalFlow == null) fundExternalFlow = BigDecimal.ZERO;
-        BigDecimal combinedExternalFlow = flowComplete && usdSummary.netInvested() != null
+        BigDecimal combinedExternalFlow = reportingFlowComplete && usdSummary.netInvested() != null
                 ? usdSummary.netInvested().add(fundExternalFlow, MC) : null;
         BigDecimal combinedPnl = combinedValue == null || combinedExternalFlow == null
                 ? null : combinedValue.subtract(combinedExternalFlow, MC);
         FreshnessStatus currentStatus = usdSummary.status() == FreshnessStatus.FRESH
-                && currentFunds.complete() && flowComplete ? FreshnessStatus.FRESH : FreshnessStatus.PARTIAL;
+                && currentFunds.complete() && reportingFlowComplete ? FreshnessStatus.FRESH : FreshnessStatus.PARTIAL;
 
         List<MultiCurrencyDtos.FundPosition> positions = currentFundPositions(states, fxRates, today);
         MultiCurrencyDtos.Summary summary = new MultiCurrencyDtos.Summary(
                 FxService.USD, usdSummary.marketValue(), cnyValue, cnyValueUsd, combinedValue,
-                usdSummary.netInvested(), flowComplete ? fundExternalFlow : null, combinedExternalFlow, combinedPnl,
+                usdSummary.netInvested(), reportingFlowComplete ? fundExternalFlow : null,
+                combinedExternalFlow, combinedPnl,
                 currentRate == null ? null : currentRate.getRate(), currentRate == null ? null : currentRate.getRateDate(),
                 currentStatus, usdSummary.asOf(), positions);
 
         List<PortfolioPerformanceSource.ExternalCashFlow> allFlows = new ArrayList<>(usdPerformanceSource.externalCashFlows());
-        if (flowComplete) allFlows.addAll(fundFlows);
+        if (reportingFlowComplete) allFlows.addAll(fundFlows);
         allFlows.sort(Comparator.comparing(PortfolioPerformanceSource.ExternalCashFlow::date));
 
         BigDecimal finalFundExternalFlow = fundExternalFlow;
         PortfolioPerformanceSource source = new PortfolioPerformanceSource() {
             @Override public List<DailyValuation> regularCloseHistory() { return List.copyOf(combinedHistory); }
             @Override public CurrentValuation current() {
-                BigDecimal cumulative = flowComplete && usdSummary.netInvested() != null
+                BigDecimal cumulative = reportingFlowComplete && usdSummary.netInvested() != null
                         ? usdSummary.netInvested().add(finalFundExternalFlow, MC) : null;
                 return new CurrentValuation(today, usdSummary.asOf(), combinedValue, cumulative, currentStatus);
             }
             @Override public List<ExternalCashFlow> externalCashFlows() {
-                return flowComplete ? List.copyOf(allFlows) : List.of();
+                return reportingFlowComplete ? List.copyOf(allFlows) : List.of();
             }
             @Override public String externalFlowModel() { return FLOW_MODEL; }
         };
         return new MultiCurrencyDtos.Response(summary, new PerformanceEngine(source).performance(range));
+    }
+
+    private MultiCurrencyDtos.Response usdOnlyReport(String range, PortfolioDtos.SummaryResponse usdSummary) {
+        MultiCurrencyDtos.Summary summary = new MultiCurrencyDtos.Summary(
+                FxService.USD,
+                usdSummary.marketValue(),
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                usdSummary.marketValue(),
+                usdSummary.netInvested(),
+                BigDecimal.ZERO,
+                usdSummary.netInvested(),
+                usdSummary.totalPnl(),
+                null,
+                null,
+                usdSummary.status(),
+                usdSummary.asOf(),
+                List.of());
+        return new MultiCurrencyDtos.Response(summary, new PerformanceEngine(usdPerformanceSource).performance(range));
     }
 
     private List<RuleState> ruleStates(LocalDate today) {
@@ -177,7 +206,9 @@ public class MultiCurrencyReportingService {
                 running = running.add(execution.shares(), MC);
                 shares.put(execution.navDate(), running);
             }
-            Set<LocalDate> openDates = profileRepository.findById(rule.instrumentId())
+            Set<LocalDate> openDates = rule.startDate().isAfter(today)
+                    ? Set.of()
+                    : profileRepository.findById(rule.instrumentId())
                     .map(profile -> calendarRepository.findAllByCalendarCodeAndMarketDateBetweenOrderByMarketDateAsc(
                                     profile.getCalendarCode(), rule.startDate(), today).stream()
                             .map(item -> item.getMarketDate()).collect(java.util.stream.Collectors.toSet()))
@@ -254,15 +285,6 @@ public class MultiCurrencyReportingService {
             BigDecimal usd = rate == null || rate.signum() <= 0 ? null : cny.divide(rate, MC);
             return new MultiCurrencyDtos.FundPosition(item.code, item.name, item.shares, item.nav, item.navDate, cny, usd);
         }).toList();
-    }
-
-    private LocalDate firstDate(List<PortfolioDtos.HistoryPoint> usdHistory, List<RuleState> states, LocalDate fallback) {
-        LocalDate first = usdHistory.stream().map(PortfolioDtos.HistoryPoint::date).min(LocalDate::compareTo).orElse(null);
-        for (RuleState state : states) {
-            LocalDate candidate = state.rule().startDate();
-            if (first == null || candidate.isBefore(first)) first = candidate;
-        }
-        return first == null ? fallback.minusYears(1) : first;
     }
 
     private TreeMap<LocalDate, BigDecimal> cumulativeFlows(List<PortfolioPerformanceSource.ExternalCashFlow> flows) {

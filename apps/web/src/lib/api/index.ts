@@ -4,6 +4,7 @@ import { fundsApi } from './funds'
 import { instrumentsApi } from './instruments'
 import { plansApi } from './plans'
 import { portfolioApi } from './portfolio'
+import { reportingApi } from './reporting'
 import { settingsApi } from './settings'
 import { transactionsApi } from './transactions'
 
@@ -26,6 +27,7 @@ const liveApi = {
   ...transactionsApi,
   ...settingsApi,
   ...fundsApi,
+  ...reportingApi,
 }
 
 type DemoApi = typeof import('../demo/api').demoApi
@@ -39,6 +41,7 @@ function loadDemoApi(): Promise<DemoApi> {
 
 const emptyDemoResult = <T>(data: T) => Promise.resolve({ data, meta: { status: 'FRESH' as const, source: 'FIXTURE' } })
 const fundDemoUnavailable = async (): Promise<never> => { throw new Error('China fund management is unavailable in demo mode') }
+const reportingDemoUnavailable = async (): Promise<never> => { throw new Error('Multi-currency reporting is unavailable in demo mode') }
 
 const demoApiProxy = {
   getSession: () => loadDemoApi().then((adapter) => adapter.getSession()),
@@ -83,6 +86,8 @@ const demoApiProxy = {
   createAutoDcaRule: (_input: Parameters<typeof liveApi.createAutoDcaRule>[0]) => fundDemoUnavailable(),
   updateAutoDcaRule: (_id: string, _input: Parameters<typeof liveApi.updateAutoDcaRule>[1]) => fundDemoUnavailable(),
   getAutoDcaProjection: (_id: string, _groupBy: 'MONTH' | 'YEAR', _includeDaily?: boolean) => fundDemoUnavailable(),
+  getMultiCurrencyReport: (_range: Parameters<typeof liveApi.getMultiCurrencyReport>[0]) => reportingDemoUnavailable(),
+  syncUsdCny: () => reportingDemoUnavailable(),
 } satisfies typeof liveApi
 
 export const api: typeof liveApi = APP_MODE === 'demo' ? demoApiProxy : liveApi

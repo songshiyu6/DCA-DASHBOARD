@@ -194,8 +194,8 @@ class MultiCurrencyReportingServiceTest {
         assertThat(result.summary().cnyFundValueUsd()).isNull();
         assertThat(result.summary().combinedValueUsd()).isNull();
         assertThat(result.performance().liveEndpointIncluded()).isFalse();
-        assertThat(result.performance().points())
-                .anyMatch(point -> point.date().equals(TODAY) && point.dataStatus() == FreshnessStatus.PARTIAL);
+        assertThat(result.performance().endpointDate()).isEqualTo(LocalDate.of(2026, 9, 7));
+        assertThat(result.performance().points()).allMatch(point -> point.date().isBefore(TODAY));
     }
 
     private static PortfolioDtos.SummaryResponse usdSummary(String value, String flow, String pnl) {
@@ -240,7 +240,7 @@ class MultiCurrencyReportingServiceTest {
         FxRateEntity entity = new FxRateEntity();
         entity.setBaseCurrency("USD");
         entity.setQuoteCurrency("CNY");
-        entity.setRateDate(LocalDate.parse(date));
+        entity.setRateDate(date);
         entity.setRate(new BigDecimal(value));
         entity.setSource(FxService.USD_CNY_SOURCE);
         entity.setRetrievedAt(AS_OF);

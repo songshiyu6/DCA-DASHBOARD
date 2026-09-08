@@ -75,18 +75,15 @@ public class MultiCurrencyReportingService {
         PortfolioDtos.SummaryResponse usdSummary = portfolioService.summary();
         List<PortfolioDtos.HistoryPoint> usdHistory = portfolioService.history("ALL");
         List<RuleState> states = ruleStates(today);
-        boolean hasCnyActivity = states.stream().anyMatch(state -> !state.projection().daily().isEmpty());
+        boolean hasCnyActivity = states.stream().anyMatch(state ->
+                !state.projection().daily().isEmpty() || !state.missingExecutionNavDates().isEmpty());
         if (!hasCnyActivity) return usdOnlyReport(range, usdSummary);
 
-        LocalDate firstFxDate = states.stream()
-                .flatMap(state -> state.projection().daily().stream())
-                .map(AutoDcaDtos.DailyExecutionResponse::navDate)
-                .min(LocalDate::compareTo)
-                .orElse(today);
+        LocalDate firstFxDate = firstCnyRelevantDate(states, today);
         TreeMap<LocalDate, BigDecimal> fxRates = fxRates(firstFxDate, today);
 
         List<PortfolioPerformanceSource.ExternalCashFlow> fundFlows = new ArrayList<>();
-        boolean flowComplete = true;
+        boolean flowComplete = states.stream().allMatch(state -> state.missingExecutionNavDates().isEmpty());
         for (RuleState state : states) {
             for (AutoDcaDtos.DailyExecutionResponse execution : state.projection().daily()) {
                 BigDecimal rate = fxRate(fxRates, execution.navDate());
@@ -111,6 +108,7 @@ public class MultiCurrencyReportingService {
             valuationDates.addAll(state.navByDate().keySet());
             valuationDates.addAll(state.cumulativeShares().keySet());
             valuationDates.addAll(state.openDates());
+            valuationDates.addAll(state.missingExecutionNavDates());
         });
         if (valuationDates.isEmpty()) valuationDates.add(today);
 
@@ -136,7 +134,8 @@ public class MultiCurrencyReportingService {
 
         FxRateEntity currentRate = currentFxRate(today);
         Valuation currentFunds = fundValuation(states, fxRates, today);
-        BigDecimal cnyValue = currentFunds.complete() ? currentFundValueCny(states, today) : null;
+        boolean currentFundFactsComplete = states.stream().allMatch(state -> fundFactsCompleteOn(state, today));
+        BigDecimal cnyValue = currentFundFactsComplete ? currentFundValueCny(states, today) : null;
         BigDecimal cnyValueUsd = currentFunds.valueUsd();
         BigDecimal combinedValue = cnyValueUsd == null || usdSummary.marketValue() == null
                 ? null : usdSummary.marketValue().add(cnyValueUsd, MC);
@@ -149,7 +148,9 @@ public class MultiCurrencyReportingService {
         FreshnessStatus currentStatus = usdSummary.status() == FreshnessStatus.FRESH
                 && currentFunds.complete() && reportingFlowComplete ? FreshnessStatus.FRESH : FreshnessStatus.PARTIAL;
 
-        List<MultiCurrencyDtos.FundPosition> positions = currentFundPositions(states, fxRates, today);
+        List<MultiCurrencyDtos.FundPosition> positions = currentFundFactsComplete
+                ? currentFundPositions(states, fxRates, today)
+                : List.of();
         MultiCurrencyDtos.Summary summary = new MultiCurrencyDtos.Summary(
                 FxService.USD, usdSummary.marketValue(), cnyValue, cnyValueUsd, combinedValue,
                 usdSummary.netInvested(), reportingFlowComplete ? fundExternalFlow : null,
@@ -216,7 +217,14 @@ public class MultiCurrencyReportingService {
                                     profile.getCalendarCode(), rule.startDate(), today).stream()
                             .map(item -> item.getMarketDate()).collect(java.util.stream.Collectors.toSet()))
                     .orElse(Set.of());
-            result.add(new RuleState(rule, projection, nav, shares, openDates));
+            LocalDate executionEnd = rule.endDate() == null || rule.endDate().isAfter(today) ? today : rule.endDate();
+            Set<LocalDate> missingExecutionNavDates = executionEnd.isBefore(rule.startDate())
+                    ? Set.of()
+                    : openDates.stream()
+                    .filter(date -> !date.isBefore(rule.startDate()) && !date.isAfter(executionEnd))
+                    .filter(date -> !nav.containsKey(date))
+                    .collect(java.util.stream.Collectors.toCollection(TreeSet::new));
+            result.add(new RuleState(rule, projection, nav, shares, openDates, missingExecutionNavDates));
         }
         return List.copyOf(result);
     }
@@ -228,6 +236,19 @@ public class MultiCurrencyReportingService {
                 .forEach(row -> selected.putIfAbsent(row.getNavDate(), row));
         selected.forEach((date, row) -> result.put(date, row.getNav()));
         return result;
+    }
+
+    private LocalDate firstCnyRelevantDate(List<RuleState> states, LocalDate fallback) {
+        LocalDate first = null;
+        for (RuleState state : states) {
+            for (AutoDcaDtos.DailyExecutionResponse execution : state.projection().daily()) {
+                if (first == null || execution.navDate().isBefore(first)) first = execution.navDate();
+            }
+            for (LocalDate missing : state.missingExecutionNavDates()) {
+                if (first == null || missing.isBefore(first)) first = missing;
+            }
+        }
+        return first == null ? fallback : first;
     }
 
     private TreeMap<LocalDate, BigDecimal> fxRates(LocalDate startDate, LocalDate endDate) {
@@ -251,6 +272,10 @@ public class MultiCurrencyReportingService {
         BigDecimal total = BigDecimal.ZERO;
         boolean complete = true;
         for (RuleState state : states) {
+            if (hasMissingExecutionOnOrBefore(state, date)) {
+                complete = false;
+                continue;
+            }
             BigDecimal shares = floor(state.cumulativeShares(), date);
             if (shares == null || shares.signum() == 0) continue;
             Map.Entry<LocalDate, BigDecimal> navEntry = state.navByDate().floorEntry(date);
@@ -258,11 +283,29 @@ public class MultiCurrencyReportingService {
                 complete = false;
                 continue;
             }
-            if (state.openDates().contains(date) && !state.navByDate().containsKey(date)) complete = false;
+            if (hasUnresolvedNavGapAfter(state, navEntry.getKey(), date)) complete = false;
             BigDecimal valueCny = shares.multiply(navEntry.getValue(), MC);
             total = total.add(valueCny.divide(rate, MC), MC);
         }
         return new Valuation(complete ? total : null, complete);
+    }
+
+    private boolean fundFactsCompleteOn(RuleState state, LocalDate date) {
+        if (hasMissingExecutionOnOrBefore(state, date)) return false;
+        BigDecimal shares = floor(state.cumulativeShares(), date);
+        if (shares == null || shares.signum() == 0) return true;
+        Map.Entry<LocalDate, BigDecimal> navEntry = state.navByDate().floorEntry(date);
+        return navEntry != null && !hasUnresolvedNavGapAfter(state, navEntry.getKey(), date);
+    }
+
+    private boolean hasMissingExecutionOnOrBefore(RuleState state, LocalDate date) {
+        return state.missingExecutionNavDates().stream().anyMatch(missing -> !missing.isAfter(date));
+    }
+
+    private boolean hasUnresolvedNavGapAfter(RuleState state, LocalDate navDate, LocalDate valuationDate) {
+        return state.openDates().stream().anyMatch(openDate -> openDate.isAfter(navDate)
+                && !openDate.isAfter(valuationDate)
+                && !state.navByDate().containsKey(openDate));
     }
 
     private BigDecimal currentFundValueCny(List<RuleState> states, LocalDate date) {
@@ -325,7 +368,8 @@ public class MultiCurrencyReportingService {
             AutoDcaDtos.ProjectionResponse projection,
             TreeMap<LocalDate, BigDecimal> navByDate,
             TreeMap<LocalDate, BigDecimal> cumulativeShares,
-            Set<LocalDate> openDates) { }
+            Set<LocalDate> openDates,
+            Set<LocalDate> missingExecutionNavDates) { }
 
     private record Valuation(BigDecimal valueUsd, boolean complete) { }
 

@@ -45,7 +45,7 @@ public class FxService {
         fx.setTracked(false);
 
         List<PriceBar> fetched = yahoo.getHistoricalPrices(fx, startDate, endDate).stream()
-                .filter(bar -> bar != null && bar.date() != null && bar.close() != null && bar.close().signum() > 0)
+                .filter(bar -> bar != null && bar.tradeDate() != null && bar.close() != null && bar.close().signum() > 0)
                 .toList();
         if (fetched.isEmpty() && !endDate.isBefore(LocalDate.now(clock).minusDays(7))) {
             throw new DomainException(HttpStatus.BAD_GATEWAY, "FX_PROVIDER_EMPTY",
@@ -54,10 +54,10 @@ public class FxService {
 
         for (PriceBar bar : fetched) {
             FxRateEntity entity = repository.findFirstByBaseCurrencyAndQuoteCurrencyAndRateDateAndSource(
-                    USD, CNY, bar.date(), USD_CNY_SOURCE).orElseGet(FxRateEntity::new);
+                    USD, CNY, bar.tradeDate(), USD_CNY_SOURCE).orElseGet(FxRateEntity::new);
             entity.setBaseCurrency(USD);
             entity.setQuoteCurrency(CNY);
-            entity.setRateDate(bar.date());
+            entity.setRateDate(bar.tradeDate());
             entity.setRate(bar.close());
             entity.setSource(USD_CNY_SOURCE);
             entity.setRetrievedAt(clock.instant());

@@ -1,331 +1,345 @@
 # DCA Terminal Current State and Next Development Plan
 
-> Current code baseline: `main@b6c578ee129866389efde907c10a99400da5cd4e`
+> Current Flyway chain: `V001`–`V025`.
 >
-> Current merge: PR #42, 2026-09-04
->
-> Current Flyway chain: `V001`–`V022`
->
-> Fact priority: current source/migrations > current tests > current runtime/CI evidence > living docs > dated SA reports
-
-This document replaces the 2026-08-31 roadmap state. Since then, benchmark comparison, previous-regular-close Today semantics, dashboard return cleanup, cash UX, explicit cash ledger, and backend realtime performance have landed.
+> Fact priority: current source/migrations > current tests > exact runtime/CI evidence > living docs > dated SA reports.
 
 ## 1. Product direction
 
-DCA Terminal remains a single-user ETF DCA execution terminal. The core product loop is now:
+DCA Terminal is a single-user long-term investing/DCA workspace with a real USD account ledger plus explicitly derived reporting projections.
+
+Current architecture:
 
 ```text
-real transaction/cash ledger
-      +
-trusted market data
-      +
-frozen DCA intent
-      +
-cash-flow-neutral performance
-      =
-auditable long-term investing workspace
+real USD transaction/cash ledger
+          +
+trusted US market data
+          +
+frozen USD DCA intent
+          |
+          +--> real USD Dashboard / performance
+
+CNY auto-DCA rule + NAV + China open-day facts
+          |
+          +--> derived CNY fund subportfolio
+
+real USD + derived CNY + historical USD/CNY
+          |
+          `--> V025 unified USD Reporting projection
 ```
 
-The product still does not place orders or connect to a broker. The priority is correctness, execution discipline, and explainability before adding more investment features.
+The product still does not place broker orders. Correctness, execution discipline, provenance, and recoverability remain higher priority than feature breadth.
 
 ## 2. Current baseline
 
-### Dashboard
+### Real USD account
 
-- cash-inclusive total account value;
-- separate securities value and cash balance;
-- Today based on previous completed regular close;
-- current holdings and allocation;
-- active-plan progress/next DCA;
-- backend-driven `1M/3M/1Y/YTD/ALL` portfolio performance;
-- optional ETF/index/equity benchmarks with market-aware freshness.
+- explicit DEPOSIT/WITHDRAWAL/INTEREST/BUY/SELL/DIVIDEND/FEE ledger;
+- cash replay + split-aware FIFO;
+- `marketValue = securitiesValue + cashBalance`;
+- DEPOSIT/WITHDRAWAL only are external real-account flows;
+- backend TWR/CAGR/XIRR/max drawdown;
+- regular-close history + optional complete FRESH live endpoint;
+- Dashboard remains the real USD-account surface.
 
-### Transactions / cash
+### China funds
 
-- `DEPOSIT`, `WITHDRAWAL`, `INTEREST`, `BUY`, `SELL`, `DIVIDEND`, `FEE`;
-- cash replay from immutable ledger;
-- DEPOSIT/WITHDRAWAL only are external capital flows;
-- BUY/SELL move value internally between cash and securities;
-- server-authoritative CSV preview/commit;
-- legacy V022 bridge rows preserve pre-cash-ledger economics.
+- CNY mutual-fund metadata and observed NAV;
+- persisted confirmed China open dates;
+- EastMoney NAV/open-day sync with failure-preserves-local-facts behavior;
+- automatic-DCA rules with purchase fees and T+n confirmation;
+- open day without NAV is a visible gap and never creates a derived purchase;
+- monthly/yearly aggregation plus daily drilldown;
+- rule edits currently rewrite derived history.
 
-### Performance
+### V025 FX / Reporting
 
-- backend `PerformanceEngine`;
-- TWR, CAGR, XIRR, maximum drawdown;
-- regular-close history plus optional complete FRESH live endpoint;
-- external flow model `CASH_LEDGER_DEPOSIT_WITHDRAWAL`;
-- benchmark comparison remains read-only and separate from portfolio facts.
-
-### Plan / contributions
-
-- one active monthly USD plan in current product UX;
-- frozen cycle intent;
-- DCA execution based on linked BUY rows;
-- INITIAL/DCA/UNPLANNED BUY attribution;
-- unclassified legacy BUY preview/commit + audit;
-- contribution analysis remains BUY-lot/FIFO based.
-
-### Market data
-
-- current latest quote can include extended/overnight sessions;
-- historical account performance remains regular-close based;
-- 1D intraday is on-demand and non-persistent;
-- Yahoo/Twelve Data/Alpha Vantage provider boundary remains intact;
-- benchmark market timing supports US/default and A-share calendar/close semantics.
+- persisted `fx_rate_daily`;
+- USD/CNY convention `1 USD = rate CNY`;
+- Yahoo `CNY=X` sync + recent scheduler;
+- CNY DCA flows translated at historical flow-date FX;
+- CNY market values translated at valuation-date FX;
+- seven-day FX carry bound;
+- missing required FX/NAV -> PARTIAL, no fabricated live endpoint;
+- combined USD value/P&L/TWR/CAGR/XIRR/drawdown reuse the existing `PerformanceEngine`;
+- no-CNY activity exactly reduces to the existing USD account;
+- Reporting is separate from Dashboard and is not a real multi-currency cash ledger.
 
 ## 3. Completed major phases
 
 ### R1 — contribution/source contract
 
-Completed before the current cash-ledger work:
-
-- transaction contribution fields and constraints;
-- V017 legacy deterministic backfill;
+- contribution fields/constraints;
+- deterministic legacy backfill;
 - classification preview/commit/audit;
-- decimal-string wire contract regressions.
+- decimal-string wire regressions.
 
-### R1.5 — daily/benchmark performance correctness
+### R1.5 — daily/benchmark correctness
 
-Completed through PRs #31–#38:
+- previous-regular-close Today baseline;
+- market-aware benchmark freshness;
+- exchange-local Yahoo history boundaries;
+- dashboard return semantics aligned with TWR;
+- complete live valuation support.
 
-- Today baseline uses previous regular close instead of midnight;
-- benchmark freshness/refetch follows completed market closes;
-- Yahoo daily request boundaries use exchange-local calendars;
-- A-share benchmark timing is market-aware;
-- dashboard stopped mixing simple ROI with TWR semantics;
-- complete live valuation can participate in current performance.
+### R1.6 — explicit real USD cash + server performance
 
-### R1.6 — explicit cash and server performance
+Completed through V022:
 
-Completed in PR #42 / V022:
+- explicit cash events;
+- cash-inclusive real account;
+- legacy bridge rows;
+- canonical backend performance;
+- real external flow = DEPOSIT/WITHDRAWAL only.
 
-- explicit cash transaction types;
-- cash replay and cash-inclusive account value;
-- migration bridge rows for legacy BUY/SELL;
-- backend performance endpoint;
-- external flow = DEPOSIT/WITHDRAWAL only;
-- cash-neutral TWR/XIRR semantics;
-- performance invalidation after ledger changes;
-- core E2E updated to fund with DEPOSIT before BUY.
+### R1.7 — China-fund automatic-DCA projection
+
+Completed through V023–V024:
+
+- CNY mutual-fund profile/rules;
+- observed NAV projection;
+- confirmed China open-day facts;
+- NAV gap audit;
+- EastMoney sync/scheduler;
+- China Funds workspace and summaries.
+
+### R1.8 — FX-backed unified reporting
+
+Completed in V025 / Phase 3:
+
+- persisted daily FX facts;
+- historical-flow vs valuation FX separation;
+- combined USD reporting source;
+- combined performance via existing `PerformanceEngine`;
+- Reporting workspace + manual FX refresh;
+- missing-data downgrade and no-CNY compatibility regressions.
 
 ## 4. Current gaps
 
 | ID | Priority | Current fact | Impact |
 | --- | --- | --- | --- |
-| C-01 | P0 | Living docs were stale vs V022; this synchronization closes that documentation gap. | Future work could otherwise reintroduce pre-V022 accounting semantics. |
-| C-02 | P0 | Exact current remote CI/run evidence is not guaranteed by an empty connector status response. | Release claims must use concrete workflow evidence. |
-| C-03 | P1 | Transaction/Plan/CSV live forms still contain submit-able fixed examples/default facts. | Sample data can be mistaken for real account facts. |
-| C-04 | P1 | No centralized action queue for open/partial/missed DCA cycles. | Execution discipline remains scattered across views. |
-| C-05 | P1 | Funding attribution and BUY-lot contribution attribution now coexist but are not fully explained/reconciled in UI. | Users can confuse "money funded" with "money invested". |
-| C-06 | P1 | Contribution batch P/L excludes dividend, interest, standalone fee, deposit/withdrawal. | Batch totals do not directly reconcile to full account P/L without a bridge. |
-| C-07 | P1 | Provider health history and expected market-data gap audit are not first-class. | Long-running data degradation may remain unnoticed. |
-| C-08 | P1 | Full user export/recovery package is incomplete. | External audit/migration/recovery remains expensive. |
-| C-09 | P2 | Transactions still lack pagination; current valuation/history paths can read wider data than necessary. | Scaling cost grows with ledger/history size. |
-| C-10 | P2 | Some transaction/contribution strings remain hard-coded outside i18n catalogs. | Language consistency/accessibility drift. |
-| C-11 | P2 | Frontend has compatibility/fallback performance logic in addition to canonical server engine. | Future semantic drift risk if both evolve independently. |
+| C-01 | P0 | Real transaction/cash ledger is still USD-only. | Manual real CNY fund/cash activity cannot replace synthetic reporting assumptions yet. |
+| C-02 | P0 | Exact remote CI evidence must be verified for each release head. | A stale/empty status response is never a pass. |
+| C-03 | P1 | USD/CNY is the only reporting FX pair and USD the only reporting currency. | No arbitrary currency matrix/reporting selection. |
+| C-04 | P1 | Yahoo `CNY=X` and EastMoney lack first-class health/fallback/gap operator views. | Long-running external data degradation may go unnoticed. |
+| C-05 | P1 | Auto-DCA rule edit still has `REWRITE_HISTORY` semantics. | Historical derived reporting can change after a rule edit. |
+| C-06 | P1 | China open dates are persisted confirmed history, not a future official holiday calendar. | Future-date scheduling must not assume complete exchange calendar coverage. |
+| C-07 | P1 | Transaction/Plan/CSV forms still contain submit-able fixed sample/default facts. | Sample values can be mistaken for real account activity. |
+| C-08 | P1 | No centralized action queue for open/partial/missed USD DCA cycles. | Execution discipline remains scattered across views. |
+| C-09 | P1 | Funding attribution vs BUY-lot contribution attribution is not fully reconciled in UI. | Users can confuse money funded with money invested. |
+| C-10 | P1 | Contribution batch P/L excludes dividend/interest/standalone fee/funding flows. | Batch totals require an explicit bridge to full account P/L. |
+| C-11 | P1 | Full user export/recovery package is incomplete. | External audit/migration/recovery remains expensive. |
+| C-12 | P2 | Transactions lack pagination; some current/history paths read wider data than necessary. | Cost grows with ledger/history size. |
+| C-13 | P2 | Some copy remains outside i18n catalogs. | Language/accessibility drift. |
+| C-14 | P2 | Frontend compatibility performance logic remains alongside canonical server logic. | Future semantic drift risk. |
 
 ## 5. Next roadmap
 
-### R2 — Safe execution workspace (P1)
+### R2 — Real CNY ledger foundation (P0/P1)
 
-Goal: make the current month actionable without introducing broker/order automation.
+Goal: allow real CNY cash/fund activity without weakening the proven USD ledger.
 
-#### R2-01 Remove submit-able sample facts
+Do **not** simply remove the current `currency=USD` guard.
+
+Design first:
+
+- explicit currency-aware cash balances;
+- legal transaction currency/instrument combinations;
+- CNY DEPOSIT/WITHDRAWAL/INTEREST/FEE semantics;
+- manual real mutual-fund BUY/SELL or subscription/redemption representation;
+- currency-aware FIFO/cost/proceeds;
+- external-flow semantics in reporting currency;
+- migration compatibility for existing USD rows;
+- relationship between real CNY transactions and existing auto-DCA synthetic rules.
+
+Acceptance:
+
+- existing USD-only accounts remain numerically identical;
+- CNY cannot make USD cash negative/positive by accidental cross-currency arithmetic;
+- every real transaction has an unambiguous cash-account currency;
+- combined Reporting can prefer real CNY facts without double-counting synthetic derived history.
+
+### R2.1 — Effective-dated auto-DCA rules
+
+Replace unconditional rewrite-history edits with an explicit model such as:
+
+```text
+rule version A effective [start, changeDate)
+rule version B effective [changeDate, ...)
+```
+
+Keep an explicit administrative rewrite option only when the user intentionally wants historical reconstruction changed.
+
+### R2.2 — FX/provider reliability
+
+Build operator visibility for:
+
+- first/last FX date;
+- expected recent FX gaps;
+- last successful FX sync;
+- Yahoo `CNY=X` provider health/history;
+- EastMoney NAV/open-day provider health;
+- bounded repair/retry queue;
+- alternate FX/fund source strategy before claiming automatic fallback.
+
+Never fabricate fallback from an unrelated rate/source.
+
+### R3 — Safe execution workspace (P1)
+
+#### Remove submit-able sample facts
 
 Transaction form:
 
-- remove fixed `2026-08-27` and default `VOO`;
-- derive a safe current New York business date or leave explicit blank per UX decision;
-- do not pre-classify a new BUY in a way that implies user intent without confirmation.
+- remove fixed dates/symbols;
+- use safe current date or blank state;
+- do not imply contribution intent before confirmation.
 
 Plan form:
 
-- remove `Core ETF Plan`, `1500`, `2026-01-01`, `VOO 100%` as submit-able defaults;
-- use empty fields or clearly non-submit-able placeholders;
-- asset options must come from tracked instruments.
+- remove fixed plan name/budget/start date/VOO target;
+- use empty fields/placeholders;
+- source assets from real tracked instruments.
 
 CSV modal:
 
-- initial textarea must be empty;
-- examples belong in help/placeholder/downloadable template, not committed form state.
+- initial textarea empty;
+- examples belong in help/template, not committed form state.
 
-Acceptance: opening and immediately submitting a new form must not create plausible sample financial facts.
+#### Action queue
 
-#### R2-02 Action queue
+Centralize:
 
-Create a compact queue sourced from existing plan/cycle/market-data facts:
+- upcoming/open/partial/skipped cycles;
+- price/NAV/FX data gaps requiring attention;
+- unclassified real BUYs;
+- failed fund/FX sync needing operator action.
 
-- execution window approaching;
-- OPEN in current window;
-- PARTIAL execution;
-- missed/SKIPPED cycle;
-- current price unavailable/partial;
-- unclassified BUY requiring attention.
+No action creates a broker order.
 
-Every action must link back to existing plan/cycle/transaction facts. No action creates a broker order.
+### R4 — Funding / contribution / reporting explainability (P1)
 
-#### R2-03 Recommendation-to-manual-BUY handoff
-
-Allow a recommendation to prefill a manual BUY form only after explicit user action. The user must still confirm date, price, quantity, source, and cycle before transaction creation.
-
-### R3 — Funding / contribution / performance explainability (P1)
-
-Goal: make the post-V022 model understandable without collapsing distinct concepts.
-
-#### R3-01 Explain three layers
-
-UI/documentation should clearly separate:
+Show four layers explicitly:
 
 ```text
-Funding:      DEPOSIT/WITHDRAWAL
-Execution:    BUY/SELL and DCA cycle links
-Performance:  TWR/XIRR on total cash-inclusive account
+Real funding:       DEPOSIT/WITHDRAWAL
+Real execution:     BUY/SELL + plan cycle links
+Derived CNY plan:   rule + NAV/open-day reconstruction
+Reporting:          USD conversion + TWR/XIRR
 ```
 
-A deposit is not a buy; a buy is not external performance flow.
+Add reconciliation for:
 
-#### R3-02 Contribution/account bridge
-
-Show an explicit reconciliation bridge instead of forcing equality:
-
-- attributed INITIAL/DCA BUY principal;
-- batch realized P/L;
-- batch open P/L;
-- unclassified/unplanned BUY principal;
-- dividend income excluded from batch attribution;
-- interest income excluded from batch attribution;
-- standalone fee drag excluded from batch attribution;
-- cash not yet invested;
-- withdrawals/deposits as funding, not batch return.
-
-Acceptance: users can explain why contribution-batch value differs from total account value/P&L.
-
-#### R3-03 Provenance
-
-Show relevant `asOf`, freshness, price source/session, and performance external-flow model where useful.
-
-### R4 — Market-data reliability (P1)
-
-Build first-class operator visibility:
-
-- tracked-instrument first/last daily date;
-- expected trading-day gaps;
-- adjusted-close gaps;
-- last successful sync;
-- provider operation/outcome/latency/rate-limit history with low cardinality;
-- bounded repair/retry queue;
-- protected management view instead of public Actuator metrics.
-
-Do not log secrets, cookies, full notes, SQL, or high-cardinality symbol tags in metrics.
+- attributed INITIAL/DCA real BUY principal;
+- unplanned/unclassified real BUYs;
+- real cash not invested;
+- dividend/interest/standalone fees;
+- funding flows;
+- derived CNY capital and its FX effect.
 
 ### R5 — Export, audit, recovery (P1)
 
-Export a safe account package containing authoritative/rebuildable facts:
+Export authoritative/rebuildable facts:
 
-- transaction ledger including ledger order/type/cash/contribution links;
-- plans and frozen cycle intent;
-- contribution classification audit;
-- market-data provenance needed for audit where practical;
-- calculation/schema/app version manifest;
+- real transaction ledger + order/currency/attribution;
+- plans/frozen cycles;
+- contribution audit;
+- China fund profiles/rules/NAV/open days;
+- FX facts and source provenance;
+- calculation/schema/app manifest;
 - checksums.
 
-Do not make holdings/snapshots mandatory restore facts. They should rebuild from authoritative state.
-
-Restore smoke should validate V022 cash controls, contribution attribution, and performance controls in addition to schema startup.
+Holdings/snapshots/reporting output should rebuild rather than become required restore facts.
 
 ### R6 — Capacity and maintenance (P2)
 
-Measure before optimizing.
+Measure before optimizing:
 
-Candidates:
-
-- transaction API pagination + server filters;
-- reduce full-ledger/full-history reads for current paths;
-- pass real range into history where appropriate;
-- analyze current quote path loading broad daily history;
-- browser table virtualization after server pagination;
-- retire duplicated frontend performance formulas once fallback requirements are explicitly decided;
-- move remaining strings into i18n;
-- update deprecated Spring test annotations;
-- bundle/route chart analysis;
-- E2E dependency maintenance.
-
-Do not use cross-request caches to hide stale or incorrect financial projections.
+- transaction pagination/server filters;
+- narrower current/history reads;
+- real server-side range forwarding;
+- quote-path broad-history analysis;
+- table virtualization after pagination;
+- frontend performance-fallback retirement decision;
+- i18n cleanup;
+- deprecated Spring test annotation cleanup;
+- bundle/E2E dependency maintenance.
 
 ## 6. Recommended order
 
 ```text
-Docs synced to V022
-      |
-      v
-R2 safe execution UX/action queue
-      |                \
-      |                 -> R4 market reliability
-      v
-R3 explainability
-      |                \
-      |                 -> R5 export/recovery
-      v
-R6 measured capacity/maintenance
+V025 reporting
+    |
+    +--> R2 real CNY ledger design/implementation
+    |       |
+    |       +--> R2.1 effective-dated rules
+    |
+    +--> R2.2 FX/fund provider reliability
+    |
+    +--> R3 safe execution UX
+            |
+            v
+         R4 explainability
+            |
+            +--> R5 export/recovery
+            |
+            `--> R6 measured capacity
 ```
 
 ## 7. Release gates
 
 For every functional PR:
 
-- add/adjust regression proving the intended behavior;
-- explicitly state whether transaction/cash/performance/schema semantics change;
+- add/adjust deterministic regressions;
+- state whether real ledger, projection, performance, schema, or provider semantics change;
 - Web lint/typecheck/test/build;
 - API test/build;
-- `postgresTest` for schema/JPA/migration-sensitive changes;
+- PostgreSQL 18.6 Flyway/Hibernate validation for schema-sensitive changes;
 - relevant isolated E2E;
-- `git diff --check`;
-- no real provider dependency in deterministic CI tests.
+- repository whitespace hygiene;
+- no live provider dependency in deterministic CI tests.
 
-For any cash/performance PR, regression coverage must include at least one case where:
+For reporting/FX changes, regressions should cover as relevant:
 
 ```text
-DEPOSIT occurs
-BUY occurs later
+no CNY -> exact USD compatibility
+historical CNY contribution -> flow-date FX
+later FX movement -> performance, not rewritten flow
+missing/stale FX -> PARTIAL
+open China day without NAV -> PARTIAL/no invented purchase
 ```
-
-and prove the BUY does not create external TWR/XIRR flow.
 
 For release candidate:
 
-- exact target commit identified;
-- current GitHub Actions/workflow evidence verified;
-- backup/restore smoke passes;
-- deployment smoke passes;
+- exact target head identified;
+- exact GitHub Actions run verified successful;
+- PostgreSQL backup/restore smoke successful;
+- deployment smoke successful;
 - Flyway current version confirmed;
-- cash + securities + total account controls reconcile;
-- performance endpoint reports expected external-flow model;
-- no illegal transaction/contribution combinations;
-- docs match the shipped accounting model.
+- real USD controls reconcile;
+- real USD and Reporting external-flow models are correct;
+- docs match shipped semantics.
 
-## 8. Success metrics
+## 8. Product/operational success metrics
 
-Product/operational metrics, not investment-return targets:
+Not investment-return targets:
 
-- percentage of active-cycle months explicitly completed/skipped before close;
-- unclassified BUY count/amount trend;
-- funding-vs-invested explanation completeness;
-- tracked-history/adjusted-close completeness;
+- active-cycle completion/skip discipline;
+- unclassified real BUY trend;
+- NAV/open-day/FX data completeness;
 - provider failure detection/recovery time;
-- backup restore control-total equality;
-- dashboard/transaction/contribution p95 at target ledger sizes;
-- release-gate repeatability.
+- backup restore control equality;
+- reporting reconciliation completeness;
+- dashboard/reporting/transaction p95 at target history sizes;
+- repeatable release gates.
 
-## 9. Explicit non-goals for the next phase
+## 9. Explicit non-goals
 
-- broker integration;
-- automatic order placement;
+- broker integration or automatic order placement;
 - options/crypto;
-- individual-stock research product;
+- stock-picking/research product;
 - technical indicators/Level 2;
-- AI stock picking or price prediction;
+- AI price prediction;
 - tax engine;
 - multi-user SaaS.
 
-Only reconsider these after the single-user ETF DCA ledger, cash, execution discipline, explainability, and recovery story are stable.
+Only revisit these after the single-user ledger, cross-currency facts, execution discipline, explainability, and recovery story are stable.

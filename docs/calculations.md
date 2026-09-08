@@ -1,23 +1,19 @@
 # DCA Terminal Calculation Rules
 
-> Current baseline: `main@b6c578ee129866389efde907c10a99400da5cd4e`.
-> This document reflects the post-V022 cash-ledger model.
+> Current calculation model: V025.
 
-All financial arithmetic uses exact decimal values (`BigDecimal` / PostgreSQL `NUMERIC`) except the documented positive fractional-power boundary for CAGR. API financial values are decimal JSON strings; Web calculations normalize them with `decimal.js-light`.
+Financial arithmetic uses exact decimal values (`BigDecimal` / PostgreSQL `NUMERIC`) except the documented positive fractional-power boundary for CAGR. Financial API values are decimal JSON strings.
 
-## Time and price conventions
+## Time and fact conventions
 
-- Business date and US plan/market decisions use `America/New_York`.
+- US real-account business/market dates use `America/New_York`.
+- China fund calendar/provider semantics use `Asia/Shanghai`.
 - Database timestamps are UTC.
-- A historical lookup for target date `d` uses the latest available trading date `<= d`.
-- A missing required value is never replaced by a future price, current price, NAV, or zero.
-- Current account valuation can use the newest valid regular/pre/post/extended/overnight quote.
-- Historical portfolio replay and persisted snapshots use regular-session raw market closes.
-- ETF historical return metrics use adjusted close where documented.
+- Historical lookups may use the latest valid fact `<= target date` only where that fact is legitimately carry-forwardable.
+- Missing required facts are never replaced by a future value, current value, zero, or a different fact type.
+- Latest quote, raw close, adjusted close, fund NAV, China open day, and FX rate are distinct facts.
 
-## Cash ledger
-
-Cash is a projection of the ordered transaction ledger:
+## Real USD cash ledger
 
 ```text
 cashChange(DEPOSIT)    = +amount
@@ -29,9 +25,7 @@ cashChange(FEE)        = -amount
 cashChange(INTEREST)   = +amount
 ```
 
-All cash events are replayed in trade-date / ledger-order sequence.
-
-The external-capital stream used for portfolio performance is deliberately narrower:
+External capital for the real USD performance source:
 
 ```text
 externalFlow(DEPOSIT)    = +amount
@@ -39,14 +33,14 @@ externalFlow(WITHDRAWAL) = -amount
 externalFlow(other)      = 0
 ```
 
-Therefore BUY/SELL do not create investment performance merely by moving money between cash and securities.
+BUY/SELL therefore move money internally between cash and securities rather than creating investment return.
 
 ## Split-aware FIFO
 
-A split with ratio `numerator / denominator` changes open lot shares while preserving lot total cost:
+For split ratio `numerator / denominator`:
 
 ```text
-shares_after = shares_before * numerator / denominator
+shares_after         = shares_before * numerator / denominator
 per_share_cost_after = per_share_cost_before * denominator / numerator
 ```
 
@@ -56,7 +50,7 @@ BUY lot cost:
 buy cost = quantity * unitPrice + fee
 ```
 
-SELL proceeds and realized P/L:
+SELL:
 
 ```text
 sell proceeds = quantity * unitPrice - fee
@@ -65,9 +59,9 @@ realized P/L  = sell proceeds - FIFO cost consumed
 
 A SELL exceeding available split-adjusted shares is invalid.
 
-## Portfolio values
+## Real USD portfolio values
 
-For valuation date `d`, replay only ledger events and splits visible by `d`.
+For date `d`, replay only real ledger events/splits visible by `d`.
 
 ```text
 securitiesValue = sum(open shares * selected raw market price)
@@ -78,42 +72,32 @@ unrealizedPnl   = securitiesValue - costBasis
 netInvested     = cumulative DEPOSIT - WITHDRAWAL
 ```
 
-`marketValue` now means total account value, despite the historical field name.
-
-When the security valuation is complete:
+For a complete valuation:
 
 ```text
 totalPnl = marketValue - netInvested
 ```
 
-This account-level P/L naturally includes realized security gains/losses, unrealized P/L, dividends, interest, and standalone fees because all of them affect total account value while only deposits/withdrawals affect external capital.
+Account P/L therefore naturally includes realized/unrealized security return, dividends, interest, and fees while only deposits/withdrawals change external capital.
 
-The backend still exposes component fields such as realized P/L, unrealized P/L, dividend income, interest income, and total fees for audit/presentation. Those components must not be recombined in a way that double-counts trade fees.
+Historical account values use historical ledger replay plus that date's regular-session price. Current holdings multiplied by old prices are forbidden because that introduces look-ahead bias.
 
-## Current vs historical valuation
+## Canonical USD performance engine
 
-Current security prices are loaded from live/latest quotes when possible. If a live refresh cannot produce a usable price, stored quote or prior daily close may be used with degraded freshness according to current portfolio logic.
-
-Historical daily account values use the ledger as it existed on each date plus that date's regular-session price. Current holdings multiplied by old prices are forbidden because they introduce look-ahead bias.
-
-Snapshots are rebuildable read models. Backdated transaction changes invalidate snapshots from the affected date forward.
-
-## Portfolio performance engine
-
-Canonical endpoint:
+Endpoint:
 
 ```text
 GET /api/v1/performance/portfolio?range=1M|3M|1Y|YTD|ALL
 ```
 
-The engine consumes a sequence of account valuations:
+Input sequence:
 
 ```text
-V_t = total account value at t
-F_t = cumulative external flow at t
+V_t = total account value
+F_t = cumulative external flow
 ```
 
-For adjacent valid valuations, period gross factor is:
+Adjacent valid period:
 
 ```text
 externalFlow_t = F_t - F_(t-1)
@@ -121,37 +105,23 @@ gross_t        = (V_t - externalFlow_t) / V_(t-1)
 level_t        = level_(t-1) * gross_t
 ```
 
-Only complete positive valuations participate. A PARTIAL current valuation is not appended as a live endpoint.
-
-### Inception baseline
-
-If the requested range starts at or before the first valuation, the theoretical inception level begins from cumulative external capital rather than forcing the first visible account mark to exactly 1. This preserves performance earned between initial funding and the first regular-close/live valuation.
+Only complete positive valuations participate. A PARTIAL current value cannot become a live performance endpoint.
 
 ### TWR
 
-For the selected range, levels are rebased to the selected baseline:
-
 ```text
-rebasedLevel_t = level_t / baselineLevel
+rebasedLevel_t = level_t / selectedBaselineLevel
 TWR            = terminal rebasedLevel - 1
 ```
 
-TWR removes deposits/withdrawals from investment performance.
-
 ### CAGR
 
-CAGR is annualized from inception level history using elapsed calendar days and a 365.2425-day year:
-
 ```text
-CAGR = terminalLevel ^ (1 / years) - 1
+CAGR  = terminalLevel ^ (1 / years) - 1
 years = elapsedDays / 365.2425
 ```
 
-The implementation validates a positive terminal level and uses an isolated `Math.pow` boundary for the fractional exponent.
-
 ### Maximum drawdown
-
-For selected performance points:
 
 ```text
 peak_t     = max(level_0 ... level_t)
@@ -161,94 +131,176 @@ maxDD      = min(drawdown_t)
 
 ### XIRR
 
-Current portfolio XIRR uses only external capital events plus current total account value:
+Real USD XIRR cash flows:
 
 ```text
 DEPOSIT    = -amount
 WITHDRAWAL = +amount
-valuation  = +current total account value
+valuation  = +current real USD account value
 ```
 
-BUY, SELL, DIVIDEND, FEE, and INTEREST are internal account events and are not separate XIRR cash flows in the post-V022 model.
+BUY/SELL/DIVIDEND/FEE/INTEREST are not separate XIRR flows.
 
-The XIRR solver uses dated cash flows with a 365-day exponent basis, deterministic root bracketing, and bisection. If there is no valid sign-changing bracket or result is non-finite, return null rather than NaN/HTTP 500.
+The solver uses dated cash flows, deterministic bracketing, and bisection. Invalid/no-root cases return null.
 
 ## Today performance
 
-Today is anchored to the previous completed regular-close portfolio point strictly before the current New York business date.
-
-Conceptually:
+Today is anchored to the previous completed regular-close USD portfolio point strictly before the current New York date.
 
 ```text
-Today investment P/L = current total value
-                     - prior regular-close total value
-                     - external capital flow since that close
+Today investment P/L
+  = current real USD value
+  - prior regular-close real USD value
+  - real external flow since that close
 ```
 
-This baseline is retained throughout pre-market, regular trading, and after-hours on the same New York date. It rolls on the next New York calendar day.
+V020's experimental midnight settlement was removed by V021.
 
-The experimental midnight-settlement runtime path was removed by V021.
+## China fund automatic-DCA projection
+
+The configured DCA amount is gross CNY cash paid. For purchase-fee rate `r`:
+
+```text
+net subscription = gross amount / (1 + r)
+purchase fee     = gross amount - net subscription
+shares           = net subscription / NAV
+```
+
+A derived execution requires an observed NAV on that date. A confirmed China open day with missing NAV does not receive a carry-forward NAV and does not create a purchase.
+
+Management fee is metadata only because published mutual-fund NAV already reflects accrued fund-level expenses.
+
+Cumulative projected shares on date `d`:
+
+```text
+shares_d = sum(derived execution shares with navDate <= d)
+```
+
+Projected CNY fund value uses the latest valid NAV on/before `d`, except a confirmed open day with missing exact NAV is considered an incomplete valuation rather than a normal carry-forward day.
+
+## V025 FX conversion
+
+`fx_rate_daily` currently stores USD/CNY with:
+
+```text
+1 USD = R CNY
+```
+
+Therefore:
+
+```text
+USD = CNY / R
+```
+
+The reporting projection distinguishes **flow-date FX** from **valuation-date FX**.
+
+For each derived CNY DCA execution `i`:
+
+```text
+cnyExternalFlow_i = grossAmount_i
+usdExternalFlow_i = grossAmount_i / USD_CNY(flowDate_i)
+```
+
+Historical contributions are never retranslated at today's FX.
+
+For CNY fund value at date `t`:
+
+```text
+cnyFundValue_t = sum(cumulative shares * usable NAV_t)
+cnyFundUsd_t   = cnyFundValue_t / USD_CNY(t)
+```
+
+FX uses the latest stored rate on/before the target date only within a seven-calendar-day carry window. A more stale rate is not treated as a usable conversion.
+
+Example:
+
+```text
+2026-09-07 gross CNY contribution = 710
+2026-09-07 USD/CNY = 7.10
+historical external flow = USD 100
+
+2026-09-08 fund value = CNY 781
+2026-09-08 USD/CNY = 7.20
+current fund value = USD 108.472222...
+```
+
+The USD 100 historical contribution stays USD 100. The later FX movement contributes to investment return.
+
+## V025 combined USD reporting
+
+Endpoint:
+
+```text
+GET /api/v1/reporting/multicurrency?range=1M|3M|1Y|YTD|ALL
+```
+
+This is a reporting projection, not a real multi-currency ledger.
+
+At date `t`:
+
+```text
+combinedValueUsd_t
+  = realUsdAccountValue_t
+  + derivedCnyFundValueUsd_t
+
+combinedExternalFlowUsd_t
+  = realUsdCumulativeDepositMinusWithdrawal_t
+  + cumulative derived CNY DCA gross flows translated at each flow-date FX
+
+combinedPnlUsd_t
+  = combinedValueUsd_t - combinedExternalFlowUsd_t
+```
+
+Combined TWR/CAGR/XIRR/drawdown use the **same** `PerformanceEngine`, supplied with the combined valuation/external-flow source.
+
+When CNY activity exists, the reporting flow model is:
+
+```text
+USD_CASH_LEDGER_PLUS_CNY_AUTO_DCA_AT_HISTORICAL_USDCNY
+```
+
+If no CNY automatic-DCA execution exists, the reporting result must reduce exactly to the real USD account and no FX fact is required.
+
+### Missing-data behavior
+
+Combined reporting is `FRESH` only when the required real USD valuation, CNY NAV/open-day facts, historical CNY flow FX, and current valuation FX are complete.
+
+If a required CNY component is missing:
+
+- do not report a partial converted value as if complete;
+- set affected combined values/flows to null where appropriate;
+- degrade status to `PARTIAL`;
+- do not append a fabricated live performance endpoint.
 
 ## ETF metrics
 
-### Today / 1D
+Today / 1D:
 
 ```text
 ETF Today Return = latest market price / previous regular close - 1
 ```
 
-### 1M / 3M / 1Y
-
-Use adjusted close at the latest available trading date `<=` target date:
+1M / 3M / 1Y use adjusted close at the latest available trading date `<= target`:
 
 ```text
 period return = latest adjusted close / target adjusted close - 1
 ```
 
-### YTD
-
-Use the final available prior-calendar-year adjusted close as baseline:
-
-```text
-YTD = latest adjusted close / previous-year final adjusted close - 1
-```
-
-### 3Y CAGR
-
-```text
-3Y CAGR = (end adjusted close / start adjusted close)
-          ^ (365.2425 / elapsedDays) - 1
-```
-
-### 52-week high / low
-
-Use raw daily `high` / `low` over the latest 365 calendar days.
-
-### ETF drawdown
-
-Use adjusted close and running peak. Missing adjusted close must degrade the metric instead of substituting raw close.
+YTD uses final prior-calendar-year adjusted close. 3Y CAGR uses elapsed calendar days/365.2425. 52-week high/low uses raw daily high/low. ETF drawdown uses adjusted close and must degrade if adjusted close is missing.
 
 ## Allocation
 
-Security holdings allocation is a securities-only concept:
+Real security allocation remains securities-only:
 
 ```text
 actualWeight_i = securityMarketValue_i / totalSecuritiesValue
 ```
 
-Cash is displayed separately and is not a pseudo security in the allocation service.
+Cash is shown separately and is not a pseudo security. V025 Reporting fund positions are also not injected into this real USD allocation endpoint.
 
-For plan assets:
+## USD plan cycles
 
-```text
-drift_i = actualWeight_i - targetWeight_i
-```
-
-Unplanned holdings remain visible but do not silently change plan target weights.
-
-## Plan cycles
-
-A monthly cycle freezes plan intent. Actual execution is the cash outlay of linked BUY rows:
+Actual cycle execution remains linked real BUY cash outlay:
 
 ```text
 executedAmount = sum(quantity * unitPrice + fee for linked BUYs)
@@ -256,7 +308,7 @@ executedAmount = sum(quantity * unitPrice + fee for linked BUYs)
 
 DEPOSIT funding does not complete a cycle.
 
-Statuses remain deterministic:
+Statuses:
 
 ```text
 before window                         -> UPCOMING
@@ -266,44 +318,26 @@ inside/after, executed >= plan       -> COMPLETED
 after window, executed = 0           -> SKIPPED
 ```
 
-An actual INITIAL BUY in the plan start month can suppress ordinary DCA execution for that month according to current plan rules.
-
 ## Contribution-batch analysis
 
-Contribution analysis remains BUY-lot based.
-
-Attributed batches:
-
-- `INITIAL`: explicit initial BUY for the plan;
-- `DCA`: BUY linked to a plan cycle;
-- `UNPLANNED` and unclassified BUYs are excluded from attributed plan totals.
-
-Principal:
+Real contribution analysis remains BUY-lot based.
 
 ```text
 principal = BUY quantity * unitPrice + fee
-```
-
-SELL consumes global FIFO lots and assigns realized P/L to the lot's original batch.
-
-For a complete open lot valuation:
-
-```text
 batch P/L = attributed realized P/L + openValue - openCost
-batch value = principal + batch P/L
 batch ROI = batch P/L / principal
 ```
 
-Current contribution analysis deliberately excludes DIVIDEND, INTEREST, account-level FEE, DEPOSIT, and WITHDRAWAL from batch attribution. These facts still affect account cash/performance, so batch totals are not expected to equal full account P/L without an explicit reconciliation bridge.
+DIVIDEND, INTEREST, standalone FEE, DEPOSIT, and WITHDRAWAL remain outside batch attribution, so batch totals are not expected to equal total real account P/L without an explicit reconciliation bridge.
 
-The current `averageMarketDays`/weighted-day field is cost-weighted calendar days, not exchange trading days.
+CNY automatic-DCA derived executions are not silently inserted into this real BUY-lot analysis.
 
 ## V022 legacy bridge semantics
 
-Before explicit cash existed, legacy BUY/SELL rows implicitly injected or removed external money. V022 inserts synthetic bridge events to preserve that economic history:
+V022 inserted deterministic compatibility cash events around legacy pre-cash-ledger BUY/SELL rows:
 
-- before each positive legacy BUY cash outlay: matching DEPOSIT;
-- after each positive legacy SELL net proceeds: matching WITHDRAWAL;
-- defensive DEPOSIT for a legacy SELL whose fee exceeded gross proceeds.
+- preceding DEPOSIT for legacy BUY cash outlay;
+- following WITHDRAWAL for positive legacy SELL proceeds;
+- defensive DEPOSIT for unusual negative SELL proceeds.
 
-These bridge events make the post-V022 external-flow model economically equivalent to the old implicit model for migrated accounts. They must remain part of ledger replay.
+These are migration facts and remain part of real ledger replay.

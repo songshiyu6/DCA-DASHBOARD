@@ -26,6 +26,13 @@ function renderPage() {
   return render(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={['/transactions']}><TransactionsPage /></MemoryRouter></QueryClientProvider>)
 }
 
+function localDateValue(date = new Date()) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   const transaction = fixtureTransactions[0]
@@ -39,6 +46,39 @@ beforeEach(() => {
 })
 
 describe('transaction form', () => {
+  it('defaults a new transaction to the browser local date', async () => {
+    const user = userEvent.setup()
+    const expectedDate = localDateValue()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: 'Add transaction' }))
+
+    expect(screen.getByLabelText('Date')).toHaveValue(expectedDate)
+  })
+
+  it('allows DCA classification when the current plan is paused', async () => {
+    const user = userEvent.setup()
+    const pausedPlan = { ...fixturePlan, status: 'PAUSED' as const }
+    mockedApi.getPlans.mockResolvedValue({ data: [pausedPlan], meta: { status: 'FRESH', source: 'API' } })
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: 'Add transaction' }))
+    await waitFor(() => expect(mockedApi.getCycles).toHaveBeenCalledWith(pausedPlan.id))
+
+    const date = screen.getByLabelText('Date')
+    await user.clear(date)
+    await user.type(date, '2026-09-03')
+
+    const source = screen.getByLabelText('DCA execution')
+    const dcaOption = screen.getByRole('option', { name: 'DCA purchase' })
+    expect(dcaOption).toBeEnabled()
+    await user.selectOptions(source, 'DCA')
+
+    const septemberCycle = pausedPlan.cycles?.find((cycle) => cycle.period === '2026-09')
+    expect(septemberCycle).toBeDefined()
+    expect(screen.getByLabelText('DCA cycle')).toHaveValue(septemberCycle?.id)
+  })
+
   it('closes the dialog with Escape and returns focus to its opener', async () => {
     const user = userEvent.setup()
     renderPage()
@@ -71,6 +111,7 @@ describe('transaction form', () => {
 
   it('keeps DCA execution on BUY and distinguishes it from account funding', async () => {
     const user = userEvent.setup()
+    const expectedDate = localDateValue()
     renderPage()
 
     await user.click(await screen.findByRole('button', { name: 'Add transaction' }))
@@ -88,7 +129,7 @@ describe('transaction form', () => {
 
     await waitFor(() => expect(mockedApi.createTransaction).toHaveBeenCalledWith(expect.objectContaining({
       transactionType: 'DEPOSIT',
-      tradeDate: '2026-08-27',
+      tradeDate: expectedDate,
       amount: '1000',
       fee: '0',
       currency: 'USD',

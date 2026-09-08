@@ -1,420 +1,268 @@
 # DCA Terminal Architecture
 
+> Current baseline: `main@b6c578ee129866389efde907c10a99400da5cd4e`.
+> Current schema chain: `V001`–`V022`.
+
 ## Product boundary
 
-DCA Terminal is a single-user, USD-first terminal for US ETFs. It combines
-market data, the user's real transaction ledger, an investment plan, and the
-calculated state of the portfolio. It does not place orders, connect to a
-broker, provide investment advice, or emulate a trading venue.
+DCA Terminal is a single-user, USD-first ETF DCA execution and portfolio-observation terminal. It records account facts, derives holdings/cash/performance, and helps the user execute a monthly investment plan. It does not place orders, connect to a broker, provide investment advice, or create an editable holdings/cash state.
 
-The current non-goals are broker APIs, options, individual-stock research,
-cryptocurrency, news, AI recommendations, price prediction, WebSocket ticks,
-Level 2, technical indicators, multi-user SaaS, social features, paper
-trading, backtesting, multi-currency assets, and tax calculations.
+Current non-goals include broker APIs, automatic trading, options, cryptocurrency, individual-stock research, technical indicators, news, social features, paper trading, tax calculation, backtesting, and multi-user SaaS.
 
-## System shape
-
-The repository is a monorepo with a modular monolith API:
-
-```text
-.
-├── apps/
-│   ├── web/                 # React + TypeScript + Vite
-│   └── api/                 # Spring Boot 3 + Java 21
-├── deploy/
-│   ├── docker-compose.yml
-│   ├── docker-compose.e2e.yml
-│   ├── Caddyfile
-│   └── scripts/
-├── e2e/                     # Playwright against mock Yahoo, isolated volumes
-├── docs/
-├── .github/workflows/ci.yml
-└── README.md
-```
-
-The application runtime is:
+## Runtime shape
 
 ```text
 Internet
    |
    v
-Caddy (TLS, :80/:443)
+Caddy (:80/:443)
    |-- /       -> web:80
    `-- /api/*  -> api:8080 -> postgres:5432
 ```
 
-The Compose file places PostgreSQL on an internal `backend` network. The API
-joins both `backend` and `edge`; the web server and Caddy join `edge`. The
-database has no published host port. Caddy is the only public entry point.
-
-The deployment configuration builds the application-owned Dockerfiles:
-
-- `apps/web/Dockerfile` serves the production frontend on port 80 and includes
-  an HTTP health probe at `/`.
-- `apps/api/Dockerfile` serves Spring Boot on port 8080, includes an HTTP health
-  probe for `/actuator/health`, and runs with Java 21.
-
-The deployment layer passes the API's `DATABASE_*`, `FLYWAY_ENABLED`,
-`APP_THEME`, security enable/cookie/user/password values, `APP_SESSION_*`, and
-market-provider values directly to names consumed by `application.yml`.
-`APP_DOMAIN` and `CADDY_EMAIL` are Caddy-only settings. The canonical Compose
-forwards the two `APP_LOGIN_*` throttle overrides shown in `.env.example`; their
-defaults are 5/900. Business dates are deliberately fixed to
-`America/New_York`; there is no `APP_TIMEZONE` setting.
-
-The authenticated web application exposes six workspaces: Dashboard, Plan,
-Contributions, ETFs (list and detail), Transactions, and Settings. Login and
-not-found routes sit outside the workspace shell. The Contributions workspace
-is active-plan scoped and reads the plan contribution-analysis projection; it
-does not persist a separate portfolio or cash balance. Attributed batches are
-plan-scoped, while the current unclassified-BUY queue is account-wide because
-those rows do not yet carry a plan association.
-
-## Source of truth and projections
-
-The only authoritative business facts are:
+Repository:
 
 ```text
-Instrument
-Market price / quote
-Fund NAV
-Split event
-Transaction
-Transaction contribution source (`INITIAL`, `DCA`, `UNPLANNED`, or unclassified)
-Investment plan and plan assets
+apps/web    React 19 + TypeScript + Vite
+apps/api    Spring Boot 3.5.16 + Java 21
+deploy      Compose, Caddy, backup/restore/smoke
+e2e         isolated Playwright stack
+docs        current contracts + dated historical evidence
 ```
 
-The portfolio is a projection, not an editable fact:
+PostgreSQL is on an internal Compose network. Only Caddy publishes host ports.
+
+## Authoritative facts
+
+The authoritative business facts are:
+
+- instrument identity/profile;
+- market quote and daily market price;
+- fund NAV;
+- split event;
+- transaction ledger event;
+- contribution attribution attached to eligible funding/BUY rows;
+- investment plan and plan assets.
+
+The account is a projection:
 
 ```text
-Transactions + split events + prices
-             |
-             v
-      holdings and FIFO lots
-             |
-             v
-portfolio summary, history, allocation, P/L, XIRR
-             |
-             `-> plan-scoped initial/DCA contribution batches
+ordered transaction ledger
+      + split events
+      + market data
+          |
+          +--> security FIFO replay
+          +--> cash replay
+          |
+          v
+cash-inclusive portfolio
+          |
+          +--> summary / holdings / allocation
+          +--> regular-close snapshots/history
+          +--> performance engine
+          `--> plan/contribution projections
 ```
 
-There is no `POST /portfolio/update-holdings` or equivalent write API. A
-holding can only change after a valid transaction or a split event is applied.
-Daily snapshots are rebuildable read models used to make history and the
-dashboard fast; they must never become a second source of truth. The dashboard
-loads today's transactions, splits, and prices once for summary, holdings, and
-allocation. History keeps its own snapshot-coverage plus replay path and is
-not served from that current-ledger object. There is no cross-request
-in-memory portfolio cache.
+There is no holdings-update endpoint and no mutable cash-balance table. `portfolio_snapshot_daily` is a rebuildable cache, not a second source of truth.
 
-Plan cycles are also derived from a plan, calendar rules, and linked BUY
-transactions. A cycle stores a frozen asset allocation at creation time so a
-later plan edit cannot rewrite historical intent. Its executed amount and
-status are projection fields and may be recalculated.
+## Transaction and cash model
 
-Contribution analysis is another projection. It uses the same ordered,
-split-aware transaction ledger and tags FIFO lots with their original
-`INITIAL` or plan-cycle `DCA` source. The optional
-`investment_plan.initial_capital` value is reference metadata only; it does not
-create cash, shares, or contribution principal.
+Current transaction types:
+
+- `DEPOSIT`
+- `WITHDRAWAL`
+- `INTEREST`
+- `BUY`
+- `SELL`
+- `DIVIDEND`
+- `FEE`
+
+Instrument rules:
+
+- BUY/SELL/DIVIDEND require an instrument;
+- FEE may optionally carry an instrument;
+- DEPOSIT/WITHDRAWAL/INTEREST are account-level and must not carry an instrument.
+
+Cash replay:
+
+```text
+DEPOSIT      +amount
+WITHDRAWAL   -amount
+BUY          -(quantity * unitPrice + fee)
+SELL         +(quantity * unitPrice - fee)
+DIVIDEND     +amount
+FEE          -amount
+INTEREST     +amount
+```
+
+External performance flow is intentionally narrower:
+
+```text
+external flow = DEPOSIT - WITHDRAWAL
+```
+
+BUY/SELL/DIVIDEND/FEE/INTEREST are internal account activity and contribute zero external performance flow.
+
+## Portfolio model
+
+`PortfolioService` replays both securities and cash for the same `asOf` date.
+
+```text
+securitiesValue = sum(position shares * selected price)
+cashBalance     = cash replay balance
+marketValue     = securitiesValue + cashBalance
+netInvested     = cumulative external flow
+```
+
+`marketValue` is a legacy field name that now means total account value.
+
+Current holdings and security allocation remain security-only concepts. Cash is shown separately in portfolio summary/presentation and is not represented as a pseudo-instrument.
+
+For a complete current valuation:
+
+```text
+totalPnl = marketValue - netInvested
+```
+
+Security unrealized P/L remains `securitiesValue - security costBasis`.
+
+## Price paths
+
+Three price paths remain deliberately separate:
+
+1. **Latest quote** — persisted in `market_quote_latest`; current account valuation prefers the newest valid regular/pre/post/extended/overnight observation.
+2. **1D intraday** — on-demand provider bars; not persisted as permanent five-minute history.
+3. **Daily history** — persisted regular-session rows in `market_price_daily`; used for historical replay, snapshots, ETF metrics, and regular-close performance.
+
+Market price, adjusted close, and NAV are separate facts. NAV is never synthesized from market price.
+
+## Performance module
+
+The backend `performance` module is the canonical portfolio-performance boundary.
+
+```text
+GET /api/v1/performance/portfolio?range=1M|3M|1Y|YTD|ALL
+```
+
+It consumes:
+
+- regular-close portfolio history;
+- current cash-inclusive summary;
+- external cash flows from DEPOSIT/WITHDRAWAL only.
+
+A complete `FRESH` current valuation can extend the regular-close history with a live endpoint. PARTIAL live valuations are rejected as performance endpoints to prevent missing quotes from appearing as investment losses.
+
+The response exposes TWR, CAGR, XIRR, maximum drawdown, baseline/inception/endpoint metadata, an `externalFlowModel`, and normalized performance points.
+
+Benchmark search/history is a separate read-only module. Benchmark ETF/index/equity identities do not enter the tracked instrument table or portfolio ledger.
+
+## Today semantics
+
+The New York calendar defines the account business day, but Today performance is anchored to the previous completed regular close.
+
+`V020` introduced an experimental midnight-settlement table. `V021` removed that runtime model. These migrations remain in forward-only Flyway history; do not delete or rewrite them.
+
+## Contribution and plan model
+
+Plan cycles freeze historical intent. Later edits to a plan must not rewrite a frozen cycle.
+
+Actual DCA execution is a BUY linked to a cycle. DEPOSIT only funds cash; it is not an executed purchase.
+
+Contribution analysis remains BUY-lot attribution:
+
+- `INITIAL` BUY linked to the requested plan;
+- cycle-linked `DCA` BUY grouped by cycle period;
+- `UNPLANNED` or unclassified BUY excluded from plan batch totals;
+- SELL globally consumes split-adjusted FIFO lots and can realize attributed batch P/L.
+
+DEPOSIT rows may carry contribution attribution in the database/API, including plan attribution for DCA funding, but the current batch-analysis projection does not convert deposit funding into contribution lots.
 
 ## Modules
 
-The Spring Boot application is one deployable unit with these ownership
-boundaries:
+Current API module ownership:
 
-- `auth`: single-user session authentication, CSRF, and login throttling.
-- `instrument`: tracked ETF identity and profile metadata.
-- `marketdata`: provider SPI, registry, fallback, cache, ingestion, on-demand
-  intraday retrieval, provider-session diagnostics, and data freshness.
-- `transaction`: validation, CRUD, CSV import, duplicate detection, and
-  transaction-to-cycle suggestions.
-- `portfolio`: split-aware FIFO replay, holdings, P/L, XIRR, allocation, and
-  snapshots.
-- `observability`: low-cardinality Micrometer meters for provider calls, sync,
-  snapshot invalidate/rebuild, portfolio replay, and CSV import. Allowed tag
-  keys are `provider`, `operation`, `outcome`, `status`, and `mode`. Symbol,
-  notes, credentials, and SQL must not be metric tags. Actuator still exposes
-  only `health` and `info`.
-- `plan`: plan assets, cycle lifecycle, progress, drift, and contribution
-  recommendation, plus initial-versus-DCA batch analysis.
-- `settings`: non-secret display and provider configuration status.
-- `shared`: decimal policies, time conventions, API errors, and observability.
+- `security` / `auth` — single-user session security, CSRF, login throttling;
+- `instrument` — tracked ETF identity/profile;
+- `marketdata` — provider SPI, quotes, history, intraday, sync/freshness;
+- `benchmark` — read-only Yahoo-searchable ETF/index/equity comparisons;
+- `transaction` — CRUD, cash ledger, FIFO validation boundary, CSV import;
+- `portfolio` — current projection, historical replay, snapshots;
+- `performance` — cash-flow-neutral performance engine;
+- `plan` — plans, cycles, recommendations, contribution analysis/classification;
+- `settings` — non-secret user settings/provider configuration state;
+- `observability` — low-cardinality metrics.
 
-Controllers expose HTTP contracts. Application services coordinate use cases.
-Domain services perform financial calculations. Infrastructure adapters own
-JPA, provider HTTP clients, caching, and scheduling. Provider classes must not
-be called directly from controllers or portfolio calculations.
+## Persistent schema
 
-## Market-data read paths
+Flyway is the only schema owner. Production uses Hibernate `ddl-auto=validate`.
 
-The application deliberately has three different price paths:
+Current published migrations:
 
-1. **Latest quote** — provider quote retrieval persisted in
-   `market_quote_latest`. Yahoo's authenticated v7 quote may contain regular,
-   pre-market, post-market, extended, or overnight observations. Current
-   portfolio valuation uses this path.
-2. **1D intraday chart** — provider on-demand five-minute data returned directly
-   to the ETF detail page and not persisted. Yahoo v8 chart supplies only the
-   available pre-market/regular/post-market bars; an overnight quote is not a
-   substitute for those bars.
-3. **Historical daily prices** — regular-session daily rows persisted in
-   `market_price_daily` and used by snapshots, YTD/TWR, drawdowns, and other
-   historical performance calculations.
+- `V001`–`V012`: initial instrument/market/transaction/plan/snapshot model and early corrections;
+- `V013`: atomic ledger-order sequence;
+- `V014`: PostgreSQL Spring Session;
+- `V015`: remove configurable timezone setting;
+- `V016`: contribution fields;
+- `V017`: contribution constraints/backfill/audit;
+- `V018`: quote-session classification;
+- `V019`: remove untrusted portfolio snapshots after corrected replay semantics;
+- `V020`: create experimental midnight settlement;
+- `V021`: remove midnight settlement;
+- `V022`: explicit cash ledger, cash transaction types, cash-inclusive snapshot columns, compatibility bridge rows.
 
-These paths must remain separate. A successful overnight quote must not be
-expanded into synthetic five-minute bars, and missing current-day intraday bars
-must not cause a previous trading day's series to be relabeled as today. The 1D
-API filters provider timestamps by `America/New_York` trade date and, when Yahoo
-supplies `currentTradingPeriod`, by the declared pre/regular/post boundaries.
-Those boundaries are `[start,end)`. If Yahoo omits or supplies an invalid
-`exchangeTimezoneName` for the US ETF intraday chart, normalization uses
-`America/New_York` rather than UTC so late post-market bars are not dropped only
-because the UTC calendar date has advanced.
+Important logical tables now include:
 
-Yahoo intraday parsing also returns an internal diagnostic result alongside the
-normalized bars. The internal value records raw timestamp count, requested-date
-match count, trading-period match count, non-null-close count, final bar count,
-and pre/regular/post session boundaries. It is used for classification and safe
-logging only; it is not persisted and is not exposed as public API data.
+- `instrument`
+- `market_price_daily`
+- `market_quote_latest`
+- `fund_nav_daily`
+- `instrument_split`
+- `investment_transaction`
+- `investment_plan`
+- `investment_plan_asset`
+- `investment_plan_cycle`
+- `investment_plan_cycle_asset`
+- `portfolio_snapshot_daily`
+- `app_setting`
+- `SPRING_SESSION`
+- `SPRING_SESSION_ATTRIBUTES`
+- `contribution_classification_audit`
 
-The 1D API has explicit market-state semantics. Before the regular session
-starts, a valid empty primary result may represent an honest not-yet-populated
-current-session state and remains `PARTIAL`, with no `asOf`; it is not replaced
-by fabricated or previous-day data. Once regular trading has started, an empty
-Yahoo response or an unusable response whose raw timestamps/closes do not yield
-current-session bars is promoted to a retryable provider failure. The normal
-bounded retry chain then runs and may use a distinct configured fallback. A
-successful fallback reports its own provider as `source`; exhausting the chain
-returns `UNAVAILABLE`. Weekends and observed US market holidays remain
-`PARTIAL` without provider I/O. A persisted `fallbackProvider=NONE` is
-authoritative and never causes Twelve Data to be automatically enabled.
+`portfolio_snapshot_daily.market_value` now means total account value. `securities_value` and `cash_balance` were added in V022. `net_cash_flow` represents cumulative external flow.
 
-## Persistent model
+## Decimal and time rules
 
-Flyway owns every schema change. Production uses
-`spring.jpa.hibernate.ddl-auto=validate`; Hibernate must not create or alter
-tables. The current published chain is `V001` through `V018`:
+Financial values use `BigDecimal`/`NUMERIC`, not Java `double` or floating-point database columns. API `BigDecimal` responses are serialized as plain decimal JSON strings; frontend calculations use `decimal.js-light`.
 
-- `V013` adds `transaction_ledger_order_seq` and the default used for atomic
-  same-day ledger ordering;
-- `V014` creates PostgreSQL-backed Spring Session tables;
-- `V015` removes the obsolete persisted timezone setting;
-- `V016` adds the compatibility initial-capital column plus transaction-level
-  contribution type and plan attribution;
-- `V017` deprecates that column at the application boundary, backfills
-  deterministic cycle-linked BUYs, adds cross-field CHECK/index rules, and
-  creates the contribution-classification audit table; and
-- `V018` adds the latest-quote session classification used to distinguish
-  regular/pre/post/overnight quotes and explicit regular-price degradation.
+The isolated fractional-power boundaries required for CAGR may use `Math.pow` after validating positive finite values; this is the documented exception, not a general financial-number policy.
 
-The 1D intraday-state work requires no schema migration because the existing
-price-history response already has `dataStatus`, `source`, `asOf`, `retrievedAt`,
-and `message`, and the intraday series is intentionally not persisted.
+Database timestamps are UTC. Business dates and US plan/market decisions use `America/New_York`.
 
-These are forward migrations. Schema cannot be rolled back with an older
-application image; restore a matching dump when an older candidate is not
-compatible with the applied chain.
+## Migration compatibility
 
-The current schema contains the following logical tables:
+V022 makes an explicit semantic migration for legacy accounts. Existing pre-V022 BUY/SELL activity had implicitly injected/removed cash. To preserve old economic behavior, V022 inserts deterministic bridge DEPOSIT/WITHDRAWAL rows around legacy trades and invalidates old snapshots.
 
-| Table | Purpose |
-| --- | --- |
-| `instrument` | ETF identity, exchange, currency, issuer, and profile metadata |
-| `market_price_daily` | OHLCV, raw close, adjusted close, source, and trade date |
-| `market_quote_latest` | Latest regular or extended-hours quote, quote session, prior regular close, change, bid/ask, timestamp, freshness, and source |
-| `fund_nav_daily` | Fund NAV by date and source; never a market price alias |
-| `instrument_split` | Effective-date split ratios from a provider |
-| `investment_transaction` | BUY, SELL, DIVIDEND, and FEE facts, ledger order, and BUY contribution attribution |
-| `investment_plan` | Budget, frequency, execution window, dates, and status; the old nullable `initial_capital` column is compatibility-only |
-| `investment_plan_asset` | Target weight per instrument |
-| `investment_plan_cycle` | Frozen monthly intent and aggregate execution projection |
-| `investment_plan_cycle_asset` | Frozen cycle-level target weights and execution projection |
-| `portfolio_snapshot_daily` | Rebuildable daily summary and data status |
-| `app_setting` | Non-secret application settings and provider status |
-| `SPRING_SESSION`, `SPRING_SESSION_ATTRIBUTES` | Persistent authenticated HTTP session state |
-| `contribution_classification_audit` | Batch/transaction IDs and before/after source attribution for confirmed legacy classification |
+Do not remove bridge rows or edit V022 after publication. Restoring a pre-V022 dump into a V022 application must proceed through Flyway and then be validated against cash balance, total account value, and performance controls.
 
-`investment_transaction` is used instead of a table named `transaction` to
-avoid SQL keyword ambiguity. The API still calls the resource
-`/transactions`.
+## Deployment invariants
 
-Quantities use `NUMERIC(20,8)`. Prices, monetary amounts, and costs use
-`NUMERIC(20,6)`. Weights use `NUMERIC(12,8)`. Java calculations use
-`BigDecimal`; Java `double` and database floating-point columns are forbidden
-for financial values. `JacksonConfig` serializes response `BigDecimal` values
-as plain decimal JSON strings. Counts and calendar-day values remain numbers.
-Controller and Web-normalizer regressions cover full `NUMERIC(20,6/8)` boundary
-values without passing through a JavaScript number. Timestamps
-are stored in UTC. Trading dates and the monthly cycle period are date values,
-interpreted using `America/New_York` for market and schedule decisions.
+- PostgreSQL 18+ volume is mounted at `/var/lib/postgresql`.
+- Major-version database upgrades use logical dump/restore.
+- Never use `docker compose down -v` as a normal upgrade action.
+- Provider keys stay server-side.
+- Live mode never falls back to demo fixtures after an API failure.
+- Demo mode is explicitly built and visibly labeled.
 
-Database constraints include unique instrument symbols, unique provider keys
-for daily prices/NAV/splits, unique plan-plus-instrument assets, and at most
-one active plan. The application validates that target weights total 100% with
-a tolerance of 0.0001 (0.01 percentage points). The database constrains each
-individual weight to `(0, 1]`, but the cross-row 100% sum is currently enforced
-by the application rather than a database trigger.
+## Documentation priority
 
-For contribution attribution, V017 adds the mechanically expressible
-cross-field CHECK across `transaction_type`, `plan_cycle_id`,
-`contribution_type`, and `contribution_plan_id`, plus a partial index for the
-legacy-null BUY queue. It deterministically backfills cycle-linked/null-source
-BUYs to DCA and aborts with the first invalid transaction IDs if other legacy
-combinations violate the new contract. Cross-table rules such as initial BUY
-date equaling plan start date remain enforced by the service and integration
-tests. The published V016 file remains unchanged.
+When sources conflict, use this order:
 
-## PostgreSQL image and volume compatibility
+```text
+current source + published migration
+> current tests
+> current runtime probe / CI evidence
+> current living docs
+> dated sa-*.md evidence
+```
 
-Compose defaults to `postgres:18.6-alpine` and mounts its named volume at
-`/var/lib/postgresql`, the parent directory used by the PostgreSQL 18+ image.
-The image's default `PGDATA` is `/var/lib/postgresql/18/docker`. PostgreSQL
-data directories are major-version specific: a directory initialized by
-PostgreSQL 16 (or another major version) must not be mounted directly into
-PostgreSQL 18.6. The new server rejects the directory as incompatible;
-changing only the image tag does not perform a database upgrade.
-
-Upgrade an existing deployment with a logical dump and restore:
-
-1. While the old PostgreSQL container is healthy, run
-   `deploy/scripts/backup-postgres.sh` and verify the resulting file with
-   `gzip -t`.
-2. Stop the stack without `docker compose down -v`; keep the old volume.
-3. Preserve or rename the old `postgres_data` volume, switch
-   `POSTGRES_IMAGE` to `postgres:18.6-alpine`, and start PostgreSQL with the
-   new `/var/lib/postgresql` mount so Compose creates a new empty volume.
-4. Restore the verified plain-SQL dump with
-   `deploy/scripts/restore-postgres.sh --confirm ...`.
-5. Start the remaining services and verify Flyway, transaction counts,
-   portfolio totals, and provider freshness.
-
-The exact Docker volume name includes `COMPOSE_PROJECT_NAME`; inspect it with
-`docker volume ls` before renaming. Never remove the old volume until the new
-18.6 database and the application have passed the restore checks.
-
-## Important state transitions
-
-### Market data
-
-Adding a tracked instrument resolves and confirms the ETF identity. A sync
-request fetches at least five years of daily data when no bar exists;
-subsequent syncs request only the range after the last successful stored bar.
-The instrument retains `UNAVAILABLE` or `INSUFFICIENT_HISTORY` when its first
-sync cannot produce usable bars, so the UI can expose the incomplete state.
-When enabled, the weekday scheduler runs at 18:30 `America/New_York`, upserts
-missing daily bars and split events, then rebuilds the current portfolio daily
-snapshot. Metrics are calculated from the stored bars when requested; the
-scheduler does not fetch profile/NAV data or populate the on-demand 1D series.
-Provider changes saved through Settings are read by subsequent market-data
-requests; the scheduler's trigger and all business-date decisions remain fixed
-to New York exchange time.
-
-For an ETF detail 1D request, market-calendar closure is checked before provider
-I/O. On a trading day before regular open, a valid empty primary result remains
-`PARTIAL` and is returned without rapid retries. Once regular trading has
-started, Yahoo empty/unusable responses are classified from the raw/date/period/
-close diagnostic counts and enter the bounded retry/fallback path instead of
-being mislabeled as "not started yet". Retryable HTTP/provider errors use the
-same bounded exponential backoff. The web treats 1D as live data: short stale
-time, visible 60-second refresh, focus refetch, and a Retry action that refetches
-1D directly. The daily history sync action remains specific to persisted daily
-history.
-
-### Transactions
-
-BUY and SELL require a date, instrument, quantity, and unit price. DIVIDEND and
-standalone FEE use an explicit amount. Fractional shares are supported. The current
-API stores transaction currency as USD and does not accept a currency request
-field. A transaction may point to a plan cycle, but the association is
-nullable so planned and unplanned activity coexist.
-
-BUY transactions also carry an explicit contribution source. A cycle-linked
-BUY is `DCA`; an opening-date BUY can be `INITIAL` for a selected plan; an
-explicit `UNPLANNED` BUY belongs to no plan. Legacy rows may remain
-unclassified. The service never infers initial capital from date alone, because
-that would rewrite user intent. SELL, DIVIDEND, and FEE cannot carry these
-fields.
-
-Historical transaction edits are not a simple row update: the service replays
-from the earliest affected date, validates that no later SELL creates negative
-shares, and rebuilds lots, cycles, and snapshots. If the replay is invalid,
-the entire mutation is rejected.
-
-### Plan cycles
-
-For the current monthly UI, a cycle is represented by `YYYY-MM`. Its planned amount
-and target assets are frozen when created. During the execution window, status
-is `OPEN` with no execution, `PARTIAL` after a positive partial BUY, and
-`COMPLETED` when the executed amount reaches the planned amount. Before the
-window it is `UPCOMING`; after a zero-execution window it is `SKIPPED`.
-
-When a plan month contains an actual classified `INITIAL` BUY and no linked DCA
-execution, its DCA projection is a zero-budget `SKIPPED` cycle. The API rejects
-a DCA transaction for that month. A start month without actual initial capital
-remains an ordinary DCA cycle.
-
-### Recommendation
-
-The recommendation service reads current projected holdings and the active
-plan. It calculates target values after the proposed contribution, excludes
-overweight assets, and distributes the contribution across positive gaps. It
-does not sell assets and does not include unplanned ETFs in the plan's target
-allocation calculation.
-
-## Security and operations
-
-The current production profile is single-user. `APP_USERNAME` and a precomputed
-BCrypt `APP_PASSWORD_HASH` are supplied through the deployment environment; the
-current `BCryptPasswordEncoder` does not accept Argon2id or delegating `{id}`
-formats. The API uses an HttpOnly, Secure, SameSite=Lax session cookie, rotates
-the session ID on successful login, stores the session in PostgreSQL through
-Spring Session, and enforces CSRF protection. Sessions therefore normally
-survive an API container restart while logout deletes the stored session. JWT,
-registration, and password reset are outside the current product scope.
-
-Provider keys and database credentials are read only by Compose/API. They do
-not appear in React environment variables, API responses, logs, or Git. The
-tracked `deploy/.env.example` contains placeholders only. The real
-`deploy/.env` and generated `deploy/backups/` directory are ignored. Provider
-retry logs must likewise exclude API keys, Yahoo cookies/crumbs, and
-Authorization headers. Intraday diagnostics are limited to provider/session
-metadata and counts; no raw response body or secret-bearing request metadata is
-logged.
-
-Spring Actuator provides the internal health check consumed by Compose. The
-public API health endpoint must return a minimal status and must not expose
-credentials, SQL details, or provider keys. Caddy terminates HTTPS with
-Let's Encrypt and forwards the original host/protocol headers to the API.
-
-The host-side backup script creates compressed plain SQL dumps, keeps seven
-daily and four weekly files, and sets restrictive permissions. The restore
-script requires `--confirm` and creates a safety backup first by default. See
-the operational commands in the root README.
-
-## Failure behavior
-
-Provider failure, valid empty market data, post-open unusable market data, and
-market closure are separate states. For 1D intraday data, a provider
-408/429/5xx/timeout is retried with bounded backoff and may use an explicitly
-configured fallback. A genuinely empty response before regular open may remain
-`PARTIAL`; it does not trigger provider switching merely to create a chart.
-After regular open, an empty Yahoo response, all-null closes, or normalization
-that removes all raw timestamps from the requested current session is a
-retryable provider anomaly. If the configured chain cannot produce real bars,
-the result is `UNAVAILABLE`. Weekend/holiday closure is `PARTIAL`, is identified
-as market closure, and causes no provider request. An empty 1D state has no
-`asOf`; it is never labeled today merely because it was retrieved today.
-
-Existing persisted prices remain visible with their `asOf`/`retrievedAt` times
-when the relevant endpoint contract permits it. Missing prices disable
-calculations that cannot be made honestly; they are never filled with a current
-price, a previous-day series relabeled as today, a market price copied into NAV,
-or a fabricated zero return. A failure in all configured market-data providers
-must not turn the dashboard into HTTP 500.
-
-The API emits structured logs/metrics with provider, operation, outcome,
-status, and bounded retry metadata. Yahoo intraday logs additionally include
-raw timestamp, date-match, trading-period-match, non-null-close, and final-bar
-counts plus non-secret session boundaries. Secrets and full credentials are
-excluded.
+Historical `docs/sa-*.md` files are intentionally not rewritten as current-state documentation.

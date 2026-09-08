@@ -1,779 +1,260 @@
 # DCA Terminal API
 
-This document describes the HTTP contract implemented by the current Spring
-Boot application. It is intentionally limited to endpoints and fields present
-on the current `main`; roadmap items are not listed as available behavior.
+> Current baseline: `main@b6c578ee129866389efde907c10a99400da5cd4e`.
+> Current Flyway chain: `V001`–`V022`.
 
-## Base and wire conventions
+This document describes the HTTP contract on current `main`. Financial `BigDecimal` values are serialized as plain decimal strings. Dates are ISO `YYYY-MM-DD`; timestamps are UTC ISO-8601 strings. Null response properties may be omitted.
 
-The API is served by Caddy below `/api` and is versioned below `/api/v1`. The
-production web application uses the same origin. A normal response is either
-a JSON object or a bare JSON array; there is no universal `{ data, meta }`
-envelope.
+## Health and auth
 
-The API registers a global Jackson `BigDecimal` serializer. Monetary values,
-prices, quantities, weights, and rates are plain decimal JSON strings when
-present. Counts, calendar-day values, HTTP statuses, and ledger-order values are
-JSON numbers. Global response serialization omits properties whose value is
-null; request bodies may still send an explicit null where the contract allows
-it. BigDecimal request fields accept either JSON numbers or decimal strings, and
-the web client sends strings. API and Web regressions cover the full
-`NUMERIC(20,6)` and `NUMERIC(20,8)` boundaries without an intermediate
-JavaScript number. Examples below follow the actual non-null response format.
-
-Dates are ISO-8601 calendar dates. Timestamps are ISO-8601 UTC strings.
-Symbols are case-insensitive on input and are returned in uppercase.
-
-Freshness appears only on response types that currently define it. Depending
-on the endpoint, the field is named `status` or `dataStatus`; it is not added
-to every response automatically. The possible freshness values are:
-
-`FRESH`, `STALE`, `PARTIAL`, `UNAVAILABLE`, and `INSUFFICIENT_HISTORY`.
-
-`INSUFFICIENT_HISTORY` is used by the metrics response when the requested
-calculation cannot be made from the stored bars. Missing NAV fields are omitted;
-the market quote is never copied into them.
-
-## Health and session
-
-| Method | Path | Authentication | Response |
-| --- | --- | --- | --- |
-| `GET` | `/api/health` | Public | Minimal health object |
-| `GET` | `/api/v1/auth/session` | Public | `{ authenticated, username }` |
-| `GET` | `/api/v1/auth/csrf` | Public | `{ token, headerName, parameterName }` |
-| `POST` | `/api/v1/auth/login` | Public | `{ authenticated, username }` |
-| `POST` | `/api/v1/auth/logout` | Session | `204 No Content` |
-
-With security enabled, all application endpoints other than health and the
-session/login/CSRF endpoints require the single user's session cookie. POST,
-PUT, and DELETE requests also require the CSRF token returned by the CSRF
-endpoint, sent using the returned `headerName` (normally `X-XSRF-TOKEN`).
-Sessions are persisted in the PostgreSQL `SPRING_SESSION` tables. They normally
-survive an API container restart, but logout deletes the server-side session
-and clears the CSRF token.
-
-`GET /api/health` returns an object like:
-
-```json
-{
-  "status": "UP",
-  "service": "dca-terminal-api",
-  "timestamp": "2026-08-27T20:00:12Z"
-}
-```
-
-The internal `/actuator/health` endpoint is used by the API container
-healthcheck. It is not one of the public API contract endpoints.
-
-## Instruments and ETF data
-
-| Method | Path | Response and behavior |
+| Method | Path | Notes |
 | --- | --- | --- |
-| `GET` | `/api/v1/instruments` | Bare array of tracked ETF identity/profile objects |
-| `GET` | `/api/v1/instruments/search?q=VOO` | Bare array of provider search candidates |
-| `POST` | `/api/v1/instruments` | Creates or re-enables one tracked ETF; returns `201` and the instrument object |
-| `GET` | `/api/v1/instruments/{symbol}` | One ETF identity/profile object |
-| `DELETE` | `/api/v1/instruments/{symbol}` | Stops tracking; returns `204` and keeps historical references |
-| `GET` | `/api/v1/instruments/{symbol}/quote` | Latest market quote, optional NAV, and quote freshness |
-| `GET` | `/api/v1/instruments/{symbol}/metrics` | Metrics calculated from stored daily bars |
-| `GET` | `/api/v1/instruments/{symbol}/prices?range=1Y` | `{ data, dataStatus, source, asOf, retrievedAt, message }` daily chart envelope |
-| `GET` | `/api/v1/instruments/{symbol}/prices?range=1D` | Same envelope with on-demand five-minute provider bars |
-| `POST` | `/api/v1/instruments/{symbol}/sync` | Fetches missing daily bars/splits and returns a sync summary |
-| `POST` | `/api/v1/instruments/{symbol}/sync/full` | Re-fetches the bounded five-year history without clearing existing rows |
-| `GET` | `/api/v1/instruments/providers` | Provider IDs, configured flags, primary, and fallback IDs |
+| GET | `/api/health` | public minimal health |
+| GET | `/api/v1/auth/session` | public session status |
+| GET | `/api/v1/auth/csrf` | CSRF bootstrap |
+| POST | `/api/v1/auth/login` | login |
+| POST | `/api/v1/auth/logout` | authenticated logout |
 
-`GET /api/v1/instruments` returns only instrument identity/profile fields. It
-does not include the latest quote; the web client requests quotes separately.
-Adding an ETF requires an exact ETF identity match from the configured
-provider or the reviewed local canonical identity catalog, creates the
-instrument, refreshes its profile, and immediately attempts the five-year
-incremental history sync. The local catalog is an identity allowlist only; it
-never supplies prices, history, NAV, or portfolio values. If the initial sync
-is unavailable, the confirmed instrument is retained with dataStatus:
-"UNAVAILABLE" (or INSUFFICIENT_HISTORY when the provider returns no bars) and
-can be retried with the sync endpoint or scheduler.
+With security enabled, application mutations require session + CSRF.
 
-When a provider directory is unavailable, a search for a canonical symbol may
-still return its reviewed identity record. A search with no canonical match
-returns `503 MARKET_DATA_UNAVAILABLE` rather than an incorrect empty success;
-an ordinary provider response with no matches remains `200 []`.
+## Instruments / ETFs
 
-The POST request uses `symbol`; `ticker` is accepted as a JSON alias:
+Main routes:
 
-```json
-{ "symbol": "VOO" }
+```text
+GET    /api/v1/instruments
+GET    /api/v1/instruments/search?q=...
+POST   /api/v1/instruments
+GET    /api/v1/instruments/{symbol}
+DELETE /api/v1/instruments/{symbol}
+GET    /api/v1/instruments/{symbol}/quote
+GET    /api/v1/instruments/{symbol}/metrics
+GET    /api/v1/instruments/{symbol}/prices?range=...
+POST   /api/v1/instruments/{symbol}/sync
+POST   /api/v1/instruments/{symbol}/sync/full
+GET    /api/v1/instruments/providers
 ```
 
-An instrument response has this shape:
+Tracked-instrument domain remains ETF-only. Market quote, adjusted close, and NAV are distinct fields/facts.
 
-```json
-{
-  "id": "00000000-0000-0000-0000-000000000001",
-  "symbol": "VOO",
-  "name": "Vanguard S&P 500 ETF",
-  "exchange": "ARCX",
-  "currency": "USD",
-  "instrumentType": "ETF",
-  "issuer": "Vanguard",
-  "expenseRatio": "0.0003",
-  "aum": "712400000000.000000",
-  "dividendYield": "0.0125",
-  "dataProvider": "YAHOO",
-  "tracked": true,
-  "dataStatus": "FRESH"
-}
+`range=1D` is on-demand intraday data and is not persisted as permanent five-minute history. Persisted-history ranges include `1W`, `1M`, `3M`, `YTD`, `1Y`, `3Y`, `5Y`, `ALL`.
+
+Freshness values include:
+
+```text
+FRESH
+STALE
+PARTIAL
+UNAVAILABLE
+INSUFFICIENT_HISTORY
 ```
 
-Unavailable profile values are omitted. Search results contain only `symbol`,
-`name`, `exchange`, `currency`, and `instrumentType`; they do not contain an ID
-or profile metrics.
+## Benchmarks
 
-Example quote response:
+Read-only benchmark routes:
 
-```json
-{
-  "symbol": "VOO",
-  "price": "521.430000",
-  "previousClose": "519.250000",
-  "change": "2.180000",
-  "changePercent": "0.004195",
-  "marketTimestamp": "2026-08-27T20:00:00Z",
-  "retrievedAt": "2026-08-27T20:00:12Z",
-  "source": "YAHOO",
-  "status": "FRESH"
-}
+```text
+GET /api/v1/benchmarks/search?q=...
+GET /api/v1/benchmarks/history?symbol=...&type=ETF|INDEX|EQUITY&range=...
 ```
 
-`changePercent` is a decimal fraction, so `0.004195` is approximately
-`0.4195%`. Quote cache entries may be returned as `STALE` after a provider
-failure. If there is no usable cached quote, `price` is omitted and status is
-`UNAVAILABLE`.
-
-Metrics response:
-
-```json
-{
-  "oneDay": "0.0042",
-  "oneMonth": "0.021",
-  "threeMonths": "0.0471",
-  "ytd": "0.1234",
-  "oneYear": "0.188",
-  "threeYearCagr": "0.1421",
-  "fiftyTwoWeekHigh": "551.900000",
-  "fiftyTwoWeekLow": "421.330000",
-  "currentDrawdown": "-0.0552",
-  "maxDrawdown1Y": "-0.1823",
-  "dataStatus": "FRESH",
-  "asOf": "2026-08-27"
-}
-```
-
-The daily prices endpoint returns an envelope whose `data` array contains
-`date`, `close`, and `adjustedClose` plus `dataStatus`, `source`, `asOf`, and
-`retrievedAt`. Daily dates are `YYYY-MM-DD`; the `1D` provider series uses UTC
-timestamp strings and may omit `adjustedClose`, so clients use `close` for chart
-display in that case. Supported persisted-history ranges are `1W`, `1M`, `3M`,
-`YTD`, `1Y`, `3Y`, `5Y`, and `ALL`; the default is `1Y`.
-
-`range=1D` is a separate on-demand intraday contract and is never persisted as
-a permanent five-minute store. Yahoo v8 chart supplies pre-market, regular, and
-post-market bars; Yahoo v7 may separately supply a single overnight quote. The
-API does not turn that quote into synthetic bars and does not return a previous
-trading day's bars as today's `FRESH` series.
-
-For `range=1D`:
-
-- current New York trading day with current pre/regular/post bars returns
-  `dataStatus: "FRESH"`, the actual provider `source`, `asOf` equal to the New
-  York trade date of the newest returned bar, and the bars in `data`;
-- a genuinely empty Yahoo response before the regular session starts remains
-  `dataStatus: "PARTIAL"`, uses Yahoo as `source`, has empty `data`, no `asOf`,
-  and may say `Current trading session has no intraday bars yet`;
-- once the regular session has started, an empty Yahoo chart, an all-null-close
-  chart, or an intraday response whose raw timestamps are eliminated by the
-  requested New York date / declared trading-period normalization is treated as
-  an abnormal provider result rather than a generic "not open yet" state. It
-  enters the same bounded retry/fallback path as a retryable provider failure;
-- if that post-open anomaly exhausts retries and no usable fallback produces
-  honest bars, the response is `UNAVAILABLE`, not `FRESH` and not a relabeled
-  previous-day series;
-- weekends and observed US market holidays return `PARTIAL`, empty `data`, no
-  `source`/`asOf`, a market-closed message, and do not call a provider;
-- HTTP 408/429/5xx/timeout provider failures use bounded retries. If a distinct
-  configured fallback succeeds, its actual provider is returned as `source`;
-  otherwise the response is `UNAVAILABLE` with no `asOf` and an explicit
-  message. A persisted `fallbackProvider=NONE` means no fallback is attempted.
-
-Yahoo normalization records internal safe counts for raw timestamps,
-requested-date matches, declared trading-period matches, non-null closes and
-final bars. Those counts and the pre/regular/post epoch boundaries are logging
-and diagnostics only; they are not added to the public response. Missing or
-invalid Yahoo `exchangeTimezoneName` for the US ETF intraday path falls back to
-`America/New_York` rather than UTC.
-
-Thus a provider error, a pre-open successful empty chart, a post-open empty or
-filtering anomaly, and a closed market are not collapsed into the same generic
-empty success. `retrievedAt` always describes when the API produced the
-response; it is not a substitute for `asOf`.
-
-The sync response has this shape:
-
-```json
-{
-  "symbol": "VOO",
-  "barsSaved": 1258,
-  "splitsSaved": 0,
-  "status": "FRESH",
-  "completedAt": "2026-08-27T20:02:00Z"
-}
-```
-
-`POST /api/v1/instruments/{symbol}/sync/full` returns the same `SyncResponse`
-shape. It is an explicit operator repair path with a hard five-year window and
-the normal provider retry/fallback limits. It fetches bars and splits before
-persistence, upserts by instrument/date/source, and never deletes existing
-rows first. A provider failure retains the previous rows and reports a
-degraded status. Operators should take and verify a PostgreSQL backup, record
-pre/post row counts and representative raw/adjusted values, and use the
-checked-in restore script if validation requires rollback.
-
-Metrics that require adjusted-close endpoints (`oneMonth`, `threeMonths`,
-`ytd`, `oneYear`, `threeYearCagr`, `currentDrawdown`, and `maxDrawdown1Y`) are
-unset when a required adjusted value is missing. Those properties are omitted
-on the wire; the web client normalizes an omitted or explicit null value to its
-missing display `--`, never to `0%`. The response carries
-`dataStatus: "PARTIAL"` or `"INSUFFICIENT_HISTORY"`. The 52-week high and low
-continue to use raw high and low.
-
-The current default live provider is Yahoo Finance. Twelve Data provides live
-search, quote, daily/intraday history, profile, and split capabilities when its
-server-side key is configured and Settings selects it as primary/fallback.
-Alpha Vantage provides the optional ETF profile capability. A provider key is
-never sent to the browser, and an empty Twelve Data key is never treated as a
-usable fallback.
-
-Yahoo latest-quote selection uses the newest valid timestamped candidate among
-regular, pre-market, extended, post-market, and overnight prices. Current
-portfolio and contribution valuation may therefore move outside regular hours.
-The quote's comparison baseline remains the previous regular close; historical
-snapshots, daily charts, YTD, and TWR continue to use regular-session daily
-closes. If Yahoo's authenticated quote edge is unavailable, the adapter falls
-back to the regular-session chart quote and marks that quote as degraded. The
-1D chart path is independent of this quote-authentication/fallback behavior.
-
-Yahoo chart HTTP 408/429/5xx and timeout failures are retryable with a small
-bounded exponential backoff before an actually configured fallback is tried.
-A valid empty chart before regular open is not retried merely to manufacture a
-series; an empty or unusable chart after regular open is retryable because it no
-longer represents the same benign session state. No retry/fallback path logs
-provider API keys, Yahoo cookies/crumbs, authorization headers, or database
-credentials. The ETF detail view refreshes 1D directly with a short cache
-policy; its Retry action does not run daily-history sync as a substitute for the
-intraday endpoint.
+Benchmark identities are isolated from tracked instruments. Adding a benchmark does not create portfolio facts. Yahoo search/history currently supports ETF, INDEX, and EQUITY benchmark types.
 
 ## Transactions
 
-| Method | Path | Response and behavior |
-| --- | --- | --- |
-| `GET` | `/api/v1/transactions` | Bare array, optionally filtered by `symbol`, `from`, and `to` |
-| `GET` | `/api/v1/transactions/{id}` | One transaction |
-| `POST` | `/api/v1/transactions` | Creates one transaction and returns `201` |
-| `PUT` | `/api/v1/transactions/{id}` | Replaces one transaction |
-| `DELETE` | `/api/v1/transactions/{id}` | Deletes one transaction and returns `204` |
-| `POST` | `/api/v1/transactions/import/preview` | Multipart CSV preview |
-| `POST` | `/api/v1/transactions/import/commit` | Commits a validated CSV row set |
-
-The transaction list currently has no `page`, `size`, or pagination response.
-The supported filters are inclusive `from`/`to` ISO dates and a
-case-insensitive `symbol` filter. Results are ordered by trade date and the
-server-assigned `ledgerOrder` field, then ID. `ledgerOrder` is returned in each
-transaction response and is the deterministic tie-breaker for same-day FIFO
-replay. The order is allocated by a PostgreSQL sequence, so concurrent API
-instances cannot select the same next order; sequence gaps after a rolled-back
-request are expected and do not change the order of existing rows. JSON and CSV
-rows receive orders in the order they are inserted.
-
-The JSON request fields are:
-
-```json
-{
-  "instrumentSymbol": "VOO",
-  "planCycleId": "00000000-0000-0000-0000-000000000011",
-  "transactionType": "BUY",
-  "tradeDate": "2026-08-01",
-  "quantity": "1.238423",
-  "unitPrice": "520.45",
-  "fee": "0",
-  "contributionType": "DCA",
-  "notes": "August DCA"
-}
+```text
+GET    /api/v1/transactions?symbol=...&from=...&to=...
+GET    /api/v1/transactions/{id}
+POST   /api/v1/transactions
+PUT    /api/v1/transactions/{id}
+DELETE /api/v1/transactions/{id}
+POST   /api/v1/transactions/import/preview
+POST   /api/v1/transactions/import/commit
 ```
 
-`instrumentSymbol` accepts the input alias `symbol`, and
-`transactionType` accepts the input alias `type`. `currency` is not a request
-field; the current API stores transactions as USD and returns `currency: "USD"`.
-
-For a BUY, `contributionType` may be `INITIAL`, `DCA`, `UNPLANNED`, or `null`.
-A selected `planCycleId` forces `DCA`; the plan is inferred from the cycle and
-`contributionPlanId` must be omitted. `INITIAL` requires
-`contributionPlanId` and the BUY date must equal that plan's `startDate`.
-`UNPLANNED` must not carry a plan ID. SELL, DIVIDEND, and FEE reject all
-contribution source fields. A nullable contribution source is retained for
-legacy/unclassified BUY rows so the UI can ask the user to classify them
-explicitly instead of guessing. A database upgraded from before V016 can also
-contain a cycle-linked BUY whose `contributionType` is omitted; plan projections
-and the web UI still identify it as DCA from `planCycleId`, while a new or edited
-API write persists the explicit `DCA` type.
-
-For `BUY` and `SELL`, `quantity` must be positive, `unitPrice` must be
-non-negative, and `amount` must be omitted or `null`. For `DIVIDEND` and
-`FEE`, `amount` is required and non-negative; quantity and unit price are not
-used. `fee` is optional and defaults to zero. `planCycleId` is nullable so
-unplanned transactions are supported. The service validates the resulting
-ledger after create, update, and delete, including negative split-adjusted
-positions.
-
-`tradeDate` must be on or before the current date in the fixed
-`America/New_York` business zone. JSON create/update requests with a future
-date return HTTP 400 with the stable Problem Details code
-`FUTURE_TRADE_DATE_NOT_ALLOWED`; no transaction is persisted. CSV rows with a
-future date are invalid and the whole CSV commit is rejected.
-
-Responses add the persisted fields `id`, `instrumentName`, `currency`,
-`createdAt`, and `updatedAt`:
-
-```json
-{
-  "id": "00000000-0000-0000-0000-000000000002",
-  "instrumentSymbol": "VOO",
-  "instrumentName": "Vanguard S&P 500 ETF",
-  "transactionType": "BUY",
-  "tradeDate": "2026-08-01",
-  "quantity": "1.23842300",
-  "unitPrice": "520.450000",
-  "fee": "0.000000",
-  "currency": "USD",
-  "planCycleId": "00000000-0000-0000-0000-000000000011",
-  "contributionType": "DCA",
-  "notes": "August DCA",
-  "createdAt": "2026-08-27T20:03:00Z",
-  "updatedAt": "2026-08-27T20:03:00Z",
-  "ledgerOrder": 42
-}
-```
-
-### CSV import
-
-The preview endpoint expects a multipart field named `file`. The required
-header columns are:
+Current transaction types:
 
 ```text
-date,type,symbol,quantity,price,fee
-2026-01-05,BUY,VOO,1.2034,415.21,0
-2026-02-05,BUY,QQQ,0.8231,505.42,0
+DEPOSIT
+WITHDRAWAL
+INTEREST
+BUY
+SELL
+DIVIDEND
+FEE
 ```
 
-Optional columns are `amount`, `planCycleId` (or `plan_cycle_id`), and `notes`.
-Preview returns `batchId`, row counts, and a row-by-row validation result. Commit
-accepts the `batchId` and the CSV rows as JSON:
+### Transaction request
+
+Representative fields:
 
 ```json
 {
-  "batchId": "00000000-0000-0000-0000-000000000003",
-  "rows": [
-    {
-      "date": "2026-01-05",
-      "type": "BUY",
-      "symbol": "VOO",
-      "quantity": "1.2034",
-      "price": "415.21",
-      "fee": "0",
-      "amount": null,
-      "planCycleId": null,
-      "notes": "January DCA"
-    }
-  ]
+  "instrumentSymbol": "VOO",
+  "transactionType": "BUY",
+  "tradeDate": "2026-09-04",
+  "quantity": "1.25",
+  "unitPrice": "620.00",
+  "amount": null,
+  "fee": "0",
+  "planCycleId": null,
+  "contributionType": "UNPLANNED",
+  "contributionPlanId": null,
+  "notes": "manual entry"
 }
 ```
 
-The response contains `batchId`, `importedRows`, and `transactionIds`. A
-duplicate or invalid row causes the commit to fail as a whole. When
-`planCycleId` is provided, the server validates the UUID and confirms that the
-cycle contains the transaction's instrument. Commit validation errors identify
-the 1-based CSV line number (the header is line 1), so a duplicate row is
-reported with its exact input row. Preview and commit use the same canonical
-row fingerprint; the database also enforces the global fingerprint uniqueness
-constraint.
+Rules:
 
-CSV uploads are bounded before import: the default multipart file limit is
-1 MiB, the default multipart request limit is 2 MiB, the default maximum is
-10,000 data rows, and each field is limited to 1,000 characters. These limits can be changed with
-`TRANSACTION_MAX_CSV_SIZE`, `TRANSACTION_MAX_CSV_REQUEST_SIZE`,
-`TRANSACTION_MAX_CSV_ROWS`, and `TRANSACTION_MAX_CSV_FIELD_LENGTH`. Exceeding
-the file or row limit returns HTTP 413 with `CSV_FILE_TOO_LARGE` or
-`CSV_TOO_MANY_ROWS`; an overlong field is reported as a preview row validation
-error and causes the whole commit to fail.
-The service never logs a complete CSV row or the contents of `notes`.
-CSV currently has no contribution-type column. A BUY with `planCycleId` is
-classified as `DCA`; an unlinked imported BUY remains unclassified until it is
-edited or explicitly marked as initial capital. Import never guesses that an
-opening-date BUY is `INITIAL`.
+- BUY/SELL require positive quantity and non-negative unit price and do not accept `amount`.
+- DIVIDEND/FEE require non-negative `amount`.
+- DEPOSIT/WITHDRAWAL/INTEREST require positive `amount`, do not accept quantity/unit price, and are account-level.
+- BUY/SELL/DIVIDEND require an instrument.
+- FEE may optionally carry an instrument.
+- DEPOSIT/WITHDRAWAL/INTEREST must not carry an instrument.
+- Future trade dates are rejected using the New York business date.
+- `fee` is only meaningful for BUY/SELL; non-trade cash events use `amount`.
 
-## Portfolio and dashboard
+### Contribution attribution
 
-| Method | Path | Response and behavior |
-| --- | --- | --- |
-| `GET` | `/api/v1/dashboard` | Dashboard object containing summary, holdings, allocation, next DCA, and progress |
-| `GET` | `/api/v1/portfolio/summary` | Summary object |
-| `GET` | `/api/v1/portfolio/holdings` | Bare array of current holdings |
-| `GET` | `/api/v1/portfolio/allocation` | Bare array of allocation rows |
-| `GET` | `/api/v1/portfolio/history?range=1Y` | Bare array of daily history points |
-| `POST` | `/api/v1/portfolio/rebuild-snapshot` | Rebuilds today's snapshot and returns an empty `200` response |
+Contribution source may be `INITIAL`, `DCA`, `UNPLANNED`, or null where permitted.
 
-Portfolio state is calculated from transactions, split events, and prices.
-There is no holdings mutation endpoint and no `POST /portfolio/update-holdings`.
-`GET /api/v1/dashboard` builds current summary, holdings, and allocation from
-one request-local ledger projection; history still uses independent snapshot
-coverage plus dated replay. The JSON shape is unchanged. Individual
-`/portfolio/summary`, `/holdings`, and `/allocation` endpoints still compute
-independently. Historical points include only transactions dated on or before
-the point's date; current holdings are not backfilled before their purchase
-date.
+BUY rules:
 
-Summary response:
+- a BUY linked to `planCycleId` is DCA and the plan is inferred from the cycle;
+- DCA BUY requires a cycle;
+- INITIAL BUY requires `contributionPlanId` and the plan start date;
+- UNPLANNED BUY must not carry a contribution plan.
 
-```json
-{
-  "marketValue": "28421.620000",
-  "costBasis": "25180.390000",
-  "netInvested": "25180.390000",
-  "unrealizedPnl": "3241.230000",
-  "realizedPnl": "0.000000",
-  "dividendIncome": "0.000000",
-  "totalFees": "0.000000",
-  "totalPnl": "3241.230000",
-  "xirr": "0.1421",
-  "dataStatus": "FRESH",
-  "asOf": "2026-08-27T20:03:00Z"
-}
+DEPOSIT rules:
+
+- DEPOSIT cannot link directly to a plan cycle;
+- DCA funding DEPOSIT may carry `contributionType=DCA` plus `contributionPlanId`;
+- INITIAL funding DEPOSIT uses `INITIAL` + plan and must satisfy the plan start-date rule;
+- UNPLANNED funding has no plan.
+
+Current contribution-analysis batches remain BUY-lot based; a DEPOSIT does not by itself complete a DCA cycle.
+
+### CSV
+
+CSV supports the transaction type set above and fields such as:
+
+```text
+date,type,symbol,quantity,price,fee,amount,plan_cycle_id,contribution_type,contribution_plan_id,notes
 ```
 
-Holding rows contain `symbol`, `name`, `price`, `todayPercent`, `shares`,
-`avgCost`, `costBasis`, `marketValue`, `unrealizedPnl`, `returnPercent`,
-`allocation`, and `dataStatus`.
-History rows contain `date`, `marketValue`, `netInvested`, `costBasis`,
-`unrealizedPnl`, and `status`. `marketValue` and `unrealizedPnl` are omitted
-when `status` is `PARTIAL` because one or more held instruments have no usable
-price for that date; `costBasis` and `netInvested` remain populated. Missing
-market value is never encoded as zero. A history response is a bare array with
-this shape:
+Server preview/commit is authoritative for validation, duplicate fingerprinting, row limits, tracked-symbol rules, contribution attribution, ledger FIFO validity, and cash replay validity.
 
-```json
-[
-  {
-    "date": "2026-08-26",
-    "netInvested": "25180.390000",
-    "costBasis": "25180.390000",
-    "status": "PARTIAL"
-  }
-]
+## Portfolio
+
+```text
+GET  /api/v1/portfolio/summary
+GET  /api/v1/portfolio/holdings
+GET  /api/v1/portfolio/allocation
+GET  /api/v1/portfolio/history?range=...
+POST /api/v1/portfolio/rebuild-snapshot
 ```
 
-Allocation rows contain `symbol`, `targetWeight`, `actualWeight`, `drift`, and
-`marketValue`.
+### Summary semantics
 
-The dashboard response shape is:
+Current summary exposes legacy/core fields plus cash breakdown:
 
-```json
-{
-  "summary": {
-    "marketValue": "28421.620000",
-    "costBasis": "25180.390000",
-    "netInvested": "25180.390000",
-    "unrealizedPnl": "3241.230000",
-    "realizedPnl": "0.000000",
-    "dividendIncome": "0.000000",
-    "totalFees": "0.000000",
-    "totalPnl": "3241.230000",
-    "xirr": "0.1421",
-    "dataStatus": "FRESH",
-    "asOf": "2026-08-27T20:03:00Z"
-  },
-  "portfolioHistory": [],
-  "holdings": [],
-  "allocation": []
-}
+```text
+marketValue      total account value = securitiesValue + cashBalance
+securitiesValue  security-only current value
+cashBalance      ledger-derived cash
+netInvested      cumulative DEPOSIT - WITHDRAWAL
+interestIncome   cumulative INTEREST
+costBasis        open security-lot cost
+unrealizedPnl    security-only unrealized P/L
+realizedPnl      FIFO realized security P/L
+dividendIncome   dividend facts
+totalFees        ledger fee audit field
+totalPnl         marketValue - netInvested when complete
+xirr             money-weighted return on DEPOSIT/WITHDRAWAL + current value
 ```
 
-`nextDca` is a `NextDcaResponse` and `contributionProgress` is a
-`ContributionProgress` object when an active plan exists. Both fields are
-omitted when no active plan exists. `portfolioHistory` is a bare array of
-history points. Holdings and allocation rows use the complete fields listed
-above, even when an example has no rows.
+`marketValue` is kept for compatibility but now means total account value.
 
-## Plans and cycles
+Historical points expose total `marketValue`, `netInvested`, `costBasis`, `unrealizedPnl`, `dataStatus`, plus `securitiesValue` and `cashBalance`.
 
-| Method | Path | Response and behavior |
-| --- | --- | --- |
-| `GET` | `/api/v1/plans` | Bare array of plan objects |
-| `POST` | `/api/v1/plans` | Creates a plan and returns `201` |
-| `GET` | `/api/v1/plans/{id}` | One plan object |
-| `PUT` | `/api/v1/plans/{id}` | Updates a plan and future cycles |
-| `POST` | `/api/v1/plans/{id}/archive` | Archives a plan and returns `204` |
-| `DELETE` | `/api/v1/plans/{id}` | Archive alias; returns `204` |
-| `GET` | `/api/v1/plans/{id}/cycles` | Bare array of monthly cycle objects |
-| `GET` | `/api/v1/plans/{id}/cycles/{period}` | One cycle, where `period` is `YYYY-MM` |
-| `GET` | `/api/v1/plans/{id}/progress` | Current-year contribution progress object |
-| `GET` | `/api/v1/plans/{id}/recommendation` | Contribution-first recommendation |
-| `GET` | `/api/v1/plans/{id}/contribution-analysis` | Initial-versus-DCA contribution buckets and batches |
-| `POST` | `/api/v1/plans/{id}/contribution-classifications/preview` | Validates a selected legacy-BUY classification set without writing |
-| `POST` | `/api/v1/plans/{id}/contribution-classifications/commit` | Atomically commits the exact valid preview hash and returns updated analysis |
-| `GET` | `/api/v1/plans/{id}/contribution-classifications/audit` | Latest 100 confirmed classification audit rows for the plan |
+## Dashboard
 
-The plan request is:
-
-```json
-{
-  "name": "Core ETF Plan",
-  "frequency": "MONTHLY",
-  "monthlyBudget": "1500",
-  "startDate": "2026-01-01",
-  "executionStartDay": 1,
-  "executionEndDay": 7,
-  "status": "ACTIVE",
-  "assets": [
-    { "symbol": "VOO", "targetWeight": "0.5" },
-    { "symbol": "QQQ", "targetWeight": "0.3" },
-    { "symbol": "SCHD", "targetWeight": "0.2" }
-  ]
-}
+```text
+GET /api/v1/dashboard
 ```
 
-`frequency` may be omitted and defaults to monthly; non-monthly values are
-rejected by the current service. Execution days default to `1` and `7`.
-Currency is not a request field; the current service stores plans as USD.
-Asset symbols must already exist as instruments, must not repeat, and their
-weights must sum to `1.0` within `0.0001`.
+The dashboard combines current portfolio views, all portfolio history, active-plan next DCA/progress, holdings, and allocation.
 
-The plan response contains `id`, `name`, `currency`, `frequency`,
-`monthlyBudget`, `startDate`, `executionStartDay`, `executionEndDay`, `status`,
-`assets`, `createdAt`, and `updatedAt`. Each plan asset contains `symbol`,
-`name`, `targetWeight`, and `plannedAmount`. The plan response does not embed
-current progress; use the progress endpoint.
+## Performance
 
-Cycle rows contain `id`, `planId`, `period`, `plannedAmount`, `executedAmount`,
-`status`, `assets`, `openedAt`, and `completedAt`. Cycle asset rows contain
-`symbol`, `targetWeight`, `plannedAmount`, and `executedAmount`.
-If a plan month contains an actual `INITIAL` BUY for that plan and has no DCA
-execution, the month is presented as a zero-budget `SKIPPED` DCA cycle. Linking
-a DCA BUY to that month is rejected with `INITIAL_CAPITAL_MONTH_SKIPS_DCA`.
-Without an actual initial-capital transaction, the start month behaves like a
-normal DCA month.
+Canonical server performance endpoint:
 
-The progress response contains `planned`, `executed`, `remaining`,
-`executionRate`, and `months`, plus the current `year`. Each month contains
-`period`, `planned`, `executed`, and `status`. The recommendation endpoint
-accepts an optional `amount` query parameter and returns:
-
-```json
-{
-  "amount": "1500.00",
-  "dataStatus": "FRESH",
-  "items": [
-    {
-      "symbol": "VOO",
-      "currentWeight": "0.54",
-      "targetWeight": "0.5",
-      "currentValue": "55000.000000",
-      "gap": "-0.04",
-      "suggestedAmount": "0.00",
-      "positiveGap": "0",
-      "reason": "OVERWEIGHT",
-      "valueGap": "-4250.000000"
-    }
-  ]
-}
+```text
+GET /api/v1/performance/portfolio?range=1M|3M|1Y|YTD|ALL
 ```
 
-Recommendation amounts are rounded to cents. Overweight assets receive zero;
-the remaining contribution is distributed across positive gaps. If a plan
-asset has no available current price, response status is `PARTIAL` and the
-suggestions are zero. If there are no positive gaps, the current service falls
-back to the plan target weights for allocation.
+Response fields include:
 
-## Contribution analysis
-
-Contribution buckets and batches are a plan-scoped projection over the
-transaction ledger; they are not a second cash ledger. The unclassified queue
-is account-wide because those BUY rows have no plan attribution. An example
-response is:
-
-```json
-{
-  "totalInvested": "52000.000000",
-  "initial": {
-    "principal": "50000.000000",
-    "value": "53850.000000",
-    "pnl": "3850.000000",
-    "returnRate": "0.077",
-    "averageMarketDays": 92,
-    "batchCount": 1,
-    "dataStatus": "FRESH"
-  },
-  "dca": {
-    "principal": "2000.000000",
-    "value": "2106.000000",
-    "pnl": "106.000000",
-    "returnRate": "0.053",
-    "averageMarketDays": 59,
-    "batchCount": 2,
-    "dataStatus": "FRESH"
-  },
-  "unclassifiedAmount": "800.000000",
-  "unclassifiedBuys": [
-    {
-      "transactionId": "00000000-0000-0000-0000-000000000020",
-      "tradeDate": "2026-01-01",
-      "symbol": "VOO",
-      "principal": "800.000000",
-      "eligibleForInitial": true
-    }
-  ],
-  "unclassifiedScope": "ACCOUNT",
-  "batches": [
-    {
-      "type": "INITIAL",
-      "principal": "50000.000000",
-      "value": "53850.000000",
-      "pnl": "3850.000000",
-      "returnRate": "0.077",
-      "averageMarketDays": 92,
-      "dataStatus": "FRESH"
-    }
-  ],
-  "dataStatus": "FRESH",
-  "asOf": "2026-08-31"
-}
+```text
+range
+requestedStartDate
+baselineDate
+inceptionDate
+endpointDate
+asOf
+twr
+cagr
+xirr
+maximumDrawdown
+dataStatus
+liveEndpointIncluded
+externalFlowModel
+points[]
 ```
 
-`principal` is actual BUY cost including execution fee. `INITIAL` batches come
-only from transactions explicitly linked to the requested plan; `DCA` batches
-come from BUY transactions linked to that plan's cycles and are grouped by
-cycle period. `UNPLANNED` and unclassified BUYs are not included in
-`totalInvested`. Sells consume attributed lots in global FIFO order. Dividends
-and standalone fees are currently excluded from contribution-batch P/L.
-Returns are cumulative ROI, not annualized. Missing current prices omit the
-affected value/P&L/return fields and degrade `dataStatus` rather than inventing
-a value. `unclassifiedScope` is always `ACCOUNT`: the queue is returned for any
-plan because those BUY rows have no plan attribution, but it is never assigned
-to the current plan automatically.
+Each point includes date, optional live `asOf`, level, returnRate, pointType (`REGULAR_CLOSE` or `LIVE`), and dataStatus.
 
-The old nullable `investment_plan.initial_capital` column is retained only for
-database compatibility. It is not mapped, returned, or writable by the current
-application. Actual initial capital always comes from `INITIAL` BUY facts.
+Current external-flow model is `CASH_LEDGER_DEPOSIT_WITHDRAWAL`.
 
-Legacy classification is explicitly two-phase. Preview accepts:
+A live point is included only when current total account valuation is complete, positive, and `FRESH`.
 
-```json
-{
-  "items": [
-    {
-      "transactionId": "00000000-0000-0000-0000-000000000020",
-      "classification": "INITIAL"
-    },
-    {
-      "transactionId": "00000000-0000-0000-0000-000000000021",
-      "classification": "UNPLANNED"
-    }
-  ]
-}
+## Plans
+
+```text
+GET    /api/v1/plans
+GET    /api/v1/plans/{id}
+POST   /api/v1/plans
+PUT    /api/v1/plans/{id}
+POST   /api/v1/plans/{id}/archive
+DELETE /api/v1/plans/{id}          # archive semantics
+GET    /api/v1/plans/{id}/cycles
+GET    /api/v1/plans/{id}/cycles/{period}
+GET    /api/v1/plans/{id}/recommendation?amount=...
+GET    /api/v1/plans/{id}/progress
 ```
 
-The response contains `valid`, a `previewHash` only when every row is valid,
-and per-row `errors`. Commit sends the same `items` plus `previewHash`. The
-service locks the selected rows, recomputes the preview, rejects stale hashes,
-and writes all transaction changes and audit rows in one database transaction.
-Only an opening-date BUY may become `INITIAL`; `UNPLANNED` has no plan link.
+Current UI/product assumes one active monthly USD plan. Cycle intent is frozen and actual execution comes from linked BUY rows.
+
+## Contributions
+
+```text
+GET  /api/v1/plans/{planId}/contribution-analysis
+POST /api/v1/plans/{planId}/contribution-classifications/preview
+POST /api/v1/plans/{planId}/contribution-classifications/commit
+GET  /api/v1/plans/{planId}/contribution-classifications/audit
+```
+
+Analysis returns plan-attributed INITIAL/DCA BUY batches, account-wide unclassified BUY queue, bucket totals, freshness, and as-of date.
+
+Classification commit is a two-phase workflow: preview exact target rows, then commit a matching preview hash atomically and persist audit records.
 
 ## Settings
 
-| Method | Path | Response |
-| --- | --- | --- |
-| `GET` | `/api/v1/settings` | Current non-secret application/provider settings |
-| `PUT` | `/api/v1/settings` | Updates provider selection and theme |
+Settings APIs expose non-secret application/provider configuration only. Provider keys are represented as configured/unconfigured capability and are never returned to the browser.
 
-The settings response is:
+## Wire precision
 
-```json
-{
-  "baseCurrency": "USD",
-  "primaryProvider": "YAHOO",
-  "fallbackProvider": "TWELVE_DATA",
-  "twelveDataConfigured": false,
-  "alphaVantageConfigured": false,
-  "theme": "SYSTEM"
-}
-```
+Financial response values are decimal strings even when their underlying Java type is `BigDecimal`. Counts, HTTP statuses, ledger order, and calendar-day values remain JSON numbers.
 
-The PUT request accepts any subset of these fields:
-
-```json
-{
-  "primaryProvider": "YAHOO",
-  "fallbackProvider": "NONE",
-  "theme": "DARK"
-}
-```
-
-Provider values are `YAHOO`, `TWELVE_DATA`, `ALPHA_VANTAGE`, or `NONE` for
-the fallback. Themes are `SYSTEM`, `LIGHT`, and `DARK`. Base currency,
-business timezone, and provider keys are not updated by this endpoint. The
-business timezone is fixed to `America/New_York`; provider keys and password
-hashes are never returned. `fallbackProvider: "NONE"` is authoritative: the
-API does not infer or enable Twelve Data from an environment placeholder.
-
-## Errors
-
-Application validation and domain failures use Spring Problem Details with
-the additional `code`, `timestamp`, and `path` properties. Validation errors
-also include a `fields` object:
-
-```json
-{
-  "type": "https://dca-terminal.invalid/problems/validation_error",
-  "title": "VALIDATION_ERROR",
-  "status": 400,
-  "detail": "Request validation failed",
-  "instance": "/api/v1/plans",
-  "code": "VALIDATION_ERROR",
-  "timestamp": "2026-08-27T20:04:00Z",
-  "path": "/api/v1/plans",
-  "fields": {
-    "name": "must not be blank"
-  }
-}
-```
-
-The server does not expose exception messages, credentials, provider keys, or
-SQL details in unexpected-error responses.
-
-Current contribution-specific domain codes are:
-
-| HTTP | Code | Meaning |
-| --- | --- | --- |
-| `400` | `CONTRIBUTION_SOURCE_REQUIRES_BUY` | A non-BUY request supplied contribution fields |
-| `409` | `CONTRIBUTION_SOURCE_CONFLICT` | A cycle-linked BUY supplied a non-DCA contribution type |
-| `400` | `DCA_CONTRIBUTION_REQUIRES_CYCLE` | A DCA BUY has no plan cycle |
-| `400` | `INITIAL_CONTRIBUTION_REQUIRES_PLAN` | An initial BUY has no plan attribution |
-| `400` | `INITIAL_CONTRIBUTION_START_DATE_ONLY` | The initial BUY date is not the selected plan's start date |
-| `400` | `INVALID_CONTRIBUTION_PLAN` | Contribution type, plan, and cycle fields are inconsistent |
-| `400` | `INITIAL_CAPITAL_MONTH_SKIPS_DCA` | A DCA BUY targets a month already used for actual initial capital |
-| `400` | `CONTRIBUTION_CLASSIFICATION_EMPTY` | Preview or commit contains no selected transactions |
-| `409` | `CONTRIBUTION_CLASSIFICATION_INVALID` | One or more rows are no longer eligible at commit time |
-| `409` | `CONTRIBUTION_PREVIEW_STALE` | Commit hash or selected transaction state differs from the preview |
-
-Preview row errors additionally use `TRANSACTION_NOT_FOUND`,
-`DUPLICATE_TRANSACTION`, `UNSUPPORTED_CONTRIBUTION_CLASSIFICATION`,
-`CONTRIBUTION_SOURCE_REQUIRES_BUY`, `DCA_CONTRIBUTION_ALREADY_CLASSIFIED`,
-`CONTRIBUTION_ALREADY_CLASSIFIED`, and
-`INITIAL_CONTRIBUTION_START_DATE_ONLY`. Invalid preview rows do not write data.
+Do not introduce a frontend conversion through JavaScript binary `number` for financial storage/calculation boundaries.

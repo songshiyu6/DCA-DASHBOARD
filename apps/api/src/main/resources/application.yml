@@ -87,6 +87,14 @@ dca:
     quote-ttl-seconds: ${MARKET_QUOTE_TTL_SECONDS:60}
     profile-ttl-hours: ${MARKET_PROFILE_TTL_HOURS:24}
     provider-attempts: ${MARKET_DATA_PROVIDER_ATTEMPTS:2}
+  fund-data:
+    scheduler:
+      enabled: ${FUND_SYNC_ENABLED:true}
+      cron: '${FUND_SYNC_CRON:0 30 22 * * MON-FRI}'
+    eastmoney:
+      nav-base-url: ${EASTMONEY_FUND_NAV_BASE_URL:https://api.fund.eastmoney.com}
+      market-base-url: ${EASTMONEY_MARKET_BASE_URL:https://push2his.eastmoney.com}
+      timeout-ms: ${EASTMONEY_TIMEOUT_MS:5000}
   security:
     enabled: ${APP_SECURITY_ENABLED:true}
     username: ${APP_USERNAME:admin}

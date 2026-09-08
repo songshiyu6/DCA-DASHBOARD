@@ -1,33 +1,36 @@
 # DCA Terminal
 
-> Current documentation baseline: `main@b6c578ee129866389efde907c10a99400da5cd4e` (PR #42, 2026-09-04).
-> Current Flyway chain: `V001` through `V022`.
+> Current Flyway chain: `V001` through `V023`.
 
-DCA Terminal is a single-user, USD-first ETF investing and DCA execution dashboard. It is designed to answer four questions with auditable data:
+DCA Terminal is a focused single-user investing and DCA dashboard. The established production path remains USD-first for US ETFs, while V023 adds the first backend foundation for CNY China mutual funds and rule-driven automatic-DCA projections.
+
+The product is designed to answer four questions with auditable data:
 
 1. What actually happened in the account?
 2. What does the account own and how much cash is available now?
-3. Is the monthly DCA plan being executed as intended?
+3. Is the DCA plan being executed as intended?
 4. What investment performance remains after external funding and withdrawals are removed?
 
 The project is not a broker, order-entry system, trading terminal, research product, or financial-advice service. It deliberately excludes broker APIs, automatic order placement, options, cryptocurrency, individual-stock research, technical indicators, price prediction, news, social features, paper trading, tax calculation, and multi-user SaaS.
 
 ## Current product
 
-The authenticated Web application exposes these workspaces:
+The authenticated Web application currently exposes these established workspaces:
 
-- **Dashboard** — cash-inclusive account value, security holdings, Today P/L, plan progress, allocation, and investment-performance chart.
+- **Dashboard** — cash-inclusive USD account value, security holdings, Today P/L, plan progress, allocation, and investment-performance chart.
 - **Plan** — one active monthly USD plan, frozen monthly cycles, execution windows, target weights, progress, and contribution-first recommendations.
 - **Contributions** — plan-scoped `INITIAL`/`DCA` BUY-lot analysis, unclassified legacy BUY queue, classification preview/commit, and audit history.
-- **ETFs** — tracked ETF identity, quote, NAV when available, daily/intraday history, metrics, sync, and provider freshness.
+- **ETFs** — tracked US ETF identity, quote, NAV when available, daily/intraday history, metrics, sync, and provider freshness.
 - **Transactions** — `DEPOSIT`, `WITHDRAWAL`, `INTEREST`, `BUY`, `SELL`, `DIVIDEND`, and `FEE`, plus server-authoritative CSV preview/commit.
 - **Settings** — theme and market-data provider selection/configuration status.
+
+V023 additionally exposes backend APIs for CNY domestic mutual-fund metadata/NAV and automatic-DCA rules. The China-fund UI, FX conversion, and integration into the total portfolio are later phases; V023 deliberately does not pretend those pieces already exist.
 
 The performance panel supports `1M`, `3M`, `1Y`, `YTD`, and `ALL`, and can overlay arbitrary Yahoo-searchable ETF, index, or equity benchmarks without adding those benchmarks to the tracked-instrument/portfolio domain.
 
 ## Source of truth
 
-The transaction ledger is the source of truth for account activity. There is no editable holdings state and no editable cash-balance state.
+The transaction ledger is the source of truth for real account activity. There is no editable holdings state and no editable cash-balance state.
 
 ```text
 transactions + splits + market data
@@ -43,11 +46,27 @@ transactions + splits + market data
              `--> plan/contribution projections
 ```
 
-Daily portfolio snapshots are rebuildable caches. They may be invalidated after backdated transaction, split, or historical-price changes and must never become a second fact source.
+China-fund automatic DCA introduces a separate, explicit source fact for **synthetic historical projection only**:
+
+```text
+auto_dca_rule + observed fund NAV dates
+                    |
+                    v
+          derived daily purchases
+                    |
+              +-----+-----+
+              |           |
+           monthly      yearly
+           summary      summary
+```
+
+`auto_dca_rule` does **not** create `investment_transaction` rows. Editing the rule changes its derived history on the next calculation. Daily automatic-DCA rows are rebuildable projections and are hidden by default in the API.
+
+Daily portfolio snapshots are also rebuildable caches. They may be invalidated after backdated transaction, split, or historical-price changes and must never become a second fact source.
 
 ### Cash ledger
 
-Cash is replayed from the same ordered transaction ledger:
+Cash is replayed from the ordered real transaction ledger:
 
 | Event | Cash effect | External performance flow? |
 | --- | ---: | --- |
@@ -61,7 +80,7 @@ Cash is replayed from the same ordered transaction ledger:
 
 Only `DEPOSIT` and `WITHDRAWAL` are external capital flows. Buying or selling a security moves value between cash and securities inside the account and therefore must not create or remove investment performance.
 
-The current summary contract is:
+The current real-account summary contract remains:
 
 ```text
 securitiesValue = sum(open shares * current security price)
@@ -72,6 +91,8 @@ totalPnl        = marketValue - netInvested        # when valuation is complete
 ```
 
 `marketValue` is therefore total account value, despite the historical field name.
+
+V023 does **not** yet make the real ledger multi-currency. CNY automatic-DCA projections stay outside the USD cash ledger until the later multi-currency ledger/FX phase is implemented.
 
 ### Legacy cash migration
 
@@ -84,9 +105,36 @@ totalPnl        = marketValue - netInvested        # when valuation is complete
 
 These rows are migration facts used to preserve compatibility. Do not delete them just because they are system-generated.
 
+## China mutual funds and automatic DCA
+
+V023 adds `instrument_type=MUTUAL_FUND` and allows CNY instruments, plus:
+
+- `fund_profile` — annual management-fee metadata, share class, fund-calendar identifier, configurable confirmation trading-day lag;
+- `auto_dca_rule` — CNY amount, start/end date, `DAILY_FUND_TRADING_DAY`, purchase-fee rate, and enabled state;
+- fund/NAV APIs under `/api/v1/funds`;
+- automatic-DCA rule and projection APIs under `/api/v1/auto-dca`.
+
+Historical automatic-DCA purchases are derived from **observed NAV dates**. This means a complete NAV series naturally excludes weekends and China holidays without inventing a scheduled order. It also means a missing provider NAV row cannot yet be distinguished from a genuinely closed day; a first-class China fund calendar and provider gap audit are a later phase.
+
+The configured DCA amount is treated as total cash paid. For a purchase-fee rate `r`:
+
+```text
+net subscription = gross amount / (1 + r)
+purchase fee     = gross amount - net subscription
+shares           = net subscription / NAV
+```
+
+NAV date and confirmation date are separate. The fund profile controls how many subsequent observed fund trading days are used for confirmation timing. Confirmation delay does not change the purchase NAV date.
+
+Management fee is metadata only. Published mutual-fund NAV already reflects fund-level accrued expenses, so the application must not deduct the annual management fee from NAV again.
+
+Projection analysis defaults to monthly aggregation, supports yearly aggregation, and returns daily rows only when explicitly requested with `includeDaily=true`.
+
+See [`docs/cn-fund-auto-dca-phase1.md`](docs/cn-fund-auto-dca-phase1.md) for the exact Phase 1 contract and boundaries.
+
 ## Performance semantics
 
-Portfolio performance is now calculated by the backend `performance` module and exposed at:
+Portfolio performance is calculated by the backend `performance` module and exposed at:
 
 ```text
 GET /api/v1/performance/portfolio?range=1M|3M|1Y|YTD|ALL
@@ -106,9 +154,11 @@ The dashboard may retain local calculation code as a compatibility fallback, but
 
 Today performance is anchored to the previous completed regular close, not midnight and not the newest same-day stored close. `V020` created an experimental midnight-settlement table; `V021` removed it while preserving forward-only Flyway history.
 
+CNY mutual-fund projections are not yet included in this portfolio performance engine. That requires historical FX and a multi-currency account model and is intentionally deferred rather than mixing CNY and USD numerically.
+
 ## Contribution semantics
 
-Plan execution and contribution-batch analysis are still based on actual BUY transactions:
+Existing plan execution and contribution-batch analysis remain based on actual BUY transactions:
 
 - a cycle-linked BUY is `DCA`;
 - an `INITIAL` BUY is linked to a plan and must occur on the plan start date;
@@ -118,16 +168,20 @@ Plan execution and contribution-batch analysis are still based on actual BUY tra
 
 `DEPOSIT` is funding, not DCA execution. The backend can store `INITIAL`/`DCA`/`UNPLANNED` funding attribution on DEPOSIT rows, but the current Contributions projection remains BUY-lot based. Do not silently reinterpret a deposit as an executed purchase.
 
+The V023 China-fund automatic-DCA projection is intentionally separate from this real BUY-lot analysis until multi-currency real transactions and the combined AUTO/MANUAL analysis are implemented.
+
 ## Market-data semantics
 
 Market price, adjusted close, and fund NAV are different facts and remain separate.
 
-- **Current valuation** prefers the newest valid timestamped regular/pre-market/post-market/extended/overnight quote.
-- **Historical portfolio valuation** uses regular-session raw closes and historical ledger replay.
+- **Current US ETF valuation** prefers the newest valid timestamped regular/pre-market/post-market/extended/overnight quote.
+- **Historical US portfolio valuation** uses regular-session raw closes and historical ledger replay.
 - **ETF return metrics** use adjusted close where documented.
-- **NAV** is stored separately and is never replaced with market price.
+- **Fund NAV** is stored in `fund_nav_daily`, separately from market price.
 - **1D chart** uses on-demand provider bars and is not persisted as a five-minute database.
 - Provider errors, a valid pre-open empty response, a closed market, and a post-open data anomaly are distinct states.
+
+China mutual funds created through `/api/v1/funds` are kept out of the legacy tracked-US-ETF feed in V023, so the existing ETF scheduler/provider path cannot accidentally try to synchronize them as US securities.
 
 Benchmark history is isolated from tracked instruments and portfolio facts. ETF/index/equity benchmark selection is read-only and browser-persisted; it does not create an instrument, holding, or transaction.
 
@@ -150,13 +204,14 @@ Benchmark history is isolated from tracked instruments and portfolio facts. ETF/
 │   ├── api.md
 │   ├── calculations.md
 │   ├── market-data.md
+│   ├── cn-fund-auto-dca-phase1.md
 │   ├── operations-runbook.md
 │   ├── agent-handoff.md
 │   └── next-development-plan.md
 └── .github/workflows/ci.yml
 ```
 
-The API is a modular monolith. Current modules include `benchmark`, `instrument`, `marketdata`, `transaction`, `portfolio`, `performance`, `plan`, `settings`, `security`, and `observability`.
+The API is a modular monolith. Current modules include `benchmark`, `fund`, `instrument`, `marketdata`, `transaction`, `portfolio`, `performance`, `plan`, `settings`, `security`, and `observability`.
 
 ## Runtime and configuration
 
@@ -179,7 +234,7 @@ Set real values for at least `APP_DOMAIN`, `CADDY_EMAIL`, `POSTGRES_PASSWORD`, `
 
 `TWELVE_DATA_API_KEY` and `ALPHA_VANTAGE_API_KEY` are optional server-side provider credentials. `YAHOO_PROXY_URL` is also server-side. Provider credentials must never become Vite variables or browser-visible API fields.
 
-Business dates, plan windows, US market-session boundaries, and portfolio day rollover use `America/New_York`. Database timestamps remain UTC. There is no user-configurable business timezone.
+Existing US business dates, plan windows, market-session boundaries, and portfolio day rollover use `America/New_York`. Database timestamps remain UTC. China-fund V023 history uses observed NAV dates and does not yet claim a future China holiday calendar.
 
 ## Development
 
@@ -237,7 +292,7 @@ A missing GitHub status response is not evidence that CI passed. Release claims 
 
 ## Flyway state
 
-Current published chain: `V001`–`V022`.
+Current published chain on this feature: `V001`–`V023`.
 
 Key recent migrations:
 
@@ -253,6 +308,7 @@ Key recent migrations:
 | `V020` | create experimental midnight settlement table |
 | `V021` | remove midnight settlement; restore previous-regular-close daily semantics |
 | `V022` | explicit cash ledger, new cash transaction types, cash-inclusive snapshots/performance |
+| `V023` | CNY mutual-fund profile and rule-driven automatic-DCA projection foundation |
 
 Migrations are forward-only. Never edit an already published migration to make a later application version look compatible.
 
@@ -287,26 +343,32 @@ See `docs/operations-runbook.md` for backup, restore, PostgreSQL-major-upgrade, 
 
 ## Current known gaps
 
-The current code is functional, but the next development plan still includes important cleanup and product work:
+The current code is functional, but important work remains:
 
+- CNY mutual-fund automatic DCA is backend-only in V023; UI is not implemented yet;
+- live/historical FX and USD reporting conversion are not implemented yet;
+- the real transaction/cash ledger is still USD-only and must not numerically mix CNY;
+- automatic China-fund NAV ingestion and first-class China holiday/open-day gap audit are not implemented yet;
+- AUTO vs MANUAL fund-investment analysis is not yet unified;
+- rule versioning for “change from this date forward” is not yet implemented; current `PUT` explicitly rewrites derived history;
 - live transaction, plan, and CSV forms still contain fixed sample/default facts that should be removed;
 - the UI needs a concentrated DCA action queue for open/partial/missed cycles;
-- cash-funding attribution and BUY-lot contribution analysis need clearer user-facing reconciliation;
 - provider health history and market-data gap audit are not yet first-class operator views;
 - full account export/recovery evidence is incomplete;
 - transaction list/history paths still need capacity-oriented pagination/range work;
 - some contribution/transaction copy remains outside the i18n catalog.
 
-The authoritative prioritized list is `docs/next-development-plan.md`.
+The authoritative prioritized list remains `docs/next-development-plan.md`; the China-fund phase contract is `docs/cn-fund-auto-dca-phase1.md`.
 
 ## Documentation map
 
 - [Architecture](docs/architecture.md) — boundaries, modules, facts, projections, schema, runtime.
-- [API](docs/api.md) — current HTTP contract.
+- [API](docs/api.md) — established HTTP contract.
 - [Calculations](docs/calculations.md) — cash, portfolio, performance, ETF, FIFO, plan, contribution formulas.
 - [Market data](docs/market-data.md) — provider, quote/history/intraday/benchmark, retry, freshness.
+- [China fund auto-DCA Phase 1](docs/cn-fund-auto-dca-phase1.md) — CNY fund/NAV/rule projection contract and limitations.
 - [Operations runbook](docs/operations-runbook.md) — deploy, upgrade, backup, restore, smoke, rollback.
-- [Agent handoff](docs/agent-handoff.md) — current implementation state and takeover rules.
+- [Agent handoff](docs/agent-handoff.md) — established implementation state and takeover rules.
 - [Next development plan](docs/next-development-plan.md) — current gaps, priorities, release gates.
 
 Files named `docs/sa-*.md` are dated historical evidence for the commits they name. They are intentionally not rewritten into current-state documents.

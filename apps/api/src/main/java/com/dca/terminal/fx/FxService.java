@@ -2,7 +2,6 @@ package com.dca.terminal.fx;
 
 import com.dca.terminal.common.DomainException;
 import com.dca.terminal.instrument.InstrumentEntity;
-import com.dca.terminal.instrument.InstrumentType;
 import com.dca.terminal.marketdata.ProviderModels.PriceBar;
 import com.dca.terminal.marketdata.YahooFinanceProvider;
 import java.math.BigDecimal;
@@ -43,7 +42,6 @@ public class FxService {
         fx.setSymbol("CNY=X");
         fx.setName("USD/CNY");
         fx.setCurrency(CNY);
-        fx.setInstrumentType(InstrumentType.EQUITY);
         fx.setTracked(false);
 
         List<PriceBar> fetched = yahoo.getHistoricalPrices(fx, startDate, endDate).stream()

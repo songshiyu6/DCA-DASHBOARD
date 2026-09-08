@@ -1,9 +1,8 @@
 # DCA Terminal API
 
-> Current baseline: `main@b6c578ee129866389efde907c10a99400da5cd4e`.
-> Current Flyway chain: `V001`–`V022`.
+> Current Flyway chain: `V001`–`V024`.
 
-This document describes the HTTP contract on current `main`. Financial `BigDecimal` values are serialized as plain decimal strings. Dates are ISO `YYYY-MM-DD`; timestamps are UTC ISO-8601 strings. Null response properties may be omitted.
+Financial `BigDecimal` values are serialized as plain decimal strings. Dates are ISO `YYYY-MM-DD`; timestamps are UTC ISO-8601 strings. Null response properties may be omitted.
 
 ## Health and auth
 
@@ -19,8 +18,6 @@ With security enabled, application mutations require session + CSRF.
 
 ## Instruments / ETFs
 
-Main routes:
-
 ```text
 GET    /api/v1/instruments
 GET    /api/v1/instruments/search?q=...
@@ -35,30 +32,82 @@ POST   /api/v1/instruments/{symbol}/sync/full
 GET    /api/v1/instruments/providers
 ```
 
-Tracked-instrument domain remains ETF-only. Market quote, adjusted close, and NAV are distinct fields/facts.
+The legacy tracked-instrument route remains ETF-only. China mutual funds use the dedicated `/funds` domain and cannot accidentally enter the US ETF market-data scheduler.
 
 `range=1D` is on-demand intraday data and is not persisted as permanent five-minute history. Persisted-history ranges include `1W`, `1M`, `3M`, `YTD`, `1Y`, `3Y`, `5Y`, `ALL`.
 
-Freshness values include:
+Freshness values include `FRESH`, `STALE`, `PARTIAL`, `UNAVAILABLE`, and `INSUFFICIENT_HISTORY`.
+
+## China mutual funds
+
+Fund metadata and NAV:
 
 ```text
-FRESH
-STALE
-PARTIAL
-UNAVAILABLE
-INSUFFICIENT_HISTORY
+GET  /api/v1/funds
+GET  /api/v1/funds/{id}
+POST /api/v1/funds
+PUT  /api/v1/funds/{id}
+GET  /api/v1/funds/{id}/nav
+PUT  /api/v1/funds/{id}/nav
+POST /api/v1/funds/{id}/sync?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+GET  /api/v1/funds/{id}/calendar?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
 ```
 
-## Benchmarks
+Fund creation fields include code, name, annual management-fee rate, configurable confirmation trading-day lag, and optional share class. Current automatic provider sync supports six-digit China fund codes.
 
-Read-only benchmark routes:
+`PUT /nav` is an explicit observed NAV fact. `POST /sync` fetches fund NAV history plus confirmed Shanghai-market open dates before persisting either dataset. Provider failure does not delete existing local NAV/calendar facts.
+
+The default explicit sync range is one year ending on the current China date; one request is capped at 5,500 days. The initial provider adapter is EastMoney and is treated as an unofficial external source.
+
+Calendar audit returns:
+
+```text
+calendarCode
+startDate
+endDate
+source
+calendarAvailable
+expectedTradingDays
+navDays
+missingNavDates[]
+```
+
+A confirmed open date without NAV is a data gap. It never receives a carry-forward NAV and never creates an automatic-DCA execution.
+
+Automatic-DCA rules:
+
+```text
+GET  /api/v1/auto-dca/rules
+GET  /api/v1/auto-dca/rules/{id}
+POST /api/v1/auto-dca/rules
+PUT  /api/v1/auto-dca/rules/{id}
+GET  /api/v1/auto-dca/rules/{id}/projection?groupBy=MONTH|YEAR&includeDaily=false|true
+```
+
+`auto_dca_rule` is the source fact. Derived daily purchases are not `investment_transaction` rows. Editing the rule rewrites/recomputes its whole projection history.
+
+An execution requires an observed fund NAV. Persisted China open days are used for T+n confirmation timing. If an older execution date is outside the persisted calendar coverage, confirmation timing falls back to observed NAV dates; the projection response exposes the `tradingDaySource` used.
+
+The configured DCA amount is gross cash paid:
+
+```text
+net subscription = gross amount / (1 + purchaseFeeRate)
+purchase fee     = gross amount - net subscription
+shares           = net subscription / NAV
+```
+
+Fund management fee remains metadata only because published NAV already reflects accrued fund-level expenses.
+
+CNY mutual funds remain outside the real USD cash ledger and portfolio performance engine in this phase.
+
+## Benchmarks
 
 ```text
 GET /api/v1/benchmarks/search?q=...
 GET /api/v1/benchmarks/history?symbol=...&type=ETF|INDEX|EQUITY&range=...
 ```
 
-Benchmark identities are isolated from tracked instruments. Adding a benchmark does not create portfolio facts. Yahoo search/history currently supports ETF, INDEX, and EQUITY benchmark types.
+Benchmark identities are isolated from tracked instruments. Adding a benchmark does not create portfolio facts.
 
 ## Transactions
 
@@ -84,9 +133,7 @@ DIVIDEND
 FEE
 ```
 
-### Transaction request
-
-Representative fields:
+Representative BUY request:
 
 ```json
 {
@@ -115,27 +162,7 @@ Rules:
 - Future trade dates are rejected using the New York business date.
 - `fee` is only meaningful for BUY/SELL; non-trade cash events use `amount`.
 
-### Contribution attribution
-
-Contribution source may be `INITIAL`, `DCA`, `UNPLANNED`, or null where permitted.
-
-BUY rules:
-
-- a BUY linked to `planCycleId` is DCA and the plan is inferred from the cycle;
-- DCA BUY requires a cycle;
-- INITIAL BUY requires `contributionPlanId` and the plan start date;
-- UNPLANNED BUY must not carry a contribution plan.
-
-DEPOSIT rules:
-
-- DEPOSIT cannot link directly to a plan cycle;
-- DCA funding DEPOSIT may carry `contributionType=DCA` plus `contributionPlanId`;
-- INITIAL funding DEPOSIT uses `INITIAL` + plan and must satisfy the plan start-date rule;
-- UNPLANNED funding has no plan.
-
-Current contribution-analysis batches remain BUY-lot based; a DEPOSIT does not by itself complete a DCA cycle.
-
-### CSV
+Contribution source may be `INITIAL`, `DCA`, `UNPLANNED`, or null where permitted. Current contribution-analysis batches remain BUY-lot based; a DEPOSIT does not by itself complete a DCA cycle.
 
 CSV supports the transaction type set above and fields such as:
 
@@ -155,9 +182,7 @@ GET  /api/v1/portfolio/history?range=...
 POST /api/v1/portfolio/rebuild-snapshot
 ```
 
-### Summary semantics
-
-Current summary exposes legacy/core fields plus cash breakdown:
+Current summary semantics:
 
 ```text
 marketValue      total account value = securitiesValue + cashBalance
@@ -176,8 +201,6 @@ xirr             money-weighted return on DEPOSIT/WITHDRAWAL + current value
 
 `marketValue` is kept for compatibility but now means total account value.
 
-Historical points expose total `marketValue`, `netInvested`, `costBasis`, `unrealizedPnl`, `dataStatus`, plus `securitiesValue` and `cashBalance`.
-
 ## Dashboard
 
 ```text
@@ -188,36 +211,13 @@ The dashboard combines current portfolio views, all portfolio history, active-pl
 
 ## Performance
 
-Canonical server performance endpoint:
-
 ```text
 GET /api/v1/performance/portfolio?range=1M|3M|1Y|YTD|ALL
 ```
 
-Response fields include:
+Response fields include range, requested/baseline/inception/endpoint dates, as-of, TWR, CAGR, XIRR, maximum drawdown, data status, live-endpoint flag, external-flow model, and points.
 
-```text
-range
-requestedStartDate
-baselineDate
-inceptionDate
-endpointDate
-asOf
-twr
-cagr
-xirr
-maximumDrawdown
-dataStatus
-liveEndpointIncluded
-externalFlowModel
-points[]
-```
-
-Each point includes date, optional live `asOf`, level, returnRate, pointType (`REGULAR_CLOSE` or `LIVE`), and dataStatus.
-
-Current external-flow model is `CASH_LEDGER_DEPOSIT_WITHDRAWAL`.
-
-A live point is included only when current total account valuation is complete, positive, and `FRESH`.
+Current external-flow model is `CASH_LEDGER_DEPOSIT_WITHDRAWAL`. A live point is included only when current total account valuation is complete, positive, and `FRESH`.
 
 ## Plans
 
@@ -227,7 +227,7 @@ GET    /api/v1/plans/{id}
 POST   /api/v1/plans
 PUT    /api/v1/plans/{id}
 POST   /api/v1/plans/{id}/archive
-DELETE /api/v1/plans/{id}          # archive semantics
+DELETE /api/v1/plans/{id}
 GET    /api/v1/plans/{id}/cycles
 GET    /api/v1/plans/{id}/cycles/{period}
 GET    /api/v1/plans/{id}/recommendation?amount=...
@@ -245,9 +245,7 @@ POST /api/v1/plans/{planId}/contribution-classifications/commit
 GET  /api/v1/plans/{planId}/contribution-classifications/audit
 ```
 
-Analysis returns plan-attributed INITIAL/DCA BUY batches, account-wide unclassified BUY queue, bucket totals, freshness, and as-of date.
-
-Classification commit is a two-phase workflow: preview exact target rows, then commit a matching preview hash atomically and persist audit records.
+Analysis returns plan-attributed INITIAL/DCA BUY batches, account-wide unclassified BUY queue, bucket totals, freshness, and as-of date. Classification commit is a preview/commit workflow with an exact preview hash and audit records.
 
 ## Settings
 

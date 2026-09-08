@@ -1,4 +1,4 @@
-import type { MultiCurrencyReport } from '../../types'
+import type { MultiCurrencyReport, PerformanceRange } from '../../reportingTypes'
 import { normalizeApiResponse } from './normalize'
 import { apiMeta, request, type ApiResponse } from './transport'
 
@@ -7,7 +7,7 @@ function result<T>(body: unknown): ApiResponse<T> {
 }
 
 export const reportingApi = {
-  getMultiCurrencyReport: async (range: '1M' | '3M' | '1Y' | 'YTD' | 'ALL' = 'ALL'): ApiResponse<MultiCurrencyReport> =>
+  getMultiCurrencyReport: async (range: PerformanceRange = 'ALL'): ApiResponse<MultiCurrencyReport> =>
     result<MultiCurrencyReport>(await request<unknown>(`/reporting/multicurrency?range=${range}`)),
   syncUsdCny: async (): ApiResponse<unknown> => result<unknown>(await request<unknown>('/fx/usd-cny/sync', { method: 'POST' })),
 }

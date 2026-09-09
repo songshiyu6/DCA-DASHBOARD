@@ -41,8 +41,8 @@ export function FundPurchasesPanel({ fund, isZh, locale }: { fund: MutualFund; i
   const queryClient = useQueryClient()
   const purchases = useQuery({ queryKey: queryKeys.fundPurchases(fund.id), queryFn: () => api.getFundPurchases(fund.id) })
   const [dialogOpen, setDialogOpen] = useState(false)
-  const [editing, setEditing] = useState<FundPurchase | null>(null)
-  const [toDelete, setToDelete] = useState<FundPurchase | null>(null)
+  const [editing, setEditing] = useState<PurchaseWithPendingNav | null>(null)
+  const [toDelete, setToDelete] = useState<PurchaseWithPendingNav | null>(null)
   const [form, setForm] = useState(emptyForm)
 
   const savePurchase = useMutation({
@@ -64,7 +64,7 @@ export function FundPurchasesPanel({ fund, isZh, locale }: { fund: MutualFund; i
     },
   })
 
-  const openPurchase = (purchase?: FundPurchase) => {
+  const openPurchase = (purchase?: PurchaseWithPendingNav) => {
     setEditing(purchase ?? null)
     setForm(purchase ? {
       purchaseDate: purchase.purchaseDate,

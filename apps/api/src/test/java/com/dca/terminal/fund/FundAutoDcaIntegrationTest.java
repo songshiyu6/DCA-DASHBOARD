@@ -24,6 +24,9 @@ class FundAutoDcaIntegrationTest {
     @Autowired
     AutoDcaService autoDcaService;
 
+    @Autowired
+    FundPurchaseService purchaseService;
+
     @Test
     void createsCnyFundStoresNavAndRebuildsMonthlyProjectionFromRule() {
         String code = "F" + UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase();
@@ -62,20 +65,59 @@ class FundAutoDcaIntegrationTest {
     }
 
     @Test
-    void deletesFundNavAndAutoDcaRulesTogether() {
+    void recordsEditsAndDeletesOneTimePurchaseUsingExactNav() {
+        String code = "F" + UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase();
+        FundDtos.FundResponse fund = fundService.create(new FundDtos.FundRequest(
+                code, "One Time Fund", new BigDecimal("0.006"), 1, "A"));
+        LocalDate purchaseDate = LocalDate.of(2026, 8, 18);
+        fundService.putNav(fund.id(), new FundDtos.NavRequest(purchaseDate, new BigDecimal("1.2500"), "MANUAL"));
+
+        FundDtos.FundPurchaseResponse created = purchaseService.create(fund.id(), new FundDtos.FundPurchaseRequest(
+                purchaseDate, new BigDecimal("10000"), new BigDecimal("0.0015"), "initial position"));
+
+        assertEquals(fund.id(), created.fundId());
+        assertEquals(0, new BigDecimal("1.2500").compareTo(created.nav()));
+        assertEquals(0, new BigDecimal("10000.000000").compareTo(created.grossAmount()));
+        assertTrue(created.shares().signum() > 0);
+        assertEquals(1, purchaseService.list(fund.id()).size());
+
+        FundDtos.FundPurchaseResponse edited = purchaseService.update(fund.id(), created.id(),
+                new FundDtos.FundPurchaseRequest(purchaseDate, new BigDecimal("12000"), BigDecimal.ZERO, "edited"));
+        assertEquals(0, new BigDecimal("12000.000000").compareTo(edited.grossAmount()));
+        assertEquals("edited", edited.notes());
+
+        assertEquals(created.id(), purchaseService.delete(fund.id(), created.id()));
+        assertTrue(purchaseService.list(fund.id()).isEmpty());
+    }
+
+    @Test
+    void rejectsOneTimePurchaseWhenExactNavIsMissing() {
+        String code = "F" + UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase();
+        FundDtos.FundResponse fund = fundService.create(new FundDtos.FundRequest(
+                code, "Missing NAV Fund", new BigDecimal("0.006"), 1, "A"));
+
+        assertThrows(DomainException.class, () -> purchaseService.create(fund.id(), new FundDtos.FundPurchaseRequest(
+                LocalDate.of(2026, 8, 18), new BigDecimal("1000"), BigDecimal.ZERO, null)));
+    }
+
+    @Test
+    void deletesFundNavPurchasesAndAutoDcaRulesTogether() {
         String code = "F" + UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase();
         FundDtos.FundResponse fund = fundService.create(new FundDtos.FundRequest(
                 code, "Delete Me", new BigDecimal("0.006"), 1, "A"));
-        fundService.putNav(fund.id(), new FundDtos.NavRequest(
-                LocalDate.of(2026, 9, 1), new BigDecimal("1.2345"), "MANUAL"));
+        LocalDate date = LocalDate.of(2026, 9, 1);
+        fundService.putNav(fund.id(), new FundDtos.NavRequest(date, new BigDecimal("1.2345"), "MANUAL"));
+        FundDtos.FundPurchaseResponse purchase = purchaseService.create(fund.id(), new FundDtos.FundPurchaseRequest(
+                date, new BigDecimal("5000"), BigDecimal.ZERO, null));
         AutoDcaDtos.RuleResponse rule = autoDcaService.create(new AutoDcaDtos.RuleRequest(
-                code, new BigDecimal("100"), LocalDate.of(2026, 9, 1), null,
-                BigDecimal.ZERO, true));
+                code, new BigDecimal("100"), date, null, BigDecimal.ZERO, true));
 
         assertEquals(fund.id(), fundService.delete(fund.id()));
 
         assertThrows(DomainException.class, () -> fundService.get(fund.id()));
         assertTrue(fundService.list().stream().noneMatch(item -> item.id().equals(fund.id())));
         assertTrue(autoDcaService.list().stream().noneMatch(item -> item.id().equals(rule.id())));
+        assertThrows(DomainException.class, () -> purchaseService.update(fund.id(), purchase.id(),
+                new FundDtos.FundPurchaseRequest(date, new BigDecimal("6000"), BigDecimal.ZERO, null)));
     }
 }

@@ -52,7 +52,10 @@ public class FundPurchaseService {
     public List<FundPurchaseResponse> listAll() {
         List<FundPurchaseEntity> purchases = purchaseRepository.findAllByOrderByPurchaseDateAscCreatedAtAscIdAsc();
         settlePending(purchases);
-        return purchases.stream().map(this::response).toList();
+        return purchases.stream()
+                .filter(purchase -> purchase.getNav() != null && purchase.getShares() != null)
+                .map(this::response)
+                .toList();
     }
 
     @Transactional

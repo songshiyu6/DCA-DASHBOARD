@@ -5,10 +5,12 @@ import com.dca.terminal.fund.AutoDcaDtos;
 import com.dca.terminal.fund.AutoDcaFrequency;
 import com.dca.terminal.fund.AutoDcaProjectionEngine;
 import com.dca.terminal.fund.AutoDcaService;
+import com.dca.terminal.fund.FundDtos;
 import com.dca.terminal.fund.FundMarketCalendarDayEntity;
 import com.dca.terminal.fund.FundMarketCalendarDayRepository;
 import com.dca.terminal.fund.FundProfileEntity;
 import com.dca.terminal.fund.FundProfileRepository;
+import com.dca.terminal.fund.FundPurchaseService;
 import com.dca.terminal.fx.FxDtos;
 import com.dca.terminal.fx.FxRateEntity;
 import com.dca.terminal.fx.FxService;
@@ -46,6 +48,7 @@ class MultiCurrencyReportingServiceTest {
     @Mock PortfolioService portfolioService;
     @Mock CashLedgerPortfolioPerformanceSource usdPerformanceSource;
     @Mock AutoDcaService autoDcaService;
+    @Mock FundPurchaseService purchaseService;
     @Mock FundNavDailyRepository navRepository;
     @Mock FundProfileRepository profileRepository;
     @Mock FundMarketCalendarDayRepository calendarRepository;
@@ -56,8 +59,9 @@ class MultiCurrencyReportingServiceTest {
     @BeforeEach
     void setUp() {
         service = new MultiCurrencyReportingService(portfolioService, usdPerformanceSource, autoDcaService,
-                navRepository, profileRepository, calendarRepository, fxService,
+                purchaseService, navRepository, profileRepository, calendarRepository, fxService,
                 Clock.fixed(Instant.parse("2026-09-08T12:00:00Z"), ZoneOffset.UTC));
+        when(purchaseService.listAll()).thenReturn(List.of());
     }
 
     @Test
@@ -121,8 +125,38 @@ class MultiCurrencyReportingServiceTest {
         assertThat(result.summary().combinedPnlUsd()).isEqualByComparingTo("8.472222222222222222222222222222");
         assertThat(result.summary().status()).isEqualTo(FreshnessStatus.FRESH);
         assertThat(result.performance().externalFlowModel())
-                .isEqualTo("USD_CASH_LEDGER_PLUS_CNY_AUTO_DCA_AT_HISTORICAL_USDCNY");
+                .isEqualTo("USD_CASH_LEDGER_PLUS_CNY_FUND_ACTIVITY_AT_HISTORICAL_USDCNY");
         assertThat(result.performance().twr()).isPositive();
+    }
+
+    @Test
+    void oneTimePurchaseIsIncludedWithoutAutoDcaRule() {
+        UUID instrumentId = UUID.randomUUID();
+        FundDtos.FundPurchaseResponse purchase = purchase(instrumentId, "2026-09-07", "710", "100");
+
+        when(portfolioService.summary()).thenReturn(usdSummary("1000", "1000", "0"));
+        when(portfolioService.history("ALL")).thenReturn(List.of(usdDay("2026-09-07", "1000", "1000")));
+        when(autoDcaService.list()).thenReturn(List.of());
+        when(purchaseService.listAll()).thenReturn(List.of(purchase));
+        when(navRepository.findAllByInstrumentIdOrderByNavDateAscRetrievedAtDesc(instrumentId))
+                .thenReturn(List.of(nav("2026-09-07", "7.10"), nav("2026-09-08", "7.81")));
+        when(profileRepository.findById(instrumentId)).thenReturn(Optional.empty());
+        when(fxService.usdCnyOnOrBefore(LocalDate.of(2026, 9, 7))).thenReturn(fx("2026-09-07", "7.10"));
+        when(fxService.usdCny(LocalDate.of(2026, 9, 7), TODAY)).thenReturn(new FxDtos.FxSeriesResponse(
+                "USD", "CNY", FxService.USD_CNY_SEMANTICS,
+                List.of(rate("2026-09-07", "7.10"), rate("2026-09-08", "7.20"))));
+        when(fxService.usdCnyOnOrBefore(TODAY)).thenReturn(fx("2026-09-08", "7.20"));
+        when(usdPerformanceSource.externalCashFlows()).thenReturn(List.of());
+
+        MultiCurrencyDtos.Response result = service.report("ALL");
+
+        assertThat(result.summary().cnyAutoDcaExternalFlowUsd()).isEqualByComparingTo("100");
+        assertThat(result.summary().cnyFundValue()).isEqualByComparingTo("781");
+        assertThat(result.summary().funds()).hasSize(1);
+        assertThat(result.summary().funds().getFirst().shares()).isEqualByComparingTo("100");
+        assertThat(result.summary().funds().getFirst().fundCode()).isEqualTo("000001");
+        assertThat(result.performance().externalFlowModel())
+                .isEqualTo("USD_CASH_LEDGER_PLUS_CNY_FUND_ACTIVITY_AT_HISTORICAL_USDCNY");
     }
 
     @Test
@@ -225,6 +259,12 @@ class MultiCurrencyReportingServiceTest {
         return new AutoDcaDtos.DailyExecutionResponse(LocalDate.parse(date), LocalDate.parse(date), LocalDate.parse(date),
                 new BigDecimal(nav), new BigDecimal(gross), BigDecimal.ZERO, new BigDecimal(gross),
                 new BigDecimal(shares), AutoDcaProjectionEngine.ConfirmationStatus.CONFIRMED);
+    }
+
+    private static FundDtos.FundPurchaseResponse purchase(UUID instrumentId, String date, String gross, String shares) {
+        return new FundDtos.FundPurchaseResponse(UUID.randomUUID(), instrumentId, "000001", "Test Fund",
+                LocalDate.parse(date), new BigDecimal(gross), BigDecimal.ZERO, new BigDecimal("7.10"),
+                BigDecimal.ZERO, new BigDecimal(gross), new BigDecimal(shares), null, AS_OF, AS_OF);
     }
 
     private static FundNavDailyEntity nav(String date, String value) {

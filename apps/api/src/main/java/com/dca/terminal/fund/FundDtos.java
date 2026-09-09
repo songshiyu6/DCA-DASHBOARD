@@ -35,6 +35,28 @@ public final class FundDtos {
 
     public record FundDeleteResponse(UUID id) { }
 
+    public record FundPurchaseRequest(
+            @NotNull LocalDate purchaseDate,
+            @NotNull @DecimalMin(value = "0", inclusive = false) BigDecimal grossAmount,
+            @NotNull @DecimalMin("0") @DecimalMax("1") BigDecimal purchaseFeeRate,
+            @Size(max = 500) String notes) { }
+
+    public record FundPurchaseResponse(
+            UUID id,
+            UUID fundId,
+            String fundCode,
+            String fundName,
+            LocalDate purchaseDate,
+            BigDecimal grossAmount,
+            BigDecimal purchaseFeeRate,
+            BigDecimal nav,
+            BigDecimal purchaseFee,
+            BigDecimal netSubscribedAmount,
+            BigDecimal shares,
+            String notes,
+            Instant createdAt,
+            Instant updatedAt) { }
+
     public record NavRequest(
             @NotNull LocalDate navDate,
             @NotNull @DecimalMin(value = "0", inclusive = false) BigDecimal nav,

@@ -35,7 +35,7 @@ public class FundPurchaseEntity extends PersistedEntity {
     @Column(name = "purchase_fee_rate", nullable = false, precision = 12, scale = 8)
     private BigDecimal purchaseFeeRate = BigDecimal.ZERO;
 
-    @Column(nullable = false, precision = 20, scale = 6)
+    @Column(precision = 20, scale = 6)
     private BigDecimal nav;
 
     @Column(name = "purchase_fee", nullable = false, precision = 20, scale = 6)
@@ -44,7 +44,7 @@ public class FundPurchaseEntity extends PersistedEntity {
     @Column(name = "net_subscribed_amount", nullable = false, precision = 20, scale = 6)
     private BigDecimal netSubscribedAmount;
 
-    @Column(nullable = false, precision = 28, scale = 8)
+    @Column(precision = 28, scale = 8)
     private BigDecimal shares;
 
     @Column(length = 500)

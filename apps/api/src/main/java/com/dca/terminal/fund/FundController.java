@@ -5,6 +5,7 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -16,6 +17,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import static com.dca.terminal.fund.FundDtos.FundCalendarResponse;
+import static com.dca.terminal.fund.FundDtos.FundDeleteResponse;
 import static com.dca.terminal.fund.FundDtos.FundRequest;
 import static com.dca.terminal.fund.FundDtos.FundResponse;
 import static com.dca.terminal.fund.FundDtos.FundSyncResponse;
@@ -46,6 +48,11 @@ public class FundController {
     @PutMapping("/{id}")
     public FundResponse update(@PathVariable UUID id, @Valid @RequestBody FundRequest request) {
         return service.update(id, request);
+    }
+
+    @DeleteMapping("/{id}")
+    public FundDeleteResponse delete(@PathVariable UUID id) {
+        return new FundDeleteResponse(service.delete(id));
     }
 
     @PutMapping("/{id}/nav")

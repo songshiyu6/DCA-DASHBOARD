@@ -24,7 +24,7 @@ public class FundDataSyncService {
     private static final ZoneId CHINA_ZONE = ZoneId.of("Asia/Shanghai");
     private static final String CALENDAR_CODE = "CN_FUND";
     private static final int DEFAULT_LOOKBACK_DAYS = 365;
-    private static final int MAX_SYNC_DAYS = 5500;
+    private static final int MAX_SYNC_DAYS = 12000;
 
     private final ChinaFundDataProvider provider;
     private final FundService fundService;

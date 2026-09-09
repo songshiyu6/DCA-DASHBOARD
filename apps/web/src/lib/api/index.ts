@@ -79,6 +79,7 @@ const demoApiProxy = {
   lookupFund: (_code: string) => fundDemoUnavailable(),
   createFund: (_input: Parameters<typeof liveApi.createFund>[0]) => fundDemoUnavailable(),
   updateFund: (_id: string, _input: Parameters<typeof liveApi.updateFund>[1]) => fundDemoUnavailable(),
+  deleteFund: (_id: string) => fundDemoUnavailable(),
   getFundNav: (_id: string) => emptyDemoResult([]),
   putFundNav: (_id: string, _navDate: string, _nav: string) => fundDemoUnavailable(),
   syncFund: (_id: string, _startDate?: string, _endDate?: string) => fundDemoUnavailable(),

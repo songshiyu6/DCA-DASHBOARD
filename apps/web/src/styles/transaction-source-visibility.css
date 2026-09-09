@@ -1,0 +1,3 @@
+.dca-execution-field select option[value='INITIAL']:disabled {
+  display: none;
+}

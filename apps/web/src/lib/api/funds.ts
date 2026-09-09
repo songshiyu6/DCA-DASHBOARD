@@ -48,6 +48,7 @@ export const fundsApi = {
     method: 'PUT',
     body: JSON.stringify(input),
   })),
+  deleteFund: async (id: string): ApiResponse<{ id: string }> => result<{ id: string }>(await request<unknown>(`/funds/${encodeURIComponent(id)}`, { method: 'DELETE' })),
   getFundNav: async (id: string): ApiResponse<FundNavPoint[]> => result<FundNavPoint[]>(await request<unknown>(`/funds/${encodeURIComponent(id)}/nav`)),
   putFundNav: async (id: string, navDate: string, nav: string): ApiResponse<FundNavPoint> => result<FundNavPoint>(await request<unknown>(`/funds/${encodeURIComponent(id)}/nav`, {
     method: 'PUT',

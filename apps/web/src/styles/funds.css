@@ -14,6 +14,8 @@
 .fund-list-item small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fund-detail-stack { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
 .fund-panel-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.fund-delete-trigger { color: var(--negative); }
+.fund-delete-trigger:hover { background: var(--negative-soft); border-color: color-mix(in srgb, var(--negative) 35%, transparent); color: var(--negative); }
 .fund-stat-grid { display: grid; gap: 10px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 14px; }
 .fund-stat { background: var(--surface-2); border: 1px solid var(--line-subtle); border-radius: 7px; display: flex; flex-direction: column; min-height: 96px; padding: 12px; }
 .fund-stat > span { color: var(--text-muted); font-size: 11px; }
@@ -64,6 +66,12 @@
 .fund-checkbox { align-items: center; flex-direction: row !important; }
 .fund-checkbox input { accent-color: var(--accent); }
 .fund-form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+.fund-delete-name { color: var(--text-soft); margin-top: 8px; }
+.fund-delete-name strong { font-family: 'DM Mono', monospace; }
+.fund-delete-warning { align-items: flex-start; background: var(--negative-soft); border: 1px solid color-mix(in srgb, var(--negative) 35%, transparent); border-radius: 7px; color: var(--negative); display: flex; gap: 9px; line-height: 1.5; margin-top: 16px; padding: 11px 12px; }
+.fund-delete-warning svg { flex: 0 0 auto; margin-top: 2px; }
+.fund-delete-confirm { background: var(--negative); border: 1px solid var(--negative); color: #fff; }
+.fund-delete-confirm:hover:not(:disabled) { filter: brightness(1.06); }
 .fund-rewrite-note { background: var(--warning-soft); color: var(--warning); font-size: 11px; }
 .fund-dialog-context { color: var(--text-muted); margin-top: 6px; }
 .fund-empty-hint { color: var(--text-muted); margin: 10px auto 0; max-width: 520px; text-align: center; }

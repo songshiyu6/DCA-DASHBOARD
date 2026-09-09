@@ -26,15 +26,18 @@ public class FundService {
     private final InstrumentRepository instrumentRepository;
     private final FundProfileRepository profileRepository;
     private final FundNavDailyRepository navRepository;
+    private final AutoDcaRuleRepository ruleRepository;
     private final Clock clock;
 
     public FundService(InstrumentRepository instrumentRepository,
                        FundProfileRepository profileRepository,
                        FundNavDailyRepository navRepository,
+                       AutoDcaRuleRepository ruleRepository,
                        Clock clock) {
         this.instrumentRepository = instrumentRepository;
         this.profileRepository = profileRepository;
         this.navRepository = navRepository;
+        this.ruleRepository = ruleRepository;
         this.clock = clock;
     }
 
@@ -103,6 +106,22 @@ public class FundService {
         instrumentRepository.save(instrument);
         apply(profile, request);
         return response(profileRepository.saveAndFlush(profile));
+    }
+
+    @Transactional
+    public UUID delete(UUID id) {
+        FundProfileEntity profile = profile(id);
+        InstrumentEntity instrument = profile.getInstrument();
+
+        navRepository.deleteAllByInstrumentId(id);
+        navRepository.flush();
+        ruleRepository.deleteAllByInstrumentId(id);
+        ruleRepository.flush();
+        profileRepository.delete(profile);
+        profileRepository.flush();
+        instrumentRepository.delete(instrument);
+        instrumentRepository.flush();
+        return id;
     }
 
     @Transactional

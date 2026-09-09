@@ -10,6 +10,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -21,6 +22,8 @@ import static com.dca.terminal.fund.FundDtos.FundPurchaseResponse;
 
 @Service
 public class FundPurchaseService {
+    private static final ZoneId CHINA_ZONE = ZoneId.of("Asia/Shanghai");
+
     private final FundService fundService;
     private final FundPurchaseRepository purchaseRepository;
     private final FundNavDailyRepository navRepository;
@@ -36,17 +39,20 @@ public class FundPurchaseService {
         this.clock = clock;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public List<FundPurchaseResponse> list(UUID fundId) {
         fundService.profile(fundId);
-        return purchaseRepository.findAllByInstrumentIdOrderByPurchaseDateAscCreatedAtAscIdAsc(fundId)
-                .stream().map(this::response).toList();
+        List<FundPurchaseEntity> purchases = purchaseRepository
+                .findAllByInstrumentIdOrderByPurchaseDateAscCreatedAtAscIdAsc(fundId);
+        settlePending(purchases);
+        return purchases.stream().map(this::response).toList();
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public List<FundPurchaseResponse> listAll() {
-        return purchaseRepository.findAllByOrderByPurchaseDateAscCreatedAtAscIdAsc()
-                .stream().map(this::response).toList();
+        List<FundPurchaseEntity> purchases = purchaseRepository.findAllByOrderByPurchaseDateAscCreatedAtAscIdAsc();
+        settlePending(purchases);
+        return purchases.stream().map(this::response).toList();
     }
 
     @Transactional
@@ -77,30 +83,54 @@ public class FundPurchaseService {
 
     private void apply(FundPurchaseEntity purchase, FundPurchaseRequest request) {
         LocalDate date = request.purchaseDate();
-        if (date.isAfter(LocalDate.now(clock))) {
+        if (date.isAfter(LocalDate.now(clock.withZone(CHINA_ZONE)))) {
             throw new DomainException(HttpStatus.BAD_REQUEST, "FUND_PURCHASE_DATE_IN_FUTURE",
                     "Fund purchase date cannot be in the future");
         }
-        FundNavDailyEntity nav = navRepository.findFirstByInstrumentIdAndNavDateOrderByRetrievedAtDesc(
-                        purchase.getInstrument().getId(), date)
-                .orElseThrow(() -> new DomainException(HttpStatus.UNPROCESSABLE_ENTITY, "FUND_PURCHASE_NAV_MISSING",
-                        "No exact NAV is stored for the purchase date; sync or add that NAV first"));
 
         BigDecimal gross = request.grossAmount();
         BigDecimal feeRate = request.purchaseFeeRate();
         BigDecimal net = gross.divide(BigDecimal.ONE.add(feeRate, DecimalMath.MC), DecimalMath.MC);
         BigDecimal fee = gross.subtract(net, DecimalMath.MC);
-        BigDecimal shares = net.divide(nav.getNav(), DecimalMath.MC)
-                .setScale(DecimalMath.QUANTITY_SCALE, RoundingMode.HALF_UP);
 
         purchase.setPurchaseDate(date);
         purchase.setGrossAmount(DecimalMath.money(gross));
         purchase.setPurchaseFeeRate(feeRate);
-        purchase.setNav(nav.getNav());
         purchase.setPurchaseFee(DecimalMath.money(fee));
         purchase.setNetSubscribedAmount(DecimalMath.money(net));
-        purchase.setShares(shares);
         purchase.setNotes(request.notes() == null || request.notes().isBlank() ? null : request.notes().trim());
+
+        FundNavDailyEntity nav = navRepository.findFirstByInstrumentIdAndNavDateOrderByRetrievedAtDesc(
+                        purchase.getInstrument().getId(), date)
+                .orElse(null);
+        if (nav == null) {
+            purchase.setNav(null);
+            purchase.setShares(null);
+            return;
+        }
+        settle(purchase, nav);
+    }
+
+    private void settlePending(List<FundPurchaseEntity> purchases) {
+        boolean changed = false;
+        for (FundPurchaseEntity purchase : purchases) {
+            if (purchase.getNav() != null && purchase.getShares() != null) continue;
+            FundNavDailyEntity nav = navRepository.findFirstByInstrumentIdAndNavDateOrderByRetrievedAtDesc(
+                            purchase.getInstrument().getId(), purchase.getPurchaseDate())
+                    .orElse(null);
+            if (nav == null) continue;
+            settle(purchase, nav);
+            purchaseRepository.save(purchase);
+            changed = true;
+        }
+        if (changed) purchaseRepository.flush();
+    }
+
+    private void settle(FundPurchaseEntity purchase, FundNavDailyEntity nav) {
+        BigDecimal shares = purchase.getNetSubscribedAmount().divide(nav.getNav(), DecimalMath.MC)
+                .setScale(DecimalMath.QUANTITY_SCALE, RoundingMode.HALF_UP);
+        purchase.setNav(nav.getNav());
+        purchase.setShares(shares);
     }
 
     private FundPurchaseEntity purchase(UUID fundId, UUID purchaseId) {

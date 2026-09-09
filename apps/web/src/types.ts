@@ -383,6 +383,30 @@ export interface MutualFundInput {
   shareClass?: string | null
 }
 
+export interface FundPurchase {
+  id: string
+  fundId: string
+  fundCode: string
+  fundName: string
+  purchaseDate: string
+  grossAmount: string
+  purchaseFeeRate: string
+  nav: string
+  purchaseFee: string
+  netSubscribedAmount: string
+  shares: string
+  notes: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface FundPurchaseInput {
+  purchaseDate: string
+  grossAmount: string
+  purchaseFeeRate: string
+  notes?: string | null
+}
+
 export interface FundNavPoint {
   id: string
   navDate: string

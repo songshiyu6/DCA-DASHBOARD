@@ -1,5 +1,6 @@
 package com.dca.terminal.fund;
 
+import com.dca.terminal.common.DomainException;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.UUID;
@@ -10,6 +11,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
@@ -57,5 +59,23 @@ class FundAutoDcaIntegrationTest {
         assertEquals(2, rewritten.summaries().getFirst().executionCount());
         assertEquals(0, new BigDecimal("400").compareTo(rewritten.summaries().getFirst().grossAmount()));
         assertEquals(LocalDate.of(2026, 7, 2), rewritten.daily().getFirst().navDate());
+    }
+
+    @Test
+    void deletesFundNavAndAutoDcaRulesTogether() {
+        String code = "F" + UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase();
+        FundDtos.FundResponse fund = fundService.create(new FundDtos.FundRequest(
+                code, "Delete Me", new BigDecimal("0.006"), 1, "A"));
+        fundService.putNav(fund.id(), new FundDtos.NavRequest(
+                LocalDate.of(2026, 9, 1), new BigDecimal("1.2345"), "MANUAL"));
+        AutoDcaDtos.RuleResponse rule = autoDcaService.create(new AutoDcaDtos.RuleRequest(
+                code, new BigDecimal("100"), LocalDate.of(2026, 9, 1), null,
+                BigDecimal.ZERO, true));
+
+        assertEquals(fund.id(), fundService.delete(fund.id()));
+
+        assertThrows(DomainException.class, () -> fundService.get(fund.id()));
+        assertTrue(fundService.list().stream().noneMatch(item -> item.id().equals(fund.id())));
+        assertTrue(autoDcaService.list().stream().noneMatch(item -> item.id().equals(rule.id())));
     }
 }

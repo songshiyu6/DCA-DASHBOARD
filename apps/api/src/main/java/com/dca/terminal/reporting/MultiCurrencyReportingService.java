@@ -4,8 +4,10 @@ import com.dca.terminal.common.FreshnessStatus;
 import com.dca.terminal.fund.AutoDcaDtos;
 import com.dca.terminal.fund.AutoDcaProjectionEngine;
 import com.dca.terminal.fund.AutoDcaService;
+import com.dca.terminal.fund.FundDtos;
 import com.dca.terminal.fund.FundMarketCalendarDayRepository;
 import com.dca.terminal.fund.FundProfileRepository;
+import com.dca.terminal.fund.FundPurchaseService;
 import com.dca.terminal.fx.FxDtos;
 import com.dca.terminal.fx.FxRateEntity;
 import com.dca.terminal.fx.FxService;
@@ -38,12 +40,13 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class MultiCurrencyReportingService {
     private static final MathContext MC = new MathContext(34, RoundingMode.HALF_EVEN);
-    private static final String FLOW_MODEL = "USD_CASH_LEDGER_PLUS_CNY_AUTO_DCA_AT_HISTORICAL_USDCNY";
+    private static final String FLOW_MODEL = "USD_CASH_LEDGER_PLUS_CNY_FUND_ACTIVITY_AT_HISTORICAL_USDCNY";
     private static final long MAX_FX_CARRY_DAYS = 7;
 
     private final PortfolioService portfolioService;
     private final CashLedgerPortfolioPerformanceSource usdPerformanceSource;
     private final AutoDcaService autoDcaService;
+    private final FundPurchaseService purchaseService;
     private final FundNavDailyRepository navRepository;
     private final FundProfileRepository profileRepository;
     private final FundMarketCalendarDayRepository calendarRepository;
@@ -54,6 +57,7 @@ public class MultiCurrencyReportingService {
             PortfolioService portfolioService,
             CashLedgerPortfolioPerformanceSource usdPerformanceSource,
             AutoDcaService autoDcaService,
+            FundPurchaseService purchaseService,
             FundNavDailyRepository navRepository,
             FundProfileRepository profileRepository,
             FundMarketCalendarDayRepository calendarRepository,
@@ -62,6 +66,7 @@ public class MultiCurrencyReportingService {
         this.portfolioService = portfolioService;
         this.usdPerformanceSource = usdPerformanceSource;
         this.autoDcaService = autoDcaService;
+        this.purchaseService = purchaseService;
         this.navRepository = navRepository;
         this.profileRepository = profileRepository;
         this.calendarRepository = calendarRepository;
@@ -75,11 +80,12 @@ public class MultiCurrencyReportingService {
         PortfolioDtos.SummaryResponse usdSummary = portfolioService.summary();
         List<PortfolioDtos.HistoryPoint> usdHistory = portfolioService.history("ALL");
         List<RuleState> states = ruleStates(today);
-        boolean hasCnyActivity = states.stream().anyMatch(state ->
+        List<PurchaseState> purchases = purchaseStates(today);
+        boolean hasCnyActivity = !purchases.isEmpty() || states.stream().anyMatch(state ->
                 !state.projection().daily().isEmpty() || !state.missingExecutionNavDates().isEmpty());
         if (!hasCnyActivity) return usdOnlyReport(range, usdSummary);
 
-        LocalDate firstFxDate = firstCnyRelevantDate(states, today);
+        LocalDate firstFxDate = firstCnyRelevantDate(states, purchases, today);
         TreeMap<LocalDate, BigDecimal> fxRates = fxRates(firstFxDate, today);
 
         List<PortfolioPerformanceSource.ExternalCashFlow> fundFlows = new ArrayList<>();
@@ -94,6 +100,15 @@ public class MultiCurrencyReportingService {
                 fundFlows.add(new PortfolioPerformanceSource.ExternalCashFlow(execution.navDate(),
                         execution.grossAmount().divide(rate, MC)));
             }
+        }
+        for (PurchaseState state : purchases) {
+            BigDecimal rate = fxRate(fxRates, state.purchase().purchaseDate());
+            if (rate == null || rate.signum() <= 0) {
+                flowComplete = false;
+                continue;
+            }
+            fundFlows.add(new PortfolioPerformanceSource.ExternalCashFlow(state.purchase().purchaseDate(),
+                    state.purchase().grossAmount().divide(rate, MC)));
         }
         fundFlows.sort(Comparator.comparing(PortfolioPerformanceSource.ExternalCashFlow::date));
         final boolean reportingFlowComplete = flowComplete;
@@ -110,6 +125,11 @@ public class MultiCurrencyReportingService {
             valuationDates.addAll(state.openDates());
             valuationDates.addAll(state.missingExecutionNavDates());
         });
+        purchases.forEach(state -> {
+            valuationDates.add(state.purchase().purchaseDate());
+            valuationDates.addAll(state.navByDate().keySet());
+            valuationDates.addAll(state.openDates());
+        });
         if (valuationDates.isEmpty()) valuationDates.add(today);
 
         List<PortfolioPerformanceSource.DailyValuation> combinedHistory = new ArrayList<>();
@@ -122,7 +142,7 @@ public class MultiCurrencyReportingService {
             FreshnessStatus status = usdEntry == null || usdValue.signum() == 0
                     ? FreshnessStatus.FRESH : usdEntry.getValue().status();
 
-            Valuation fundValuation = fundValuation(states, fxRates, date);
+            Valuation fundValuation = fundValuation(states, purchases, fxRates, date);
             if (!fundValuation.complete()) status = FreshnessStatus.PARTIAL;
             BigDecimal totalValue = fundValuation.valueUsd() == null ? null : usdValue.add(fundValuation.valueUsd(), MC);
             BigDecimal fundFlow = floor(cumulativeFundFlow, date);
@@ -133,9 +153,10 @@ public class MultiCurrencyReportingService {
         }
 
         FxRateEntity currentRate = currentFxRate(today);
-        Valuation currentFunds = fundValuation(states, fxRates, today);
-        boolean currentFundFactsComplete = states.stream().allMatch(state -> fundFactsCompleteOn(state, today));
-        BigDecimal cnyValue = currentFundFactsComplete ? currentFundValueCny(states, today) : null;
+        Valuation currentFunds = fundValuation(states, purchases, fxRates, today);
+        boolean currentFundFactsComplete = states.stream().allMatch(state -> fundFactsCompleteOn(state, today))
+                && purchases.stream().allMatch(state -> fundFactsCompleteOn(state, today));
+        BigDecimal cnyValue = currentFundFactsComplete ? currentFundValueCny(states, purchases, today) : null;
         BigDecimal cnyValueUsd = currentFunds.valueUsd();
         BigDecimal combinedValue = cnyValueUsd == null || usdSummary.marketValue() == null
                 ? null : usdSummary.marketValue().add(cnyValueUsd, MC);
@@ -149,7 +170,7 @@ public class MultiCurrencyReportingService {
                 && currentFunds.complete() && reportingFlowComplete ? FreshnessStatus.FRESH : FreshnessStatus.PARTIAL;
 
         List<MultiCurrencyDtos.FundPosition> positions = currentFundFactsComplete
-                ? currentFundPositions(states, fxRates, today)
+                ? currentFundPositions(states, purchases, fxRates, today)
                 : List.of();
         MultiCurrencyDtos.Summary summary = new MultiCurrencyDtos.Summary(
                 FxService.USD, usdSummary.marketValue(), cnyValue, cnyValueUsd, combinedValue,
@@ -229,6 +250,21 @@ public class MultiCurrencyReportingService {
         return List.copyOf(result);
     }
 
+    private List<PurchaseState> purchaseStates(LocalDate today) {
+        Map<UUID, TreeMap<LocalDate, BigDecimal>> navCache = new HashMap<>();
+        List<PurchaseState> result = new ArrayList<>();
+        for (FundDtos.FundPurchaseResponse purchase : purchaseService.listAll()) {
+            TreeMap<LocalDate, BigDecimal> nav = navCache.computeIfAbsent(purchase.fundId(), this::navByDate);
+            Set<LocalDate> openDates = profileRepository.findById(purchase.fundId())
+                    .map(profile -> calendarRepository.findAllByCalendarCodeAndMarketDateBetweenOrderByMarketDateAsc(
+                                    profile.getCalendarCode(), purchase.purchaseDate(), today).stream()
+                            .map(item -> item.getMarketDate()).collect(java.util.stream.Collectors.toSet()))
+                    .orElse(Set.of());
+            result.add(new PurchaseState(purchase, nav, openDates));
+        }
+        return List.copyOf(result);
+    }
+
     private TreeMap<LocalDate, BigDecimal> navByDate(UUID instrumentId) {
         TreeMap<LocalDate, BigDecimal> result = new TreeMap<>();
         Map<LocalDate, FundNavDailyEntity> selected = new LinkedHashMap<>();
@@ -238,7 +274,7 @@ public class MultiCurrencyReportingService {
         return result;
     }
 
-    private LocalDate firstCnyRelevantDate(List<RuleState> states, LocalDate fallback) {
+    private LocalDate firstCnyRelevantDate(List<RuleState> states, List<PurchaseState> purchases, LocalDate fallback) {
         LocalDate first = null;
         for (RuleState state : states) {
             for (AutoDcaDtos.DailyExecutionResponse execution : state.projection().daily()) {
@@ -247,6 +283,10 @@ public class MultiCurrencyReportingService {
             for (LocalDate missing : state.missingExecutionNavDates()) {
                 if (first == null || missing.isBefore(first)) first = missing;
             }
+        }
+        for (PurchaseState state : purchases) {
+            LocalDate date = state.purchase().purchaseDate();
+            if (first == null || date.isBefore(first)) first = date;
         }
         return first == null ? fallback : first;
     }
@@ -267,7 +307,10 @@ public class MultiCurrencyReportingService {
         return rate;
     }
 
-    private Valuation fundValuation(List<RuleState> states, TreeMap<LocalDate, BigDecimal> fxRates, LocalDate date) {
+    private Valuation fundValuation(List<RuleState> states,
+                                    List<PurchaseState> purchases,
+                                    TreeMap<LocalDate, BigDecimal> fxRates,
+                                    LocalDate date) {
         BigDecimal rate = fxRate(fxRates, date);
         BigDecimal total = BigDecimal.ZERO;
         boolean complete = true;
@@ -287,6 +330,17 @@ public class MultiCurrencyReportingService {
             BigDecimal valueCny = shares.multiply(navEntry.getValue(), MC);
             total = total.add(valueCny.divide(rate, MC), MC);
         }
+        for (PurchaseState state : purchases) {
+            if (state.purchase().purchaseDate().isAfter(date)) continue;
+            Map.Entry<LocalDate, BigDecimal> navEntry = state.navByDate().floorEntry(date);
+            if (navEntry == null || rate == null || rate.signum() <= 0) {
+                complete = false;
+                continue;
+            }
+            if (hasUnresolvedNavGapAfter(state, navEntry.getKey(), date)) complete = false;
+            BigDecimal valueCny = state.purchase().shares().multiply(navEntry.getValue(), MC);
+            total = total.add(valueCny.divide(rate, MC), MC);
+        }
         return new Valuation(complete ? total : null, complete);
     }
 
@@ -294,6 +348,12 @@ public class MultiCurrencyReportingService {
         if (hasMissingExecutionOnOrBefore(state, date)) return false;
         BigDecimal shares = floor(state.cumulativeShares(), date);
         if (shares == null || shares.signum() == 0) return true;
+        Map.Entry<LocalDate, BigDecimal> navEntry = state.navByDate().floorEntry(date);
+        return navEntry != null && !hasUnresolvedNavGapAfter(state, navEntry.getKey(), date);
+    }
+
+    private boolean fundFactsCompleteOn(PurchaseState state, LocalDate date) {
+        if (state.purchase().purchaseDate().isAfter(date)) return true;
         Map.Entry<LocalDate, BigDecimal> navEntry = state.navByDate().floorEntry(date);
         return navEntry != null && !hasUnresolvedNavGapAfter(state, navEntry.getKey(), date);
     }
@@ -308,7 +368,13 @@ public class MultiCurrencyReportingService {
                 && !state.navByDate().containsKey(openDate));
     }
 
-    private BigDecimal currentFundValueCny(List<RuleState> states, LocalDate date) {
+    private boolean hasUnresolvedNavGapAfter(PurchaseState state, LocalDate navDate, LocalDate valuationDate) {
+        return state.openDates().stream().anyMatch(openDate -> openDate.isAfter(navDate)
+                && !openDate.isAfter(valuationDate)
+                && !state.navByDate().containsKey(openDate));
+    }
+
+    private BigDecimal currentFundValueCny(List<RuleState> states, List<PurchaseState> purchases, LocalDate date) {
         BigDecimal total = BigDecimal.ZERO;
         for (RuleState state : states) {
             BigDecimal shares = floor(state.cumulativeShares(), date);
@@ -316,11 +382,20 @@ public class MultiCurrencyReportingService {
             if (shares == null || shares.signum() == 0 || nav == null) continue;
             total = total.add(shares.multiply(nav.getValue(), MC), MC);
         }
+        for (PurchaseState state : purchases) {
+            if (state.purchase().purchaseDate().isAfter(date)) continue;
+            Map.Entry<LocalDate, BigDecimal> nav = state.navByDate().floorEntry(date);
+            if (nav == null) continue;
+            total = total.add(state.purchase().shares().multiply(nav.getValue(), MC), MC);
+        }
         return total;
     }
 
     private List<MultiCurrencyDtos.FundPosition> currentFundPositions(
-            List<RuleState> states, TreeMap<LocalDate, BigDecimal> fxRates, LocalDate date) {
+            List<RuleState> states,
+            List<PurchaseState> purchases,
+            TreeMap<LocalDate, BigDecimal> fxRates,
+            LocalDate date) {
         BigDecimal rate = fxRate(fxRates, date);
         Map<String, FundPositionAccumulator> grouped = new LinkedHashMap<>();
         for (RuleState state : states) {
@@ -332,6 +407,18 @@ public class MultiCurrencyReportingService {
             item.shares = item.shares.add(shares, MC);
             item.nav = nav.getValue();
             item.navDate = nav.getKey();
+        }
+        for (PurchaseState state : purchases) {
+            if (state.purchase().purchaseDate().isAfter(date)) continue;
+            Map.Entry<LocalDate, BigDecimal> nav = state.navByDate().floorEntry(date);
+            if (nav == null) continue;
+            FundPositionAccumulator item = grouped.computeIfAbsent(state.purchase().fundCode(), ignored ->
+                    new FundPositionAccumulator(state.purchase().fundCode(), state.purchase().fundName()));
+            item.shares = item.shares.add(state.purchase().shares(), MC);
+            if (item.navDate == null || nav.getKey().isAfter(item.navDate)) {
+                item.nav = nav.getValue();
+                item.navDate = nav.getKey();
+            }
         }
         return grouped.values().stream().map(item -> {
             BigDecimal cny = item.shares.multiply(item.nav, MC);
@@ -370,6 +457,11 @@ public class MultiCurrencyReportingService {
             TreeMap<LocalDate, BigDecimal> cumulativeShares,
             Set<LocalDate> openDates,
             Set<LocalDate> missingExecutionNavDates) { }
+
+    private record PurchaseState(
+            FundDtos.FundPurchaseResponse purchase,
+            TreeMap<LocalDate, BigDecimal> navByDate,
+            Set<LocalDate> openDates) { }
 
     private record Valuation(BigDecimal valueUsd, boolean complete) { }
 

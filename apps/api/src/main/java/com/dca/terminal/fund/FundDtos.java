@@ -33,6 +33,8 @@ public final class FundDtos {
             String shareClass,
             String calendarCode) { }
 
+    public record FundDeleteResponse(UUID id) { }
+
     public record NavRequest(
             @NotNull LocalDate navDate,
             @NotNull @DecimalMin(value = "0", inclusive = false) BigDecimal nav,

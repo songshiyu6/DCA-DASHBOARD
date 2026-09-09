@@ -27,17 +27,20 @@ public class FundService {
     private final FundProfileRepository profileRepository;
     private final FundNavDailyRepository navRepository;
     private final AutoDcaRuleRepository ruleRepository;
+    private final FundPurchaseRepository purchaseRepository;
     private final Clock clock;
 
     public FundService(InstrumentRepository instrumentRepository,
                        FundProfileRepository profileRepository,
                        FundNavDailyRepository navRepository,
                        AutoDcaRuleRepository ruleRepository,
+                       FundPurchaseRepository purchaseRepository,
                        Clock clock) {
         this.instrumentRepository = instrumentRepository;
         this.profileRepository = profileRepository;
         this.navRepository = navRepository;
         this.ruleRepository = ruleRepository;
+        this.purchaseRepository = purchaseRepository;
         this.clock = clock;
     }
 
@@ -113,6 +116,8 @@ public class FundService {
         FundProfileEntity profile = profile(id);
         InstrumentEntity instrument = profile.getInstrument();
 
+        purchaseRepository.deleteAllByInstrumentId(id);
+        purchaseRepository.flush();
         navRepository.deleteAllByInstrumentId(id);
         navRepository.flush();
         ruleRepository.deleteAllByInstrumentId(id);

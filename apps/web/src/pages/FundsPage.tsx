@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, CalendarDays, ChevronDown, ChevronRight, Edit3, Plus, RefreshCw, Search, X } from 'lucide-react'
+import { AlertTriangle, CalendarDays, ChevronDown, ChevronRight, Edit3, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { DataStateBanner, EmptyState, ErrorState, LoadingBlock } from '../components/DataState'
 import { Dialog } from '../components/Dialog'
@@ -19,7 +19,8 @@ function copy(isZh: boolean) {
   return isZh ? {
     eyebrow: '人民币资产 · 国内基金', title: '国内基金定投', subtitle: '以规则和真实基金净值重建每日定投，默认按月/年聚合。当前阶段不计入美元总资产。',
     addFund: '添加基金', funds: '基金', noFunds: '还没有国内基金', noFundsHint: '输入 6 位基金代码即可自动获取基金资料并同步历史净值。',
-    latestNav: '最新净值', navDate: '净值日期', gaps: '缺失净值', openDays: '开放日', sync: '同步全部 NAV', syncing: '同步中…', edit: '编辑',
+    latestNav: '最新净值', navDate: '净值日期', gaps: '缺失净值', openDays: '开放日', sync: '同步全部 NAV', syncing: '同步中…', edit: '编辑', delete: '删除基金', deleting: '删除中…',
+    deleteTitle: '删除国内基金', deleteWarning: '删除后无法恢复。该基金、自动定投规则和已同步的历史净值都会永久删除；共享的中国交易日历不会删除。', deleteConfirm: '确认删除',
     source: '数据源', calendarUnavailable: '尚未同步中国交易日历', calendarHealthy: '最近范围没有发现开放日 NAV 缺口', calendarGap: '开放日缺少 NAV，不会生成对应定投。',
     rules: '自动定投规则', addRule: '添加规则', noRules: '这个基金还没有自动定投规则', amountPerDay: '每开放日投入', start: '开始', end: '结束', fee: '申购费', enabled: '启用', disabled: '停用',
     monthly: '按月', yearly: '按年', projection: '定投汇总', period: '期间', executions: '次数', confirmed: '已确认', invested: '投入', fees: '申购费', shares: '份额', avgCost: '平均成本', value: '当前价值', pnl: '盈亏', returnRate: '收益率',
@@ -35,7 +36,8 @@ function copy(isZh: boolean) {
   } : {
     eyebrow: 'CNY assets · China funds', title: 'China fund DCA', subtitle: 'Rebuild daily DCA from rules and observed fund NAV, summarized by month or year. CNY assets are not yet merged into the USD portfolio.',
     addFund: 'Add fund', funds: 'Funds', noFunds: 'No China funds yet', noFundsHint: 'Enter a six-digit fund code to fetch metadata and historical NAV automatically.',
-    latestNav: 'Latest NAV', navDate: 'NAV date', gaps: 'Missing NAV', openDays: 'Open days', sync: 'Sync all NAV', syncing: 'Syncing…', edit: 'Edit',
+    latestNav: 'Latest NAV', navDate: 'NAV date', gaps: 'Missing NAV', openDays: 'Open days', sync: 'Sync all NAV', syncing: 'Syncing…', edit: 'Edit', delete: 'Delete fund', deleting: 'Deleting…',
+    deleteTitle: 'Delete China fund', deleteWarning: 'This cannot be undone. The fund, its auto-DCA rules, and all synced historical NAV will be permanently deleted. The shared China trading calendar is kept.', deleteConfirm: 'Delete fund',
     source: 'Source', calendarUnavailable: 'China trading calendar has not been synced yet', calendarHealthy: 'No open-day NAV gaps found in the current range', calendarGap: 'Open day has no NAV, so no DCA execution is created.',
     rules: 'Auto-DCA rules', addRule: 'Add rule', noRules: 'No auto-DCA rule for this fund', amountPerDay: 'Per open day', start: 'Start', end: 'End', fee: 'Purchase fee', enabled: 'Enabled', disabled: 'Disabled',
     monthly: 'Monthly', yearly: 'Yearly', projection: 'DCA summary', period: 'Period', executions: 'Runs', confirmed: 'Confirmed', invested: 'Invested', fees: 'Fees', shares: 'Shares', avgCost: 'Avg cost', value: 'Current value', pnl: 'P/L', returnRate: 'Return',
@@ -94,6 +96,7 @@ export function FundsPage() {
   const [editingFund, setEditingFund] = useState<MutualFund | null>(null)
   const [fundForm, setFundForm] = useState(emptyFundForm)
   const [fundLookup, setFundLookup] = useState<FundLookupResult | null>(null)
+  const [fundToDelete, setFundToDelete] = useState<MutualFund | null>(null)
   const [ruleDialogOpen, setRuleDialogOpen] = useState(false)
   const [editingRule, setEditingRule] = useState<AutoDcaRule | null>(null)
   const [ruleForm, setRuleForm] = useState({ amount: '100', startDate: today(), endDate: '', purchaseFeeRate: '0', enabled: true })
@@ -168,6 +171,17 @@ export function FundsPage() {
       setSelectedFundId(result.data.id)
       setFundDialogOpen(false)
       if (!variables.id) syncFund.mutate({ id: result.data.id, code: result.data.code })
+    },
+  })
+
+  const deleteFund = useMutation({
+    mutationFn: (id: string) => api.deleteFund(id),
+    onSuccess: async (_result, id) => {
+      setFundToDelete(null)
+      setSelectedRuleId(null)
+      setExpandedPeriod(null)
+      await invalidateFundQueries(queryClient, id)
+      await queryClient.invalidateQueries({ queryKey: ['auto-dca-projection'] })
     },
   })
 
@@ -270,7 +284,7 @@ export function FundsPage() {
     if (!expandedPeriod) return false
     return groupBy === 'YEAR' ? row.navDate.slice(0, 4) === expandedPeriod : row.navDate.slice(0, 7) === expandedPeriod
   })
-  const operationError = saveFund.error ?? syncFund.error ?? putNav.error ?? saveRule.error
+  const operationError = saveFund.error ?? deleteFund.error ?? syncFund.error ?? putNav.error ?? saveRule.error
   const creatingFund = !editingFund
   const metadataVisible = Boolean(editingFund || fundLookup || lookupFund.isError)
   const lookupManagementResolved = Boolean(fundLookup?.managementFeeRate)
@@ -291,7 +305,7 @@ export function FundsPage() {
       </Panel>
 
       <div className="fund-detail-stack">{selectedFund ? <>
-        <Panel title={`${selectedFund.code} · ${selectedFund.name}`} detail={`${t.selectedFund} · CNY`} action={<div className="fund-panel-actions"><button type="button" className="button button-secondary button-small" onClick={() => openFund(selectedFund)}><Edit3 size={14} />{t.edit}</button><button type="button" className="button button-secondary button-small" disabled={syncFund.isPending} onClick={() => syncFund.mutate({ id: selectedFund.id, code: selectedFund.code })}><RefreshCw size={14} className={syncFund.isPending ? 'spin' : ''} />{syncFund.isPending ? t.syncing : t.sync}</button></div>}>
+        <Panel title={`${selectedFund.code} · ${selectedFund.name}`} detail={`${t.selectedFund} · CNY`} action={<div className="fund-panel-actions"><button type="button" className="button button-secondary button-small" onClick={() => openFund(selectedFund)}><Edit3 size={14} />{t.edit}</button><button type="button" className="button button-secondary button-small" disabled={syncFund.isPending || deleteFund.isPending} onClick={() => syncFund.mutate({ id: selectedFund.id, code: selectedFund.code })}><RefreshCw size={14} className={syncFund.isPending ? 'spin' : ''} />{syncFund.isPending ? t.syncing : t.sync}</button><button type="button" className="button button-secondary button-small fund-delete-trigger" disabled={deleteFund.isPending} onClick={() => setFundToDelete(selectedFund)}><Trash2 size={14} />{t.delete}</button></div>}>
           <DataStateBanner status={nav.data?.meta.status ?? (nav.isError ? 'UNAVAILABLE' : 'STALE')} source={latestNav?.source ?? nav.data?.meta.source} retrievedAt={latestNav?.retrievedAt ?? nav.data?.meta.retrievedAt} />
           <div className="fund-stat-grid">
             <div className="fund-stat"><span>{t.latestNav}</span><strong>{navValue(latestNav?.nav)}</strong><small>{latestNav?.source ?? '—'}</small></div>
@@ -337,6 +351,8 @@ export function FundsPage() {
       </> : null}
       <div className="fund-form-actions"><button type="button" className="button button-secondary" onClick={() => setFundDialogOpen(false)}>{t.cancel}</button><button type="submit" className="button button-primary" disabled={saveFund.isPending || !metadataVisible}>{t.save}</button></div>
     </form></Dialog> : null}
+
+    {fundToDelete ? <Dialog labelledBy="fund-delete-dialog-title" onClose={() => { if (!deleteFund.isPending) setFundToDelete(null) }}><button type="button" className="modal-close icon-button" disabled={deleteFund.isPending} onClick={() => setFundToDelete(null)} aria-label={t.cancel}><X size={17} /></button><h2 id="fund-delete-dialog-title">{t.deleteTitle}</h2><p className="fund-delete-name"><strong>{fundToDelete.code}</strong> · {fundToDelete.name}</p><div className="fund-delete-warning"><AlertTriangle size={17} /><span>{t.deleteWarning}</span></div><div className="fund-form-actions"><button type="button" className="button button-secondary" disabled={deleteFund.isPending} onClick={() => setFundToDelete(null)}>{t.cancel}</button><button type="button" className="button fund-delete-confirm" disabled={deleteFund.isPending} onClick={() => deleteFund.mutate(fundToDelete.id)}><Trash2 size={15} />{deleteFund.isPending ? t.deleting : t.deleteConfirm}</button></div></Dialog> : null}
 
     {ruleDialogOpen && selectedFund ? <Dialog labelledBy="rule-dialog-title" onClose={() => setRuleDialogOpen(false)}><button type="button" className="modal-close icon-button" onClick={() => setRuleDialogOpen(false)} aria-label={t.cancel}><X size={17} /></button><h2 id="rule-dialog-title">{editingRule ? t.ruleDialogEdit : t.ruleDialogCreate}</h2><p className="fund-dialog-context">{selectedFund.code} · {selectedFund.name}</p><form className="fund-form" onSubmit={submitRule}><label><span>{t.amountPerDay}</span><input required inputMode="decimal" value={ruleForm.amount} onChange={(event) => setRuleForm({ ...ruleForm, amount: event.target.value })} /></label><div className="fund-form-row"><label><span>{t.start}</span><input required type="date" value={ruleForm.startDate} onChange={(event) => setRuleForm({ ...ruleForm, startDate: event.target.value })} /></label><label><span>{t.end}</span><input type="date" value={ruleForm.endDate} onChange={(event) => setRuleForm({ ...ruleForm, endDate: event.target.value })} /><small>{t.noEnd}</small></label></div><label><span>{t.purchaseFee}</span><input required inputMode="decimal" value={ruleForm.purchaseFeeRate} onChange={(event) => setRuleForm({ ...ruleForm, purchaseFeeRate: event.target.value })} /><small>{t.purchaseFeeHint}</small></label><label className="fund-checkbox"><input type="checkbox" checked={ruleForm.enabled} onChange={(event) => setRuleForm({ ...ruleForm, enabled: event.target.checked })} /><span>{t.enabled}</span></label><div className="fund-rewrite-note">{t.historyRewrite}</div><div className="fund-form-actions"><button type="button" className="button button-secondary" onClick={() => setRuleDialogOpen(false)}>{t.cancel}</button><button type="submit" className="button button-primary" disabled={saveRule.isPending}>{t.save}</button></div></form></Dialog> : null}
 

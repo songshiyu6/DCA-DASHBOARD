@@ -11,6 +11,8 @@ public interface FundNavDailyRepository extends JpaRepository<FundNavDailyEntity
     Optional<FundNavDailyEntity> findTopByInstrumentIdOrderByNavDateDesc(UUID instrumentId);
     Optional<FundNavDailyEntity> findByInstrumentIdAndNavDateAndSource(
             UUID instrumentId, LocalDate date, String source);
+    Optional<FundNavDailyEntity> findFirstByInstrumentIdAndNavDateOrderByRetrievedAtDesc(
+            UUID instrumentId, LocalDate date);
     List<FundNavDailyEntity> findAllByInstrumentIdOrderByNavDateAscRetrievedAtDesc(UUID instrumentId);
     long deleteAllByInstrumentId(UUID instrumentId);
 }

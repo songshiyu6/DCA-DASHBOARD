@@ -9,6 +9,7 @@ import com.dca.terminal.fund.FundMarketCalendarDayEntity;
 import com.dca.terminal.fund.FundMarketCalendarDayRepository;
 import com.dca.terminal.fund.FundProfileEntity;
 import com.dca.terminal.fund.FundProfileRepository;
+import com.dca.terminal.fund.FundPurchaseService;
 import com.dca.terminal.fx.FxDtos;
 import com.dca.terminal.fx.FxRateEntity;
 import com.dca.terminal.fx.FxService;
@@ -42,6 +43,7 @@ class MultiCurrencyMissingExecutionTest {
     @Mock PortfolioService portfolioService;
     @Mock CashLedgerPortfolioPerformanceSource usdPerformanceSource;
     @Mock AutoDcaService autoDcaService;
+    @Mock FundPurchaseService purchaseService;
     @Mock FundNavDailyRepository navRepository;
     @Mock FundProfileRepository profileRepository;
     @Mock FundMarketCalendarDayRepository calendarRepository;
@@ -52,8 +54,9 @@ class MultiCurrencyMissingExecutionTest {
     @BeforeEach
     void setUp() {
         service = new MultiCurrencyReportingService(portfolioService, usdPerformanceSource, autoDcaService,
-                navRepository, profileRepository, calendarRepository, fxService,
+                purchaseService, navRepository, profileRepository, calendarRepository, fxService,
                 Clock.fixed(Instant.parse("2026-09-08T12:00:00Z"), ZoneOffset.UTC));
+        when(purchaseService.listAll()).thenReturn(List.of());
     }
 
     @Test
@@ -103,7 +106,7 @@ class MultiCurrencyMissingExecutionTest {
         assertThat(result.summary().combinedExternalFlowUsd()).isNull();
         assertThat(result.summary().combinedPnlUsd()).isNull();
         assertThat(result.performance().externalFlowModel())
-                .isEqualTo("USD_CASH_LEDGER_PLUS_CNY_AUTO_DCA_AT_HISTORICAL_USDCNY");
+                .isEqualTo("USD_CASH_LEDGER_PLUS_CNY_FUND_ACTIVITY_AT_HISTORICAL_USDCNY");
         assertThat(result.performance().liveEndpointIncluded()).isFalse();
     }
 

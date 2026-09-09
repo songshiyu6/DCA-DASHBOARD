@@ -22,6 +22,7 @@ export const queryKeys = {
   transactionCycles: (id: string) => ['transaction-cycles', id] as const,
   settings: ['settings'] as const,
   funds: ['funds'] as const,
+  fundPurchases: (id: string) => ['fund-purchases', id] as const,
   fundNav: (id: string) => ['fund-nav', id] as const,
   fundCalendar: (id: string) => ['fund-calendar', id] as const,
   autoDcaRules: ['auto-dca-rules'] as const,
@@ -57,7 +58,7 @@ export function invalidateInstrumentHistoryQueries(queryClient: QueryClient, sym
 
 export function invalidateFundQueries(queryClient: QueryClient, fundId?: string): Promise<void> {
   const keys: QueryKey[] = [queryKeys.funds, queryKeys.autoDcaRules, queryKeys.multiCurrencyReports]
-  if (fundId) keys.push(queryKeys.fundNav(fundId), queryKeys.fundCalendar(fundId))
+  if (fundId) keys.push(queryKeys.fundPurchases(fundId), queryKeys.fundNav(fundId), queryKeys.fundCalendar(fundId))
   return Promise.all(keys.map((queryKey) => invalidate(queryClient, queryKey))).then(() => undefined)
 }
 

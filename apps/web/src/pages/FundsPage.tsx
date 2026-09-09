@@ -5,6 +5,7 @@ import { AlertTriangle, CalendarDays, ChevronDown, ChevronRight, Edit3, Plus, Re
 import { useTranslation } from 'react-i18next'
 import { DataStateBanner, EmptyState, ErrorState, LoadingBlock } from '../components/DataState'
 import { Dialog } from '../components/Dialog'
+import { FundPurchasesPanel } from '../components/FundPurchasesPanel'
 import { FundNavChart } from '../components/charts/FundNavChart'
 import { Panel } from '../components/Panel'
 import { api } from '../lib/api'
@@ -17,10 +18,10 @@ const emptyFundForm = () => ({ code: '', name: '', managementFeeRate: '', confir
 
 function copy(isZh: boolean) {
   return isZh ? {
-    eyebrow: '人民币资产 · 国内基金', title: '国内基金定投', subtitle: '以规则和真实基金净值重建每日定投，默认按月/年聚合。当前阶段不计入美元总资产。',
+    eyebrow: '人民币资产 · 国内基金', title: '国内基金投资', subtitle: '同时支持一次性买入与自动定投，并基于真实基金净值重建持仓和收益。',
     addFund: '添加基金', funds: '基金', noFunds: '还没有国内基金', noFundsHint: '输入 6 位基金代码即可自动获取基金资料并同步历史净值。',
     latestNav: '最新净值', navDate: '净值日期', gaps: '缺失净值', openDays: '开放日', sync: '同步全部 NAV', syncing: '同步中…', edit: '编辑', delete: '删除基金', deleting: '删除中…',
-    deleteTitle: '删除国内基金', deleteWarning: '删除后无法恢复。该基金、自动定投规则和已同步的历史净值都会永久删除；共享的中国交易日历不会删除。', deleteConfirm: '确认删除',
+    deleteTitle: '删除国内基金', deleteWarning: '删除后无法恢复。该基金、一次性买入记录、自动定投规则和已同步的历史净值都会永久删除；共享的中国交易日历不会删除。', deleteConfirm: '确认删除',
     source: '数据源', calendarUnavailable: '尚未同步中国交易日历', calendarHealthy: '最近范围没有发现开放日 NAV 缺口', calendarGap: '开放日缺少 NAV，不会生成对应定投。',
     rules: '自动定投规则', addRule: '添加规则', noRules: '这个基金还没有自动定投规则', amountPerDay: '每开放日投入', start: '开始', end: '结束', fee: '申购费', enabled: '启用', disabled: '停用',
     monthly: '按月', yearly: '按年', projection: '定投汇总', period: '期间', executions: '次数', confirmed: '已确认', invested: '投入', fees: '申购费', shares: '份额', avgCost: '平均成本', value: '当前价值', pnl: '盈亏', returnRate: '收益率',
@@ -30,14 +31,14 @@ function copy(isZh: boolean) {
     lookup: '查询', lookingUp: '查询中…', lookupHint: '输入 6 位基金代码，从东方财富自动获取名称、类型、成立日、管理费率、确认日和最新净值。', lookupOk: '已自动获取基金资料', lookupFallback: '自动查询失败，可手动补全资料后继续保存。', autoField: '数据源已自动填充；如无法获取才需要手工输入。',
     fundType: '基金类型', inceptionDate: '成立日期', historyAvailability: '历史净值', historyAvailable: '可获取', historyUnavailable: '暂未获取',
     navHistory: '历史净值曲线', navHistoryHint: '曲线来自已同步的单位净值；同步时会尽量从基金成立日开始补齐。', noNavHistory: '当前还没有足够的历史净值数据。',
-    ruleDialogCreate: '添加自动定投规则', ruleDialogEdit: '编辑自动定投规则', purchaseFee: '申购费率', purchaseFeeHint: '小数口径，例如 0.0015 = 0.15%。定投金额按实际支付总额计算。', noEnd: '留空表示持续', historyRewrite: '修改规则会重算整个历史派生结果，不会修改真实交易流水。',
-    manualNav: '补录 NAV', manualNavDate: 'NAV 日期', manualNavValue: '单位净值', addNav: '写入', selectedFund: '当前基金', phaseBoundary: 'CNY 基金目前独立展示；FX、多币种现金账本和总资产/TWR/XIRR 合并在后续阶段处理。',
+    ruleDialogCreate: '添加自动定投规则', ruleDialogEdit: '编辑自动定投规则', purchaseFee: '申购费率', purchaseFeeHint: '小数口径，例如 0.0015 = 0.15%。定投金额按实际支付总额计算。', noEnd: '留空表示持续', historyRewrite: '修改规则会重算整个历史派生结果，不会修改一次性买入记录或美元真实交易流水。',
+    manualNav: '补录 NAV', manualNavDate: 'NAV 日期', manualNavValue: '单位净值', addNav: '写入', selectedFund: '当前基金', phaseBoundary: '一次性买入和自动定投都会计入多币种持仓与收益；CNY 基金仍与 USD 现金账本分开记账。',
     error: '操作失败', providerHint: '自动同步使用独立基金数据源；上游失败不会删除已有 NAV。', expand: '展开日级', collapse: '收起日级',
   } : {
-    eyebrow: 'CNY assets · China funds', title: 'China fund DCA', subtitle: 'Rebuild daily DCA from rules and observed fund NAV, summarized by month or year. CNY assets are not yet merged into the USD portfolio.',
+    eyebrow: 'CNY assets · China funds', title: 'China fund investing', subtitle: 'Supports both one-time purchases and automatic DCA, with holdings and returns rebuilt from observed fund NAV.',
     addFund: 'Add fund', funds: 'Funds', noFunds: 'No China funds yet', noFundsHint: 'Enter a six-digit fund code to fetch metadata and historical NAV automatically.',
     latestNav: 'Latest NAV', navDate: 'NAV date', gaps: 'Missing NAV', openDays: 'Open days', sync: 'Sync all NAV', syncing: 'Syncing…', edit: 'Edit', delete: 'Delete fund', deleting: 'Deleting…',
-    deleteTitle: 'Delete China fund', deleteWarning: 'This cannot be undone. The fund, its auto-DCA rules, and all synced historical NAV will be permanently deleted. The shared China trading calendar is kept.', deleteConfirm: 'Delete fund',
+    deleteTitle: 'Delete China fund', deleteWarning: 'This cannot be undone. The fund, one-time purchases, auto-DCA rules, and synced historical NAV will be permanently deleted. The shared China trading calendar is kept.', deleteConfirm: 'Delete fund',
     source: 'Source', calendarUnavailable: 'China trading calendar has not been synced yet', calendarHealthy: 'No open-day NAV gaps found in the current range', calendarGap: 'Open day has no NAV, so no DCA execution is created.',
     rules: 'Auto-DCA rules', addRule: 'Add rule', noRules: 'No auto-DCA rule for this fund', amountPerDay: 'Per open day', start: 'Start', end: 'End', fee: 'Purchase fee', enabled: 'Enabled', disabled: 'Disabled',
     monthly: 'Monthly', yearly: 'Yearly', projection: 'DCA summary', period: 'Period', executions: 'Runs', confirmed: 'Confirmed', invested: 'Invested', fees: 'Fees', shares: 'Shares', avgCost: 'Avg cost', value: 'Current value', pnl: 'P/L', returnRate: 'Return',
@@ -47,8 +48,8 @@ function copy(isZh: boolean) {
     lookup: 'Lookup', lookingUp: 'Looking up…', lookupHint: 'Enter a six-digit code to fetch name, type, inception date, management fee, confirmation timing and latest NAV from EastMoney.', lookupOk: 'Fund metadata loaded automatically', lookupFallback: 'Automatic lookup failed. Fill in the missing fields manually to continue.', autoField: 'Provider data is prefilled automatically; manual input is only needed when unavailable.',
     fundType: 'Fund type', inceptionDate: 'Inception', historyAvailability: 'Historical NAV', historyAvailable: 'Available', historyUnavailable: 'Unavailable',
     navHistory: 'Historical NAV', navHistoryHint: 'The chart uses stored unit NAV. Sync attempts to backfill from the fund inception date.', noNavHistory: 'There is not enough historical NAV data yet.',
-    ruleDialogCreate: 'Add auto-DCA rule', ruleDialogEdit: 'Edit auto-DCA rule', purchaseFee: 'Purchase fee rate', purchaseFeeHint: 'Decimal form, e.g. 0.0015 = 0.15%. DCA amount is treated as gross cash paid.', noEnd: 'Leave blank to continue', historyRewrite: 'Editing a rule recomputes its full derived history and never rewrites the real transaction ledger.',
-    manualNav: 'Add NAV', manualNavDate: 'NAV date', manualNavValue: 'Unit NAV', addNav: 'Write', selectedFund: 'Selected fund', phaseBoundary: 'CNY funds stay separate in this phase. FX, multi-currency cash ledger and portfolio/TWR/XIRR integration come later.',
+    ruleDialogCreate: 'Add auto-DCA rule', ruleDialogEdit: 'Edit auto-DCA rule', purchaseFee: 'Purchase fee rate', purchaseFeeHint: 'Decimal form, e.g. 0.0015 = 0.15%. DCA amount is treated as gross cash paid.', noEnd: 'Leave blank to continue', historyRewrite: 'Editing a rule recomputes its derived history without changing one-time purchases or the real USD transaction ledger.',
+    manualNav: 'Add NAV', manualNavDate: 'NAV date', manualNavValue: 'Unit NAV', addNav: 'Write', selectedFund: 'Selected fund', phaseBoundary: 'One-time purchases and auto-DCA both feed multi-currency holdings and performance; CNY funds remain separate from the USD cash ledger.',
     error: 'Operation failed', providerHint: 'Automatic sync uses a fund-specific provider. Upstream failure does not erase stored NAV.', expand: 'Show daily', collapse: 'Hide daily',
   }
 }
@@ -321,6 +322,8 @@ export function FundsPage() {
         <Panel title={t.navHistory} detail={t.navHistoryHint}>
           {nav.isLoading ? <LoadingBlock lines={5} /> : nav.isError ? <ErrorState onRetry={() => void nav.refetch()} /> : (nav.data?.data.length ?? 0) > 1 ? <FundNavChart data={nav.data?.data ?? []} /> : <p className="fund-nav-empty">{t.noNavHistory}</p>}
         </Panel>
+
+        <FundPurchasesPanel fund={selectedFund} isZh={isZh} locale={locale} />
 
         <Panel title={t.rules} action={<button type="button" className="button button-primary button-small" onClick={() => openRule()}><Plus size={14} />{t.addRule}</button>}>
           {rules.isLoading ? <LoadingBlock lines={3} /> : rules.isError ? <ErrorState onRetry={() => void rules.refetch()} /> : fundRules.length === 0 ? <EmptyState title={t.noRules} action={<button type="button" className="button button-secondary button-small" onClick={() => openRule()}>{t.addRule}</button>} /> : <div className="fund-rule-list">{fundRules.map((rule) => <button key={rule.id} type="button" className={`fund-rule-card ${rule.id === selectedRuleId ? 'fund-rule-card-active' : ''}`} onClick={() => setSelectedRuleId(rule.id)}><span className="fund-rule-main"><strong>{cny(rule.amount, locale)}</strong><small>{t.amountPerDay} · {rule.startDate}{rule.endDate ? ` → ${rule.endDate}` : ''}</small></span><span className="fund-rule-side"><span className={rule.enabled ? 'status-chip status-chip-ok' : 'status-chip'}>{rule.enabled ? t.enabled : t.disabled}</span><span>{percent(rule.purchaseFeeRate)}</span><span className="fund-rule-edit" role="button" tabIndex={0} onClick={(event) => { event.stopPropagation(); openRule(rule) }} onKeyDown={(event) => { if (event.key === 'Enter') { event.stopPropagation(); openRule(rule) } }}><Edit3 size={14} /></span></span></button>)}</div>}

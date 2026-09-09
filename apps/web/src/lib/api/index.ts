@@ -76,6 +76,7 @@ const demoApiProxy = {
   getSettings: () => loadDemoApi().then((adapter) => adapter.getSettings()),
   updateSettings: (patch: Parameters<typeof liveApi.updateSettings>[0]) => loadDemoApi().then((adapter) => adapter.updateSettings(patch)),
   getFunds: () => emptyDemoResult([]),
+  lookupFund: (_code: string) => fundDemoUnavailable(),
   createFund: (_input: Parameters<typeof liveApi.createFund>[0]) => fundDemoUnavailable(),
   updateFund: (_id: string, _input: Parameters<typeof liveApi.updateFund>[1]) => fundDemoUnavailable(),
   getFundNav: (_id: string) => emptyDemoResult([]),

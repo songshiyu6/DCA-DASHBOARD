@@ -30,7 +30,7 @@ class SettingsControllerJsonTest {
 
     @Test
     void getReturnsSettingsContractWithoutSecrets() throws Exception {
-        when(settingsService.get()).thenReturn(settings("DARK", true, false));
+        when(settingsService.get()).thenReturn(settings("DARK", "America/New_York", "Asia/Shanghai", true, false));
 
         mockMvc.perform(get("/api/v1/settings").accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
@@ -41,7 +41,8 @@ class SettingsControllerJsonTest {
                 .andExpect(jsonPath("$.twelveDataConfigured").value(true))
                 .andExpect(jsonPath("$.alphaVantageConfigured").value(false))
                 .andExpect(jsonPath("$.theme").value("DARK"))
-                .andExpect(jsonPath("$.timezone").doesNotExist())
+                .andExpect(jsonPath("$.marketTimezone").value("America/New_York"))
+                .andExpect(jsonPath("$.displayTimezone").value("Asia/Shanghai"))
                 .andExpect(jsonPath("$.twelveDataApiKey").doesNotExist())
                 .andExpect(jsonPath("$.alphaVantageApiKey").doesNotExist());
     }
@@ -49,7 +50,7 @@ class SettingsControllerJsonTest {
     @Test
     void putAcceptsSettingsRequestAndReturnsUpdatedContract() throws Exception {
         when(settingsService.update(org.mockito.ArgumentMatchers.any(SettingsDtos.SettingsUpdateRequest.class)))
-                .thenReturn(settings("LIGHT", false, true));
+                .thenReturn(settings("LIGHT", "Asia/Shanghai", "America/New_York", false, true));
 
         mockMvc.perform(put("/api/v1/settings")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -58,7 +59,9 @@ class SettingsControllerJsonTest {
                                 {
                                   "primaryProvider": "YAHOO",
                                   "fallbackProvider": "ALPHA_VANTAGE",
-                                  "theme": "LIGHT"
+                                  "theme": "LIGHT",
+                                  "marketTimezone": "Asia/Shanghai",
+                                  "displayTimezone": "America/New_York"
                                 }
                                 """))
                 .andExpect(status().isOk())
@@ -69,7 +72,8 @@ class SettingsControllerJsonTest {
                 .andExpect(jsonPath("$.twelveDataConfigured").value(false))
                 .andExpect(jsonPath("$.alphaVantageConfigured").value(true))
                 .andExpect(jsonPath("$.theme").value("LIGHT"))
-                .andExpect(jsonPath("$.timezone").doesNotExist());
+                .andExpect(jsonPath("$.marketTimezone").value("Asia/Shanghai"))
+                .andExpect(jsonPath("$.displayTimezone").value("America/New_York"));
 
         ArgumentCaptor<SettingsDtos.SettingsUpdateRequest> request =
                 ArgumentCaptor.forClass(SettingsDtos.SettingsUpdateRequest.class);
@@ -77,12 +81,14 @@ class SettingsControllerJsonTest {
         assertEquals("YAHOO", request.getValue().primaryProvider());
         assertEquals("ALPHA_VANTAGE", request.getValue().fallbackProvider());
         assertEquals("LIGHT", request.getValue().theme());
+        assertEquals("Asia/Shanghai", request.getValue().marketTimezone());
+        assertEquals("America/New_York", request.getValue().displayTimezone());
     }
 
-    private static SettingsDtos.SettingsResponse settings(String theme,
+    private static SettingsDtos.SettingsResponse settings(String theme, String marketTimezone, String displayTimezone,
                                                            boolean twelveDataConfigured,
                                                            boolean alphaVantageConfigured) {
         return new SettingsDtos.SettingsResponse("USD", "YAHOO", "TWELVE_DATA",
-                twelveDataConfigured, alphaVantageConfigured, theme);
+                twelveDataConfigured, alphaVantageConfigured, theme, marketTimezone, displayTimezone);
     }
 }

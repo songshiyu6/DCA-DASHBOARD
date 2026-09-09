@@ -255,6 +255,10 @@ const resources = {
         preferences: 'Preferences',
         baseCurrency: 'Base currency',
         timezone: 'Timezone',
+        marketTimezone: 'Market timezone',
+        marketTimezoneHint: 'Controls how quote and market timestamps are displayed.',
+        displayTimezone: 'General timezone',
+        displayTimezoneHint: 'Controls ordinary timestamps such as update and status times.',
         theme: 'Theme',
         system: 'System',
         light: 'Light',
@@ -316,18 +320,13 @@ const resources = {
       plan: { eyebrow: '投资纪律', title: '定投计划', subtitle: '先建立节奏，让每次投入都更接近目标配置。', planSettings: '计划设置', name: '计划名称', frequency: '频率', monthlyBudget: '月度预算', executionWindow: '执行窗口', startDate: '开始日期', active: '启用', paused: '暂停', archive: '已归档', targetAllocation: '目标配置', addAsset: '添加 ETF', allocationHint: '权重合计必须为 100.00%。', total: '合计', cycles: '周期', recommendation: '下一笔投入', recommendationHint: '按新增资金再平衡，优先投入低配 ETF。', suggested: '建议', current: '当前', gap: '缺口', method: '方法', contributionFirst: '优先投入', executionHistory: '执行历史', saved: '已保存', noPlan: '创建第一个月度计划，开始跟踪执行纪律。', createPlan: '创建计划', noAssets: '至少添加一个 ETF 才能定义目标配置。', monthly: '每月', planSettingsHint: '月度预算和执行窗口', executionStart: '开始日', executionEnd: '结束日', executionHint: '选择日历日期；短月份使用月末。', assetLabel: '资产 {{count}}', selectEtf: '选择 ETF', targetWeightLabel: '{{symbol}} 目标权重', removeAsset: '移除 {{symbol}}', asset: '资产' },
       etfs: { eyebrow: '市场覆盖', title: 'ETF', subtitle: '聚焦真正影响你计划的基金。', tracked: '已跟踪 ETF', addEtf: '添加 ETF', addTitle: '添加 ETF', addHint: '搜索行情源目录并确认基金后开始跟踪。', ticker: '代码', issuer: '发行方', expenseRatio: '费率', aum: '规模', dividendYield: '股息率', nav: 'NAV', price: '价格', performance: '表现', latest: '最新行情', history: '历史表现', details: '基金信息', noTracked: '还没有跟踪 ETF。添加 VOO、QQQ 或其他基金开始。', untrack: '停止跟踪', searchResults: '搜索结果', noResults: '没有匹配的 ETF。', historyUnavailable: '历史日线暂不可用。行情源恢复后可以重试同步。', tableHint: '打开基金查看完整指标和历史', openDetails: '打开 ETF 详情', openDetailsFor: '打开 {{symbol}} 详情', searchLabel: '搜索 ETF 目录', searchPlaceholder: '按代码或基金名称搜索', searchExamples: '试试 VOO、QQQ 或 SCHD', trackedLabel: '已跟踪', adjustedHistory: '复权收盘价 · 行情源历史', fundMetadata: '基金元数据', fiftyTwoWeekHigh: '52 周高点', fiftyTwoWeekLow: '52 周低点', maxDrawdown: '一年最大回撤', currentDrawdown: '当前回撤', oneMonth: '1M', threeMonths: '3M', ytd: 'YTD', oneYear: '1Y', threeYearCagr: '3 年 CAGR', quoteCache: '实时行情缓存 · 60 秒', dataSource: '数据源', performanceNote: '表现指标使用可用的行情源复权历史价格。', addTransactionFor: '为 {{symbol}} 添加交易' },
       transactions: { eyebrow: '事实来源', title: '交易流水', subtitle: '记录构建组合的每笔交易，持仓由流水自动计算。', addTransaction: '添加交易', editTransaction: '编辑交易', importCsv: '导入 CSV', transaction: '交易', date: '日期', type: '类型', quantity: '数量', unitPrice: '单价', amount: '金额', fee: '费用', total: '合计', notes: '备注', planCycle: '计划周期', saveTransaction: '保存交易', csvTitle: '预览 CSV 导入', csvHint: '使用 date,type,symbol,quantity,price,fee 格式，预览无误后才能导入。', csvPlaceholder: 'date,type,symbol,quantity,price,fee\n2026-09-01,BUY,VOO,1.2,620.00,0', preview: '预览', importRows: '导入 {{count}} 行', noTransactions: '交易流水为空。', sourceHint: '所有持仓、成本和收益都从这里开始。', formHint: '记录组合流水中的交易或现金事件。', outsidePlan: '计划外', optionalNote: '可选备注', saving: '保存中...', csvInput: 'CSV 输入', duplicateRows: '重复行：{{rows}}', validRows: '{{count}} 行有效数据', validating: '验证中...', validateCsv: '验证 CSV', ledgerEntries: '条流水', searchSymbol: '搜索代码', filterSymbol: '筛选代码', filterType: '筛选交易类型', allTypes: '全部类型', actions: '操作', ledgerNote: '交易流水是事实来源。持仓和组合快照都是计算得出的投影。' },
-      settings: { eyebrow: '工作区偏好', title: '设置', subtitle: '让终端与行情源和展示偏好保持一致。', preferences: '偏好设置', baseCurrency: '基础货币', timezone: '时区', theme: '主题', system: '跟随系统', light: '浅色', dark: '深色', providers: '行情数据源', primary: '主数据源', fallback: '备用数据源', apiKey: 'API Key', configured: '已配置', notConfigured: '未配置', secretHint: '密钥只保留在后端，不会发送到浏览器。', connection: '连接状态', connected: '就绪', offline: '备用模式', saving: '保存中…', preferencesHint: '终端在此设备上的行为', providersHint: '数据源密钥保留在服务端', currencyHint: '财务计算使用账户基础货币保存。', timezoneHint: '市场时间戳使用与交易所匹配的时区。', themeHint: '选择工作区的界面对比度。', twelveDataKey: 'Twelve Data API key', alphaVantageKey: 'Alpha Vantage API key', apiBase: 'API 地址' },
+      settings: { eyebrow: '工作区偏好', title: '设置', subtitle: '让终端与行情源和展示偏好保持一致。', preferences: '偏好设置', baseCurrency: '基础货币', timezone: '时区', marketTimezone: '行情时区', marketTimezoneHint: '控制行情和股价时间戳的显示时区。', displayTimezone: '通用时区', displayTimezoneHint: '控制更新时间、状态时间等普通时间的显示时区。', theme: '主题', system: '跟随系统', light: '浅色', dark: '深色', providers: '行情数据源', primary: '主数据源', fallback: '备用数据源', apiKey: 'API Key', configured: '已配置', notConfigured: '未配置', secretHint: '密钥只保留在后端，不会发送到浏览器。', connection: '连接状态', connected: '就绪', offline: '备用模式', saving: '保存中…', preferencesHint: '终端在此设备上的行为', providersHint: '数据源密钥保留在服务端', currencyHint: '财务计算使用账户基础货币保存。', timezoneHint: '市场时间戳使用与交易所匹配的时区。', themeHint: '选择工作区的界面对比度。', twelveDataKey: 'Twelve Data API key', alphaVantageKey: 'Alpha Vantage API key', apiBase: 'API 地址' },
       errors: { generic: '加载此页面时出现问题。', apiOffline: 'API 暂不可用，请在 API 恢复后重试。', validation: '请检查标记的字段。' },
-      validation: { planNameRequired: '请输入计划名称。', budgetInvalid: '请输入有效预算。', budgetPositive: '预算必须大于零。', startDateRequired: '请选择开始日期。', selectEtf: '请选择 ETF。', assetRequired: '至少添加一个 ETF。', percentageInvalid: '请输入百分比。', weightsTotal: '目标权重合计必须为 100.00%。', duplicateEtf: '每个 ETF 只能出现一次。', executionOrder: '结束日必须不早于开始日。', dateRequired: '请选择日期。', symbolRequired: '请输入代码。', feeInvalid: '请输入有效费用。', quantityRequired: '数量必填，最多支持 8 位小数。', unitPriceRequired: '单价必填，最多支持 6 位小数。', amountRequired: '金额必填，最多支持 6 位小数。', cashEventFee: '股息和费用交易请使用金额字段。' },
+      validation: { planNameRequired: '请输入计划名称。', budgetInvalid: '请输入有效预算。', budgetPositive: '预算必须大于零。', startDateRequired: '请选择开始日期。', selectEtf: '请选择 ETF。', assetRequired: '至少添加一个 ETF。', percentageInvalid: '请输入百分比。', weightsTotal: '目标权重合计必须为 100.00%。', duplicateEtf: '每个 ETF 只能出现一次。', executionOrder: '结束日必须不早于开始日。', dateRequired: '请选择日期。', symbolRequired: '请选择代码。', feeInvalid: '请输入有效费用。', quantityRequired: '数量必填，最多支持 8 位小数。', unitPriceRequired: '单价必填，最多支持 6 位小数。', amountRequired: '金额必填，最多支持 6 位小数。', cashEventFee: '分红和费用交易请填写金额。' },
     },
   },
-}
+} as const
 
-void i18n.use(initReactI18next).init({
-  resources,
-  lng: localStorage.getItem('dca-language') ?? (navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en'),
-  fallbackLng: 'en',
-  interpolation: { escapeValue: false },
-})
+void i18n.use(initReactI18next).init({ resources, lng: localStorage.getItem('dca-language') || 'zh', fallbackLng: 'en', interpolation: { escapeValue: false } })
 
 export default i18n

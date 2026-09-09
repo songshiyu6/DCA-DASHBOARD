@@ -11,6 +11,20 @@ import type {
 import { normalizeApiResponse } from './normalize'
 import { apiMeta, request, type ApiResponse } from './transport'
 
+export interface FundLookupResult {
+  code: string
+  name: string
+  fundType: string | null
+  managementFeeRate: string | null
+  confirmationTradingDays: number | null
+  shareClass: string | null
+  inceptionDate: string | null
+  latestNavDate: string | null
+  latestNav: string | null
+  historicalNavAvailable: boolean
+  source: string
+}
+
 function result<T>(body: unknown): ApiResponse<T> {
   return Promise.resolve(normalizeApiResponse<T>(body, apiMeta()))
 }
@@ -25,6 +39,7 @@ function queryRange(startDate?: string, endDate?: string): string {
 
 export const fundsApi = {
   getFunds: async (): ApiResponse<MutualFund[]> => result<MutualFund[]>(await request<unknown>('/funds')),
+  lookupFund: async (code: string): ApiResponse<FundLookupResult> => result<FundLookupResult>(await request<unknown>(`/funds/lookup?code=${encodeURIComponent(code)}`)),
   createFund: async (input: MutualFundInput): ApiResponse<MutualFund> => result<MutualFund>(await request<unknown>('/funds', {
     method: 'POST',
     body: JSON.stringify(input),

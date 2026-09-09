@@ -4,6 +4,8 @@ import type {
   AutoDcaRuleInput,
   FundCalendarAudit,
   FundNavPoint,
+  FundPurchase,
+  FundPurchaseInput,
   FundSyncResult,
   MutualFund,
   MutualFundInput,
@@ -49,6 +51,16 @@ export const fundsApi = {
     body: JSON.stringify(input),
   })),
   deleteFund: async (id: string): ApiResponse<{ id: string }> => result<{ id: string }>(await request<unknown>(`/funds/${encodeURIComponent(id)}`, { method: 'DELETE' })),
+  getFundPurchases: async (id: string): ApiResponse<FundPurchase[]> => result<FundPurchase[]>(await request<unknown>(`/funds/${encodeURIComponent(id)}/purchases`)),
+  createFundPurchase: async (id: string, input: FundPurchaseInput): ApiResponse<FundPurchase> => result<FundPurchase>(await request<unknown>(`/funds/${encodeURIComponent(id)}/purchases`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })),
+  updateFundPurchase: async (id: string, purchaseId: string, input: FundPurchaseInput): ApiResponse<FundPurchase> => result<FundPurchase>(await request<unknown>(`/funds/${encodeURIComponent(id)}/purchases/${encodeURIComponent(purchaseId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })),
+  deleteFundPurchase: async (id: string, purchaseId: string): ApiResponse<{ id: string }> => result<{ id: string }>(await request<unknown>(`/funds/${encodeURIComponent(id)}/purchases/${encodeURIComponent(purchaseId)}`, { method: 'DELETE' })),
   getFundNav: async (id: string): ApiResponse<FundNavPoint[]> => result<FundNavPoint[]>(await request<unknown>(`/funds/${encodeURIComponent(id)}/nav`)),
   putFundNav: async (id: string, navDate: string, nav: string): ApiResponse<FundNavPoint> => result<FundNavPoint>(await request<unknown>(`/funds/${encodeURIComponent(id)}/nav`, {
     method: 'PUT',

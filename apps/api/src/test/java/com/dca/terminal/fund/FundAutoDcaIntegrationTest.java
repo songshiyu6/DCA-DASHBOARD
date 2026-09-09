@@ -91,13 +91,24 @@ class FundAutoDcaIntegrationTest {
     }
 
     @Test
-    void rejectsOneTimePurchaseWhenExactNavIsMissing() {
+    void savesPurchaseWithoutNavAndSettlesItWhenNavLaterArrives() {
         String code = "F" + UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase();
         FundDtos.FundResponse fund = fundService.create(new FundDtos.FundRequest(
-                code, "Missing NAV Fund", new BigDecimal("0.006"), 1, "A"));
+                code, "Pending NAV Fund", new BigDecimal("0.006"), 2, "A"));
+        LocalDate purchaseDate = LocalDate.of(2026, 8, 18);
 
-        assertThrows(DomainException.class, () -> purchaseService.create(fund.id(), new FundDtos.FundPurchaseRequest(
-                LocalDate.of(2026, 8, 18), new BigDecimal("1000"), BigDecimal.ZERO, null)));
+        FundDtos.FundPurchaseResponse pending = purchaseService.create(fund.id(), new FundDtos.FundPurchaseRequest(
+                purchaseDate, new BigDecimal("1000"), BigDecimal.ZERO, null));
+        assertTrue(pending.nav() == null);
+        assertTrue(pending.shares() == null);
+        assertTrue(purchaseService.listAll().isEmpty());
+
+        fundService.putNav(fund.id(), new FundDtos.NavRequest(purchaseDate, new BigDecimal("1.2500"), "MANUAL"));
+        FundDtos.FundPurchaseResponse settled = purchaseService.list(fund.id()).getFirst();
+
+        assertEquals(0, new BigDecimal("1.2500").compareTo(settled.nav()));
+        assertEquals(0, new BigDecimal("800.00000000").compareTo(settled.shares()));
+        assertEquals(1, purchaseService.listAll().size());
     }
 
     @Test

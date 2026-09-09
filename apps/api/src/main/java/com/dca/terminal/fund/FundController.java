@@ -18,6 +18,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 import static com.dca.terminal.fund.FundDtos.FundCalendarResponse;
 import static com.dca.terminal.fund.FundDtos.FundDeleteResponse;
+import static com.dca.terminal.fund.FundDtos.FundPurchaseRequest;
+import static com.dca.terminal.fund.FundDtos.FundPurchaseResponse;
 import static com.dca.terminal.fund.FundDtos.FundRequest;
 import static com.dca.terminal.fund.FundDtos.FundResponse;
 import static com.dca.terminal.fund.FundDtos.FundSyncResponse;
@@ -29,10 +31,14 @@ import static com.dca.terminal.fund.FundDtos.NavResponse;
 public class FundController {
     private final FundService service;
     private final FundDataSyncService syncService;
+    private final FundPurchaseService purchaseService;
 
-    public FundController(FundService service, FundDataSyncService syncService) {
+    public FundController(FundService service,
+                          FundDataSyncService syncService,
+                          FundPurchaseService purchaseService) {
         this.service = service;
         this.syncService = syncService;
+        this.purchaseService = purchaseService;
     }
 
     @GetMapping
@@ -53,6 +59,30 @@ public class FundController {
     @DeleteMapping("/{id}")
     public FundDeleteResponse delete(@PathVariable UUID id) {
         return new FundDeleteResponse(service.delete(id));
+    }
+
+    @GetMapping("/{id}/purchases")
+    public List<FundPurchaseResponse> purchases(@PathVariable UUID id) {
+        return purchaseService.list(id);
+    }
+
+    @PostMapping("/{id}/purchases")
+    @ResponseStatus(HttpStatus.CREATED)
+    public FundPurchaseResponse createPurchase(@PathVariable UUID id,
+                                               @Valid @RequestBody FundPurchaseRequest request) {
+        return purchaseService.create(id, request);
+    }
+
+    @PutMapping("/{id}/purchases/{purchaseId}")
+    public FundPurchaseResponse updatePurchase(@PathVariable UUID id,
+                                               @PathVariable UUID purchaseId,
+                                               @Valid @RequestBody FundPurchaseRequest request) {
+        return purchaseService.update(id, purchaseId, request);
+    }
+
+    @DeleteMapping("/{id}/purchases/{purchaseId}")
+    public FundDeleteResponse deletePurchase(@PathVariable UUID id, @PathVariable UUID purchaseId) {
+        return new FundDeleteResponse(purchaseService.delete(id, purchaseId));
     }
 
     @PutMapping("/{id}/nav")

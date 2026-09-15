@@ -192,7 +192,7 @@ class MultiCurrencyReportingServiceTest {
     }
 
     @Test
-    void confirmedOpenDayWithoutNavMakesReportingPartialEvenWithoutAnotherMarketEvent() {
+    void currentOpenDayWithoutNavCarriesLastKnownFundValueButRemainsPartial() {
         UUID instrumentId = UUID.randomUUID();
         UUID ruleId = UUID.randomUUID();
         AutoDcaDtos.RuleResponse rule = rule(ruleId, instrumentId);
@@ -224,9 +224,11 @@ class MultiCurrencyReportingServiceTest {
         MultiCurrencyDtos.Response result = service.report("ALL");
 
         assertThat(result.summary().status()).isEqualTo(FreshnessStatus.PARTIAL);
-        assertThat(result.summary().cnyFundValue()).isNull();
-        assertThat(result.summary().cnyFundValueUsd()).isNull();
-        assertThat(result.summary().combinedValueUsd()).isNull();
+        assertThat(result.summary().cnyFundValue()).isEqualByComparingTo("710");
+        assertThat(result.summary().cnyFundValueUsd()).isNotNull();
+        assertThat(result.summary().combinedValueUsd()).isNotNull();
+        assertThat(result.summary().funds()).hasSize(1);
+        assertThat(result.summary().funds().getFirst().navDate()).isEqualTo(LocalDate.of(2026, 9, 7));
         assertThat(result.performance().liveEndpointIncluded()).isFalse();
         assertThat(result.performance().endpointDate()).isEqualTo(LocalDate.of(2026, 9, 7));
         assertThat(result.performance().points()).allMatch(point -> point.date().isBefore(TODAY));

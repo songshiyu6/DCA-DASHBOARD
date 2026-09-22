@@ -5,8 +5,8 @@ public final class SettingsDtos {
 
     public record SettingsResponse(String baseCurrency, String primaryProvider, String fallbackProvider,
                                     boolean twelveDataConfigured, boolean alphaVantageConfigured,
-                                    String theme) { }
+                                    String theme, String marketTimezone, String displayTimezone) { }
 
     public record SettingsUpdateRequest(String primaryProvider, String fallbackProvider,
-                                        String theme) { }
+                                        String theme, String marketTimezone, String displayTimezone) { }
 }

@@ -89,7 +89,7 @@ public class MultiCurrencyReportingService {
         TreeMap<LocalDate, BigDecimal> fxRates = fxRates(firstFxDate, today);
 
         List<PortfolioPerformanceSource.ExternalCashFlow> fundFlows = new ArrayList<>();
-        boolean flowComplete = states.stream().allMatch(state -> !hasMissingExecutionBefore(state, today));
+        boolean flowComplete = states.stream().allMatch(state -> !hasMissingExecutionAtOrBeforeLatestNav(state, today));
         for (RuleState state : states) {
             for (AutoDcaDtos.DailyExecutionResponse execution : state.projection().daily()) {
                 BigDecimal rate = fxRate(fxRates, execution.navDate());
@@ -313,13 +313,18 @@ public class MultiCurrencyReportingService {
         boolean usable = true;
         boolean complete = true;
         for (RuleState state : states) {
-            if (hasMissingExecutionBefore(state, date)
-                    || (!allowValuationDateCarry && hasMissingExecutionOn(state, date))) {
+            boolean hardMissingExecution = allowValuationDateCarry
+                    ? hasMissingExecutionAtOrBeforeLatestNav(state, date)
+                    : hasMissingExecutionBefore(state, date) || hasMissingExecutionOn(state, date);
+            if (hardMissingExecution) {
                 usable = false;
                 complete = false;
                 continue;
             }
-            if (allowValuationDateCarry && hasMissingExecutionOn(state, date)) complete = false;
+            if (allowValuationDateCarry && hasTrailingMissingExecutionAfterLatestNav(state, date)) {
+                complete = false;
+            }
+
             BigDecimal shares = floor(state.cumulativeShares(), date);
             if (shares == null || shares.signum() == 0) continue;
             Map.Entry<LocalDate, BigDecimal> navEntry = state.navByDate().floorEntry(date);
@@ -333,7 +338,7 @@ public class MultiCurrencyReportingService {
                 complete = false;
                 continue;
             }
-            if (allowValuationDateCarry && hasMissingNavOn(state, date)) complete = false;
+            if (allowValuationDateCarry && hasTrailingNavLag(state, date)) complete = false;
             totalCny = totalCny.add(shares.multiply(navEntry.getValue(), MC), MC);
         }
         for (PurchaseState state : purchases) {
@@ -349,7 +354,7 @@ public class MultiCurrencyReportingService {
                 complete = false;
                 continue;
             }
-            if (allowValuationDateCarry && hasMissingNavOn(state, date)) complete = false;
+            if (allowValuationDateCarry && hasTrailingNavLag(state, date)) complete = false;
             totalCny = totalCny.add(state.purchase().shares().multiply(navEntry.getValue(), MC), MC);
         }
         if (!usable) return new Valuation(null, null, false);
@@ -365,15 +370,33 @@ public class MultiCurrencyReportingService {
         return state.missingExecutionNavDates().contains(date);
     }
 
+    private boolean hasMissingExecutionAtOrBeforeLatestNav(RuleState state, LocalDate date) {
+        if (state.navByDate().isEmpty()) {
+            return state.missingExecutionNavDates().stream().anyMatch(missing -> !missing.isAfter(date));
+        }
+        LocalDate cutoff = state.navByDate().lastKey();
+        if (cutoff.isAfter(date)) cutoff = date;
+        LocalDate finalCutoff = cutoff;
+        return state.missingExecutionNavDates().stream().anyMatch(missing -> !missing.isAfter(finalCutoff));
+    }
+
+    private boolean hasTrailingMissingExecutionAfterLatestNav(RuleState state, LocalDate date) {
+        if (state.navByDate().isEmpty()) return false;
+        LocalDate latestNavDate = state.navByDate().lastKey();
+        return state.missingExecutionNavDates().stream().anyMatch(missing ->
+                missing.isAfter(latestNavDate) && !missing.isAfter(date));
+    }
+
     private boolean hasUnresolvedNavGapAfter(
             RuleState state,
             LocalDate navDate,
             LocalDate valuationDate,
             boolean allowValuationDateCarry) {
+        LocalDate latestNavDate = state.navByDate().isEmpty() ? null : state.navByDate().lastKey();
         return state.openDates().stream().anyMatch(openDate -> openDate.isAfter(navDate)
                 && !openDate.isAfter(valuationDate)
                 && !state.navByDate().containsKey(openDate)
-                && !(allowValuationDateCarry && openDate.equals(valuationDate)));
+                && !(allowValuationDateCarry && latestNavDate != null && openDate.isAfter(latestNavDate)));
     }
 
     private boolean hasUnresolvedNavGapAfter(
@@ -381,18 +404,27 @@ public class MultiCurrencyReportingService {
             LocalDate navDate,
             LocalDate valuationDate,
             boolean allowValuationDateCarry) {
+        LocalDate latestNavDate = state.navByDate().isEmpty() ? null : state.navByDate().lastKey();
         return state.openDates().stream().anyMatch(openDate -> openDate.isAfter(navDate)
                 && !openDate.isAfter(valuationDate)
                 && !state.navByDate().containsKey(openDate)
-                && !(allowValuationDateCarry && openDate.equals(valuationDate)));
+                && !(allowValuationDateCarry && latestNavDate != null && openDate.isAfter(latestNavDate)));
     }
 
-    private boolean hasMissingNavOn(RuleState state, LocalDate date) {
-        return state.openDates().contains(date) && !state.navByDate().containsKey(date);
+    private boolean hasTrailingNavLag(RuleState state, LocalDate date) {
+        if (state.navByDate().isEmpty()) return false;
+        LocalDate latestNavDate = state.navByDate().lastKey();
+        return state.openDates().stream().anyMatch(openDate -> openDate.isAfter(latestNavDate)
+                && !openDate.isAfter(date)
+                && !state.navByDate().containsKey(openDate));
     }
 
-    private boolean hasMissingNavOn(PurchaseState state, LocalDate date) {
-        return state.openDates().contains(date) && !state.navByDate().containsKey(date);
+    private boolean hasTrailingNavLag(PurchaseState state, LocalDate date) {
+        if (state.navByDate().isEmpty()) return false;
+        LocalDate latestNavDate = state.navByDate().lastKey();
+        return state.openDates().stream().anyMatch(openDate -> openDate.isAfter(latestNavDate)
+                && !openDate.isAfter(date)
+                && !state.navByDate().containsKey(openDate));
     }
 
     private List<MultiCurrencyDtos.FundPosition> currentFundPositions(

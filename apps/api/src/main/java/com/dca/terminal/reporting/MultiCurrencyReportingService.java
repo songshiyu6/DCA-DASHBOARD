@@ -168,8 +168,20 @@ public class MultiCurrencyReportingService {
                 && currentFunds.complete() && reportingFlowComplete ? FreshnessStatus.FRESH : FreshnessStatus.PARTIAL;
 
         List<MultiCurrencyDtos.FundPosition> positions = currentFundPositions(states, purchases, fxRates, today);
+        // These CNY cost-based returns are independent of FX and of the combined USD TWR range.
+        // A historical missing execution/NAV makes the invested capital unknowable.
+        boolean fundCostComplete = cnyValue != null && !positions.isEmpty()
+                && positions.stream().allMatch(position -> position.investedCny() != null);
+        BigDecimal fundInvestedCny = fundCostComplete
+                ? positions.stream().map(MultiCurrencyDtos.FundPosition::investedCny)
+                    .reduce(BigDecimal.ZERO, (left, right) -> left.add(right, MC))
+                : null;
+        BigDecimal fundPnlCny = fundInvestedCny == null ? null : cnyValue.subtract(fundInvestedCny, MC);
+        BigDecimal fundReturnRate = fundPnlCny == null || fundInvestedCny.signum() == 0
+                ? null : fundPnlCny.divide(fundInvestedCny, MC);
         MultiCurrencyDtos.Summary summary = new MultiCurrencyDtos.Summary(
-                FxService.USD, usdSummary.marketValue(), cnyValue, cnyValueUsd, combinedValue,
+                FxService.USD, usdSummary.marketValue(), cnyValue,
+                fundInvestedCny, fundPnlCny, fundReturnRate, cnyValueUsd, combinedValue,
                 usdSummary.netInvested(), reportingFlowComplete ? fundExternalFlow : null,
                 combinedExternalFlow, combinedPnl,
                 currentRate == null ? null : currentRate.getRate(), currentRate == null ? null : currentRate.getRateDate(),
@@ -200,6 +212,9 @@ public class MultiCurrencyReportingService {
                 FxService.USD,
                 usdSummary.marketValue(),
                 BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                null,
                 BigDecimal.ZERO,
                 usdSummary.marketValue(),
                 usdSummary.netInvested(),
@@ -443,6 +458,15 @@ public class MultiCurrencyReportingService {
             item.shares = item.shares.add(shares, MC);
             item.nav = nav.getValue();
             item.navDate = nav.getKey();
+            for (AutoDcaDtos.DailyExecutionResponse execution : state.projection().daily()) {
+                if (!execution.navDate().isAfter(date)) {
+                    item.investedCny = item.investedCny.add(execution.grossAmount(), MC);
+                }
+            }
+            if (hasMissingExecutionAtOrBeforeLatestNav(state, date)
+                    || hasUnresolvedNavGapAfter(state, nav.getKey(), date, true)) {
+                item.investmentComplete = false;
+            }
         }
         for (PurchaseState state : purchases) {
             if (state.purchase().purchaseDate().isAfter(date)) continue;
@@ -451,6 +475,10 @@ public class MultiCurrencyReportingService {
             FundPositionAccumulator item = grouped.computeIfAbsent(state.purchase().fundCode(), ignored ->
                     new FundPositionAccumulator(state.purchase().fundCode(), state.purchase().fundName()));
             item.shares = item.shares.add(state.purchase().shares(), MC);
+            item.investedCny = item.investedCny.add(state.purchase().grossAmount(), MC);
+            if (hasUnresolvedNavGapAfter(state, nav.getKey(), date, true)) {
+                item.investmentComplete = false;
+            }
             if (item.navDate == null || nav.getKey().isAfter(item.navDate)) {
                 item.nav = nav.getValue();
                 item.navDate = nav.getKey();
@@ -459,7 +487,12 @@ public class MultiCurrencyReportingService {
         return grouped.values().stream().map(item -> {
             BigDecimal cny = item.shares.multiply(item.nav, MC);
             BigDecimal usd = rate == null || rate.signum() <= 0 ? null : cny.divide(rate, MC);
-            return new MultiCurrencyDtos.FundPosition(item.code, item.name, item.shares, item.nav, item.navDate, cny, usd);
+            BigDecimal invested = item.investmentComplete && item.investedCny.signum() > 0
+                    ? item.investedCny : null;
+            BigDecimal pnl = invested == null ? null : cny.subtract(invested, MC);
+            BigDecimal returnRate = pnl == null ? null : pnl.divide(invested, MC);
+            return new MultiCurrencyDtos.FundPosition(item.code, item.name, item.shares, item.nav,
+                    item.navDate, cny, usd, invested, pnl, returnRate);
         }).toList();
     }
 
@@ -505,6 +538,8 @@ public class MultiCurrencyReportingService {
         private final String code;
         private final String name;
         private BigDecimal shares = BigDecimal.ZERO;
+        private BigDecimal investedCny = BigDecimal.ZERO;
+        private boolean investmentComplete = true;
         private BigDecimal nav;
         private LocalDate navDate;
 

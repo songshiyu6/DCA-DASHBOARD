@@ -85,6 +85,8 @@ class MultiCurrencyReportingServiceTest {
         assertThat(result.summary().combinedExternalFlowUsd()).isEqualByComparingTo("1000");
         assertThat(result.summary().combinedPnlUsd()).isEqualByComparingTo("100");
         assertThat(result.summary().cnyFundValue()).isEqualByComparingTo("0");
+        assertThat(result.summary().cnyFundInvestedCny()).isEqualByComparingTo("0");
+        assertThat(result.summary().cnyFundReturnRate()).isNull();
         assertThat(result.summary().cnyFundValueUsd()).isEqualByComparingTo("0");
         assertThat(result.summary().funds()).isEmpty();
         assertThat(result.performance().externalFlowModel())
@@ -120,6 +122,10 @@ class MultiCurrencyReportingServiceTest {
         assertThat(result.summary().cnyAutoDcaExternalFlowUsd()).isEqualByComparingTo("100");
         assertThat(result.summary().combinedExternalFlowUsd()).isEqualByComparingTo("1100");
         assertThat(result.summary().cnyFundValue()).isEqualByComparingTo("781");
+        assertThat(result.summary().cnyFundInvestedCny()).isEqualByComparingTo("710");
+        assertThat(result.summary().cnyFundPnlCny()).isEqualByComparingTo("71");
+        assertThat(result.summary().cnyFundReturnRate()).isEqualByComparingTo("0.1");
+        assertThat(result.summary().funds().getFirst().returnRate()).isEqualByComparingTo("0.1");
         assertThat(result.summary().cnyFundValueUsd()).isEqualByComparingTo("108.4722222222222222222222222222222");
         assertThat(result.summary().combinedValueUsd()).isEqualByComparingTo("1108.472222222222222222222222222222");
         assertThat(result.summary().combinedPnlUsd()).isEqualByComparingTo("8.472222222222222222222222222222");
@@ -154,6 +160,9 @@ class MultiCurrencyReportingServiceTest {
         assertThat(result.summary().cnyFundValue()).isEqualByComparingTo("781");
         assertThat(result.summary().funds()).hasSize(1);
         assertThat(result.summary().funds().getFirst().shares()).isEqualByComparingTo("100");
+        assertThat(result.summary().cnyFundInvestedCny()).isEqualByComparingTo("710");
+        assertThat(result.summary().cnyFundPnlCny()).isEqualByComparingTo("71");
+        assertThat(result.summary().cnyFundReturnRate()).isEqualByComparingTo("0.1");
         assertThat(result.summary().funds().getFirst().fundCode()).isEqualTo("000001");
         assertThat(result.performance().externalFlowModel())
                 .isEqualTo("USD_CASH_LEDGER_PLUS_CNY_FUND_ACTIVITY_AT_HISTORICAL_USDCNY");
@@ -184,6 +193,9 @@ class MultiCurrencyReportingServiceTest {
 
         assertThat(result.summary().status()).isEqualTo(FreshnessStatus.PARTIAL);
         assertThat(result.summary().cnyFundValueUsd()).isNull();
+        assertThat(result.summary().cnyFundInvestedCny()).isEqualByComparingTo("710");
+        assertThat(result.summary().cnyFundPnlCny()).isEqualByComparingTo("10");
+        assertThat(result.summary().funds().getFirst().pnlCny()).isEqualByComparingTo("10");
         assertThat(result.summary().combinedValueUsd()).isNull();
         assertThat(result.summary().cnyAutoDcaExternalFlowUsd()).isNull();
         assertThat(result.summary().combinedExternalFlowUsd()).isNull();
@@ -277,6 +289,8 @@ class MultiCurrencyReportingServiceTest {
         assertThat(result.summary().combinedPnlUsd()).isNotNull();
         assertThat(result.summary().funds()).hasSize(1);
         assertThat(result.summary().funds().getFirst().navDate()).isEqualTo(LocalDate.of(2026, 9, 4));
+        assertThat(result.summary().funds().getFirst().returnRate()).isEqualByComparingTo("0");
+        assertThat(result.summary().cnyFundReturnRate()).isEqualByComparingTo("0");
         assertThat(result.performance().liveEndpointIncluded()).isFalse();
         assertThat(result.performance().endpointDate()).isEqualTo(LocalDate.of(2026, 9, 4));
     }

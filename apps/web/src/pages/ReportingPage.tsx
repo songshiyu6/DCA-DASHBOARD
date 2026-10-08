@@ -15,16 +15,20 @@ function copy(isZh: boolean) {
     eyebrow: '多币种 · USD 报告口径', title: '统一资产报告', subtitle: '把实际 USD 账户与 CNY 国内基金自动定投派生资产按历史汇率统一折算为 USD。',
     boundary: '这是报告投影，不是多币种现金账本。CNY 基金仍由规则 + NAV 派生；真实交易流水目前仍为 USD。',
     combinedValue: '合并总价值', combinedPnl: '合并盈亏', combinedFlow: '累计外部投入', twr: '时间加权收益率', xirr: 'XIRR', cagr: '成立以来 CAGR', drawdown: '最大回撤',
-    usdAccount: 'USD 实际账户', cnyFunds: 'CNY 基金市值', cnyFundsUsd: 'CNY 基金折合 USD', fundFlow: 'CNY 定投折合投入', fx: 'USD/CNY', fxHint: '1 USD = x CNY',
-    syncFx: '同步 FX', syncing: '同步中…', composition: '资产与汇率', positions: '国内基金持仓投影', fund: '基金', shares: '份额', nav: 'NAV', navDate: 'NAV 日期', cnyValue: 'CNY 市值', usdValue: '折合 USD',
+    usdAccount: 'USD 实际账户', cnyFunds: 'CNY 基金市值', cnyFundsUsd: 'CNY 基金折合 USD', fundFlow: 'CNY 基金折合投入', fx: 'USD/CNY', fxHint: '1 USD = x CNY',
+    fundInvested: '国内基金累计投入', fundPnl: '国内基金累计盈亏', fundReturn: '国内基金累计收益率',
+    fundReturnHint: '人民币口径的累计收益率 = (按最新已公布净值计算的市值 − 含申购费的累计投入) / 累计投入；不含汇率影响，也不随上方时间区间切换。净值延迟时结果仅供参考，历史净值缺口无法核实则显示 —。',
+    syncFx: '同步 FX', syncing: '同步中…', composition: '资产与汇率', positions: '国内基金持仓投影', fund: '基金', shares: '份额', nav: 'NAV', navDate: 'NAV 日期', cnyValue: 'CNY 市值', usdValue: '折合 USD', invested: '累计投入', pnl: '累计盈亏', fundReturnColumn: '累计收益率',
     performance: '合并业绩', noCny: '尚无 CNY 定投历史，因此统一报告与原 USD 账户一致。', partial: 'FX 或基金 NAV 不完整时不会猜测折算值，合并结果会降级为 PARTIAL。',
     source: 'USD 真账 + CNY 派生基金 + 历史 USD/CNY',
   } : {
     eyebrow: 'Multi-currency · USD reporting', title: 'Unified asset reporting', subtitle: 'Convert the real USD account and the CNY auto-DCA fund projection into one USD reporting view using historical FX.',
     boundary: 'This is a reporting projection, not a multi-currency cash ledger. CNY funds remain derived from rules + NAV; the real transaction ledger is still USD-only.',
     combinedValue: 'Combined value', combinedPnl: 'Combined P/L', combinedFlow: 'Cumulative external flow', twr: 'Time-weighted return', xirr: 'XIRR', cagr: 'Since-inception CAGR', drawdown: 'Maximum drawdown',
-    usdAccount: 'Real USD account', cnyFunds: 'CNY fund value', cnyFundsUsd: 'CNY funds in USD', fundFlow: 'CNY DCA flow in USD', fx: 'USD/CNY', fxHint: '1 USD = x CNY',
-    syncFx: 'Sync FX', syncing: 'Syncing…', composition: 'Assets and FX', positions: 'China fund projected positions', fund: 'Fund', shares: 'Shares', nav: 'NAV', navDate: 'NAV date', cnyValue: 'CNY value', usdValue: 'USD value',
+    usdAccount: 'Real USD account', cnyFunds: 'CNY fund value', cnyFundsUsd: 'CNY funds in USD', fundFlow: 'CNY fund investment in USD', fx: 'USD/CNY', fxHint: '1 USD = x CNY',
+    fundInvested: 'CNY fund cumulative investment', fundPnl: 'CNY fund cumulative P/L', fundReturn: 'CNY fund cumulative return',
+    fundReturnHint: 'CNY cumulative return = (value at latest published NAV − gross contributions including fees) / gross contributions. It excludes FX changes and does not follow the selected performance range. Delayed NAV is indicative; an unresolved historical gap shows —.',
+    syncFx: 'Sync FX', syncing: 'Syncing…', composition: 'Assets and FX', positions: 'China fund projected positions', fund: 'Fund', shares: 'Shares', nav: 'NAV', navDate: 'NAV date', cnyValue: 'CNY value', usdValue: 'USD value', invested: 'Invested CNY', pnl: 'P/L CNY', fundReturnColumn: 'Cumulative return',
     performance: 'Combined performance', noCny: 'There is no CNY DCA history yet, so this report reduces to the existing USD account.', partial: 'Missing FX or fund NAV is never guessed; combined reporting degrades to PARTIAL instead.',
     source: 'Real USD ledger + derived CNY funds + historical USD/CNY',
   }
@@ -100,6 +104,9 @@ export function ReportingPage() {
         <dl className="reporting-definition-list">
           <div><dt>{t.usdAccount}</dt><dd>{money(summary.usdAccountValue, 'USD', locale)}</dd></div>
           <div><dt>{t.cnyFunds}</dt><dd>{money(summary.cnyFundValue, 'CNY', locale)}</dd></div>
+          <div><dt>{t.fundInvested}</dt><dd>{money(summary.cnyFundInvestedCny, 'CNY', locale)}</dd></div>
+          <div><dt>{t.fundPnl}</dt><dd className={trend(summary.cnyFundPnlCny)}>{money(summary.cnyFundPnlCny, 'CNY', locale)}</dd></div>
+          <div><dt>{t.fundReturn}</dt><dd className={trend(summary.cnyFundReturnRate)}>{percent(summary.cnyFundReturnRate)}</dd></div>
           <div><dt>{t.cnyFundsUsd}</dt><dd>{money(summary.cnyFundValueUsd, 'USD', locale)}</dd></div>
           <div><dt>{t.fundFlow}</dt><dd>{money(summary.cnyAutoDcaExternalFlowUsd, 'USD', locale)}</dd></div>
           <div><dt>{t.fx}</dt><dd>{number(summary.usdCnyRate, 4)} <small>{t.fxHint}{summary.usdCnyRateDate ? ` · ${summary.usdCnyRateDate}` : ''}</small></dd></div>
@@ -116,8 +123,8 @@ export function ReportingPage() {
       </Panel>
     </div>
 
-    <Panel title={t.positions} detail={summary.funds.length === 0 ? t.noCny : `${summary.funds.length}`}>
-      {summary.funds.length === 0 ? <p className="empty-copy">{t.noCny}</p> : <div className="table-scroll"><table className="data-table"><thead><tr><th>{t.fund}</th><th>{t.shares}</th><th>{t.nav}</th><th>{t.navDate}</th><th>{t.cnyValue}</th><th>{t.usdValue}</th></tr></thead><tbody>{summary.funds.map((fund) => <tr key={fund.fundCode}><td><strong>{fund.fundCode}</strong><small className="table-subline">{fund.fundName}</small></td><td>{number(fund.shares, 4)}</td><td>{number(fund.nav, 4)}</td><td>{fund.navDate}</td><td>{money(fund.marketValueCny, 'CNY', locale)}</td><td>{money(fund.marketValueUsd, 'USD', locale)}</td></tr>)}</tbody></table></div>}
+    <Panel title={t.positions} detail={summary.funds.length === 0 ? t.noCny : t.fundReturnHint}>
+      {summary.funds.length === 0 ? <p className="empty-copy">{t.noCny}</p> : <div className="table-scroll"><table className="data-table"><thead><tr><th>{t.fund}</th><th>{t.shares}</th><th>{t.nav}</th><th>{t.navDate}</th><th>{t.invested}</th><th>{t.cnyValue}</th><th>{t.pnl}</th><th>{t.fundReturnColumn}</th><th>{t.usdValue}</th></tr></thead><tbody>{summary.funds.map((fund) => <tr key={fund.fundCode}><td><strong>{fund.fundCode}</strong><small className="table-subline">{fund.fundName}</small></td><td>{number(fund.shares, 4)}</td><td>{number(fund.nav, 4)}</td><td>{fund.navDate}</td><td>{money(fund.investedCny, 'CNY', locale)}</td><td>{money(fund.marketValueCny, 'CNY', locale)}</td><td className={trend(fund.pnlCny)}>{money(fund.pnlCny, 'CNY', locale)}</td><td className={trend(fund.returnRate)}>{percent(fund.returnRate)}</td><td>{money(fund.marketValueUsd, 'USD', locale)}</td></tr>)}</tbody></table></div>}
     </Panel>
   </div>
 }

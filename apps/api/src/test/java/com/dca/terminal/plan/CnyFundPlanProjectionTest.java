@@ -30,6 +30,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -53,7 +54,8 @@ class CnyFundPlanProjectionTest {
     void setUp() {
         service = new CnyFundPlanProjection(autoDcaService, purchaseRepository, navRepository,
                 profileRepository, calendarRepository, fxService);
-        when(purchaseRepository.findAllByOrderByPurchaseDateAscCreatedAtAscIdAsc()).thenReturn(List.of());
+        lenient().when(purchaseRepository.findAllByOrderByPurchaseDateAscCreatedAtAscIdAsc())
+                .thenReturn(List.of());
     }
 
     @Test

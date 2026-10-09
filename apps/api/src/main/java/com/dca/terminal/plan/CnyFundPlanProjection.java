@@ -167,6 +167,8 @@ public class CnyFundPlanProjection {
                     .addShares(purchase.getShares());
         }
 
+        if (flows.isEmpty() && positions.isEmpty() && months.isEmpty()) return Snapshot.empty();
+
         TreeMap<LocalDate, BigDecimal> rates = new TreeMap<>();
         if (!flows.isEmpty()) {
             LocalDate first = flows.stream().map(Flow::date).min(LocalDate::compareTo).orElseThrow();

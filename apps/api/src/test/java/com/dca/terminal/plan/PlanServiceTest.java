@@ -105,7 +105,7 @@ class PlanServiceTest {
         when(assetRepository.findAllByPlanIdOrderByIdAsc(planId)).thenReturn(assets);
         return new PlanService(planRepository, assetRepository, mock(CycleRepository.class),
                 mock(CycleAssetRepository.class), mock(InstrumentRepository.class), mock(TransactionRepository.class),
-                portfolio, Clock.fixed(Instant.parse("2026-08-27T00:00:00Z"), ZoneId.of("UTC")), ZoneId.of("UTC"));
+                portfolio, mock(CnyFundPlanProjection.class), Clock.fixed(Instant.parse("2026-08-27T00:00:00Z"), ZoneId.of("UTC")), ZoneId.of("UTC"));
     }
 
     private static InvestmentPlanEntity mockPlan(UUID id, String budget) {

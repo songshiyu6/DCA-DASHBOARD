@@ -67,7 +67,7 @@ function planPayload(values: PlanFormValues): Omit<InvestmentPlan, 'id' | 'cycle
 }
 
 function CycleRow({ cycle, planStartDate, initialPrincipal }: { cycle: PlanCycle; planStartDate: string; initialPrincipal: string }) {
-  const { i18n } = useTranslation()
+  const { t, i18n } = useTranslation()
   const isZh = (i18n.resolvedLanguage ?? i18n.language).toLowerCase().startsWith('zh')
   const initialLabel = isZh ? '初始投入' : 'Initial capital'
   const initialCycle = isInitialContributionPeriod(cycle.period, cycle.status, planStartDate, initialPrincipal, cycle.executedAmount)

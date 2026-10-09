@@ -76,9 +76,8 @@ describe('plan editor', () => {
 
     renderPage()
 
-    expect(await screen.findByText('CNY fund DCA (USD):')).toBeInTheDocument()
-    expect(screen.getByText('$900.00')).toBeInTheDocument()
-    expect(screen.getByText('$200.00')).toBeInTheDocument()
+    expect(await screen.findByText(/CNY fund DCA \(USD\): \$200\.00/)).toBeInTheDocument()
+    expect(screen.getByText(/\$900\.00/)).toBeInTheDocument()
   })
 
   it('shows the skipped opening cycle as the actual initial contribution', async () => {

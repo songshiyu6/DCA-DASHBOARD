@@ -97,6 +97,9 @@ class CnyDcaPlanServiceIntegrationTest {
         PlanDtos.NextDcaResponse next = service.nextDca(planId).orElseThrow();
         assertThat(next.amount()).isEqualByComparingTo("60");
         assertThat(next.status()).isEqualTo(FreshnessStatus.FRESH);
+        PlanDtos.RecommendationResponse planPage = service.recommendation(planId, null);
+        assertThat(planPage.amount()).isEqualByComparingTo("60");
+        assertThat(planPage.items().getFirst().suggestedAmount()).isEqualByComparingTo("60");
         // Only the real USD BUY may be written to the old USD cycle rows.
         verify(cycle, atLeastOnce()).setExecutedAmount(bd("50"));
         verify(cycleAsset, atLeastOnce()).setExecutedAmount(bd("50"));

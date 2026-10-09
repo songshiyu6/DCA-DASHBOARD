@@ -333,6 +333,11 @@ cycle response executed USD = linked real USD BUYs + sum(CNY auto-DCA gross / fl
 remaining USD = max(0, frozen USD monthly budget - cycle response executed USD)
 ```
 
+The default `/plans/{id}/recommendation` read uses the same next-cycle remaining
+amount as the dashboard's Next DCA card. Explicit `amount` requests still use the
+caller's requested amount. This keeps the Plan page from proposing a full monthly
+budget after part of the budget was already spent on CNY fund DCA.
+
 CNY auto-DCA execution requires an observed NAV; a persisted confirmed open date without
 NAV makes the corresponding month's response `dataStatus=PARTIAL`, and no nonexistent
 purchase is created. Missing historical FX likewise flags the month as incomplete;

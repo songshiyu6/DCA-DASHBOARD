@@ -152,6 +152,16 @@ public class PlanService {
 
     @Transactional
     public RecommendationResponse recommendation(UUID planId, BigDecimal requestedAmount) {
+        // The default Plan-page recommendation uses the same remaining budget as the
+        // dashboard's Next DCA card, including confirmed CNY fund auto-DCA flows.
+        if (requestedAmount == null) {
+            Optional<NextDcaResponse> next = nextDca(planId);
+            if (next.isPresent()) {
+                NextDcaResponse pending = next.get();
+                return new RecommendationResponse(pending.amount(), pending.status(),
+                        pending.items(), pending.message());
+            }
+        }
         InvestmentPlanEntity plan = getEntity(planId);
         BigDecimal amount = requestedAmount == null ? plan.getMonthlyBudget() : requestedAmount;
         if (amount == null || amount.signum() < 0) {

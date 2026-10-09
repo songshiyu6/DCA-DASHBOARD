@@ -67,7 +67,7 @@ function planPayload(values: PlanFormValues): Omit<InvestmentPlan, 'id' | 'cycle
 }
 
 function CycleRow({ cycle, planStartDate, initialPrincipal }: { cycle: PlanCycle; planStartDate: string; initialPrincipal: string }) {
-  const { i18n } = useTranslation()
+  const { t, i18n } = useTranslation()
   const isZh = (i18n.resolvedLanguage ?? i18n.language).toLowerCase().startsWith('zh')
   const initialLabel = isZh ? '初始投入' : 'Initial capital'
   const initialCycle = isInitialContributionPeriod(cycle.period, cycle.status, planStartDate, initialPrincipal, cycle.executedAmount)
@@ -82,7 +82,7 @@ function CycleRow({ cycle, planStartDate, initialPrincipal }: { cycle: PlanCycle
   const ratio = planned.gt(0) ? decimalMin(decimalMax(decimal(cycle.executedAmount).div(planned), 0), 1).toNumber() * 100 : 0
   return <div className="cycle-row">
     <div className="cycle-period"><span className={`cycle-marker cycle-marker-${cycle.status.toLowerCase()}`}>{cycle.status === 'COMPLETED' ? <Check size={13} /> : cycle.status === 'PARTIAL' ? '½' : '·'}</span><div><strong>{formatPeriod(cycle.period)}</strong><small>{cycle.period}</small></div></div>
-    <div className="cycle-progress"><div className="cycle-track"><span style={{ width: `${ratio}%` }} /></div><small>{formatMoney(cycle.executedAmount)} <span>/ {formatMoney(cycle.plannedAmount)}</span></small></div>
+    <div className="cycle-progress"><div className="cycle-track"><span style={{ width: `${ratio}%` }} /></div><small>{formatMoney(cycle.executedAmount)} <span>/ {formatMoney(cycle.plannedAmount)}</span></small>{cycle.cnyFundExecutedUsd && decimal(cycle.cnyFundExecutedUsd).gt(0) ? <small>{t('plan.cnyFundExecuted')}: {formatMoney(cycle.cnyFundExecutedUsd)}</small> : null}{cycle.dataStatus === 'PARTIAL' ? <small>{t('plan.cnyFundPartial')}</small> : null}</div>
     <div className="cycle-status"><StatusBadge status={cycle.status} compact /></div>
   </div>
 }
@@ -91,6 +91,7 @@ function RecommendationPanel({ recommendation }: { recommendation: Recommendatio
   const { t } = useTranslation()
   return <Panel title={t('plan.recommendation')} detail={t('plan.recommendationHint')} action={<span className="recommendation-total">{formatMoney(recommendation.amount)}</span>}>
     <div className="recommendation-method"><SlidersHorizontal size={14} /><span>{t('plan.method')}: <strong>{t('plan.contributionFirst')}</strong></span></div>
+    <p className="field-hint">{t('plan.cnyFundMapping')}</p>
     {recommendation.items.length ? <div className="recommendation-table"><div className="recommendation-header"><span>{t('etfs.ticker')}</span><span>{t('plan.current')}</span><span>{t('plan.target')}</span><span>{t('plan.gap')}</span><span>{t('plan.suggested')}</span></div>{recommendation.items.map((item) => <div className="recommendation-item" key={item.symbol}><span className="ticker-chip">{item.symbol}</span><span>{formatPercent(item.currentWeight)}</span><span>{formatPercent(item.targetWeight)}</span><span className={decimal(item.gap).gt(0) ? 'text-positive' : decimal(item.gap).lt(0) ? 'text-negative' : ''}>{formatSignedPercent(item.gap)}</span><strong>{formatMoney(item.suggestedAmount)}</strong></div>)}</div> : <EmptyState title={t('common.noData')} />}
   </Panel>
 }
@@ -161,6 +162,6 @@ export function PlanPage() {
       {plan ? <TargetAllocationPanel plan={plan} /> : <Panel title={t('plan.targetAllocation')} detail={t('plan.allocationHint')}><EmptyState title={t('plan.noPlan')} detail={t('plan.noAssets')} /></Panel>}
     </div>
     {savePlan.error instanceof Error ? <p className="form-alert page-alert" role="alert">{savePlan.error.message}</p> : null}
-    {plan ? <div className="content-grid plan-secondary-grid"><div className="plan-cycles-column"><Panel title={t('plan.cycles')} detail={t('plan.executionHistory')}>{cycles.isLoading ? <LoadingBlock lines={8} /> : cycles.isError ? <ErrorState onRetry={() => void cycles.refetch()} /> : cycleData.length ? <div className="cycles-list">{cycleData.map((cycle) => <CycleRow key={cycle.id} cycle={cycle} planStartDate={plan.startDate} initialPrincipal={initialPrincipal} />)}</div> : <EmptyState title={t('common.noData')} />}</Panel></div><div>{recommendation.isLoading ? <Panel title={t('plan.recommendation')}><LoadingBlock lines={6} /></Panel> : recommendation.isError ? <ErrorState onRetry={() => void recommendation.refetch()} /> : recommendation.data ? <><DataStateBanner status={recommendation.data.meta.status} message={recommendation.data.meta.message} source={recommendation.data.meta.source === 'FIXTURE' ? t('common.demoData') : recommendation.data.meta.source} asOf={recommendation.data.meta.asOf} retrievedAt={recommendation.data.meta.retrievedAt} /><RecommendationPanel recommendation={recommendation.data.data} /></> : <EmptyState title={t('common.noData')} />}</div></div> : null}
+    {plan ? <div className="content-grid plan-secondary-grid"><div className="plan-cycles-column"><Panel title={t('plan.cycles')} detail={t('plan.executionHistory')}>{cycles.isLoading ? <LoadingBlock lines={8} /> : cycles.isError ? <ErrorState onRetry={() => void cycles.refetch()} /> : cycleData.length ? <div className="cycles-list">{cycleData.map((cycle) => <CycleRow key={cycle.id} cycle={cycle} planStartDate={plan.startDate} initialPrincipal={initialPrincipal} />)}</div> : <EmptyState title={t('common.noData')} />}</Panel></div><div>{recommendation.isLoading ? <Panel title={t('plan.recommendation')}><LoadingBlock lines={6} /></Panel> : recommendation.isError ? <ErrorState onRetry={() => void recommendation.refetch()} /> : recommendation.data ? <><DataStateBanner status={recommendation.data.data.dataStatus ?? recommendation.data.meta.status} message={recommendation.data.data.message ?? recommendation.data.meta.message} source={recommendation.data.meta.source === 'FIXTURE' ? t('common.demoData') : recommendation.data.meta.source} asOf={recommendation.data.meta.asOf} retrievedAt={recommendation.data.meta.retrievedAt} /><RecommendationPanel recommendation={recommendation.data.data} /></> : <EmptyState title={t('common.noData')} />}</div></div> : null}
   </div>
 }

@@ -40,7 +40,7 @@ class InitialCapitalDcaCycleTest {
     @BeforeEach
     void setUp() {
         service = new PlanService(planRepository, assetRepository, cycleRepository, cycleAssetRepository,
-                instrumentRepository, transactionRepository, portfolioService,
+                instrumentRepository, transactionRepository, portfolioService, mock(CnyFundPlanProjection.class),
                 Clock.fixed(Instant.parse("2026-01-03T12:00:00Z"), ZoneId.of("UTC")), ZoneId.of("UTC"));
         when(planRepository.findById(planId)).thenReturn(Optional.of(plan));
         when(cycleRepository.findByPlanIdAndPeriod(planId, "2026-01")).thenReturn(Optional.of(cycle));

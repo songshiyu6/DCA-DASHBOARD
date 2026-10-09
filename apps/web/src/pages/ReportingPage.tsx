@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { DataStateBanner, ErrorState, LoadingBlock } from '../components/DataState'
 import { Panel } from '../components/Panel'
 import { api } from '../lib/api'
-import { queryKeys } from '../lib/queryKeys'
+import { invalidateCnyDcaPlanQueries, queryKeys } from '../lib/queryKeys'
 import type { PerformanceRange } from '../reportingTypes'
 
 const ranges: PerformanceRange[] = ['1M', '3M', '1Y', 'YTD', 'ALL']
@@ -75,7 +75,10 @@ export function ReportingPage() {
   const syncFx = useMutation({
     mutationFn: api.syncUsdCny,
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['multi-currency-report'] })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.multiCurrencyReports }),
+        invalidateCnyDcaPlanQueries(queryClient),
+      ])
       await report.refetch()
     },
   })

@@ -66,6 +66,21 @@ describe('plan editor', () => {
     })))
   })
 
+  it('shows CNY fund DCA as part of a USD cycle without hiding the currency conversion', async () => {
+    mockedApi.getCycles.mockResolvedValue({
+      data: [{ id: 'cycle-2026-08', period: '2026-08', plannedAmount: '1500',
+        executedAmount: '900', cnyFundExecutedUsd: '200', dataStatus: 'FRESH',
+        status: 'PARTIAL', assets: [] }],
+      meta: { status: 'FRESH', source: 'API' },
+    })
+
+    renderPage()
+
+    expect(await screen.findByText('CNY fund DCA (USD):')).toBeInTheDocument()
+    expect(screen.getByText('$900.00')).toBeInTheDocument()
+    expect(screen.getByText('$200.00')).toBeInTheDocument()
+  })
+
   it('shows the skipped opening cycle as the actual initial contribution', async () => {
     mockedApi.getCycles.mockResolvedValue({
       data: [{ id: 'cycle-2026-01', period: '2026-01', plannedAmount: '0', executedAmount: '0', status: 'SKIPPED', assets: [] }],

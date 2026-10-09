@@ -318,6 +318,39 @@ inside/after, executed >= plan       -> COMPLETED
 after window, executed = 0           -> SKIPPED
 ```
 
+## Read-only CNY overlay for USD DCA plans
+
+The persisted `investment_plan_cycle.executed_amount` and cycle-asset executed values still
+record **only linked real USD ETF BUY cash outlay**. The USD transaction ledger and real USD
+portfolio allocations are not changed.
+
+The plan and dashboard **response projections** add known automatic CNY fund executions,
+converted individually using the persisted USD/CNY rate on/before the execution NAV date
+(with at most seven calendar days carry-forward):
+
+```text
+cycle response executed USD = linked real USD BUYs + sum(CNY auto-DCA gross / flow-date FX)
+remaining USD = max(0, frozen USD monthly budget - cycle response executed USD)
+```
+
+CNY auto-DCA execution requires an observed NAV; a persisted confirmed open date without
+NAV makes the corresponding month's response `dataStatus=PARTIAL`, and no nonexistent
+purchase is created. Missing historical FX likewise flags the month as incomplete;
+the next-buy allocation is withheld until conversion is complete. An initial-capital
+month with zero USD DCA budget remains excluded from DCA progress.
+
+For the **plan allocation recommendation only**, CNY fund positions whose names contain
+`纳指`, `纳斯达克`, or `NASDAQ` count as **QQQM-equivalent market exposure**:
+their accumulated shares are valued using the latest observed fund NAV and
+valuation-date USD/CNY FX. This is an exposure mapping, not a claim that QDII shares
+are interchangeable with QQQM shares or that a USD ETF trade was made.
+
+All other CNY auto-DCA executions are included in the total executed amount, but do not
+silently count as a particular ETF position. Settled one-time CNY purchases count for
+QQQM-equivalent exposure where mapped, but are **not** counted as recurring DCA executions.
+Changes to China fund rules/NAV/purchases or the synced FX series invalidate plan and
+dashboard projections.
+
 ## Contribution-batch analysis
 
 Real contribution analysis remains BUY-lot based.

@@ -124,6 +124,8 @@ export interface PlanCycle {
   period: string
   plannedAmount: string
   executedAmount: string
+  cnyFundExecutedUsd?: string
+  dataStatus?: DataStatus
   status: CycleStatus
   openedAt?: string | null
   completedAt?: string | null
@@ -208,10 +210,14 @@ export interface ContributionProgress {
   planned: string
   remaining: string
   executionRate: string
+  cnyFundExecutedUsd?: string
+  dataStatus?: DataStatus
   months: Array<{
     period: string
     planned: string
     executed: string
+    cnyFundExecutedUsd?: string
+    dataStatus?: DataStatus
     status: CycleStatus | 'NONE'
   }>
 }

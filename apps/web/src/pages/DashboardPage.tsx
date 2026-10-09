@@ -239,7 +239,7 @@ export function DashboardPage() {
       {progress ? <Panel title={t('dashboard.dcaProgress')} detail={t('dashboard.contributionProgress', { year: progress.year })} action={<div className="progress-summary"><strong>{formatMoney(progress.executed)}</strong><span>/ {formatMoney(progress.planned)}</span><b>{formatPercent(progress.executionRate)}</b></div>}>
         <ContributionBars months={progress.months} planStartDate={activePlan?.startDate} initialPrincipal={initialPrincipal} initialLabel={initialLabel} />
         {showInitialProgress ? <div className="progress-initial-row"><span><b>{formatPeriod(initialPeriod ?? '')}</b><small>{initialLabel}</small></span><strong>{formatMoney(initialPrincipal)}</strong></div> : null}
-        <div className="progress-foot"><span>{t('dashboard.executed')} {formatMoney(progress.executed)}</span><span>{t('dashboard.remaining')} {formatMoney(decimalMax(decimal(progress.planned).minus(progress.executed), 0).toString())}</span></div>
+        <div className="progress-foot"><span>{t('dashboard.executed')} {formatMoney(progress.executed)}</span><span>{t('dashboard.remaining')} {formatMoney(decimalMax(decimal(progress.planned).minus(progress.executed), 0).toString())}</span>{progress.cnyFundExecutedUsd && decimal(progress.cnyFundExecutedUsd).gt(0) ? <span>{t('dashboard.cnyFundExecuted')} {formatMoney(progress.cnyFundExecutedUsd)}</span> : null}{progress.dataStatus === 'PARTIAL' ? <span>{t('dashboard.cnyFundPartial')}</span> : null}</div>
       </Panel> : <Panel title={t('dashboard.dcaProgress')}><EmptyState title={t('plan.noPlan')} detail={t('plan.createPlan')} /></Panel>}
     </div>
     <p className="data-footnote">{t('dashboard.performanceFootnote', { date: formatDate(meta.asOf) })}</p>

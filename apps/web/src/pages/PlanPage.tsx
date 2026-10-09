@@ -82,7 +82,7 @@ function CycleRow({ cycle, planStartDate, initialPrincipal }: { cycle: PlanCycle
   const ratio = planned.gt(0) ? decimalMin(decimalMax(decimal(cycle.executedAmount).div(planned), 0), 1).toNumber() * 100 : 0
   return <div className="cycle-row">
     <div className="cycle-period"><span className={`cycle-marker cycle-marker-${cycle.status.toLowerCase()}`}>{cycle.status === 'COMPLETED' ? <Check size={13} /> : cycle.status === 'PARTIAL' ? '½' : '·'}</span><div><strong>{formatPeriod(cycle.period)}</strong><small>{cycle.period}</small></div></div>
-    <div className="cycle-progress"><div className="cycle-track"><span style={{ width: `${ratio}%` }} /></div><small>{formatMoney(cycle.executedAmount)} <span>/ {formatMoney(cycle.plannedAmount)}</span></small></div>
+    <div className="cycle-progress"><div className="cycle-track"><span style={{ width: `${ratio}%` }} /></div><small>{formatMoney(cycle.executedAmount)} <span>/ {formatMoney(cycle.plannedAmount)}</span></small>{cycle.cnyFundExecutedUsd && decimal(cycle.cnyFundExecutedUsd).gt(0) ? <small>{t('plan.cnyFundExecuted')}: {formatMoney(cycle.cnyFundExecutedUsd)}</small> : null}{cycle.dataStatus === 'PARTIAL' ? <small>{t('plan.cnyFundPartial')}</small> : null}</div>
     <div className="cycle-status"><StatusBadge status={cycle.status} compact /></div>
   </div>
 }
@@ -91,6 +91,7 @@ function RecommendationPanel({ recommendation }: { recommendation: Recommendatio
   const { t } = useTranslation()
   return <Panel title={t('plan.recommendation')} detail={t('plan.recommendationHint')} action={<span className="recommendation-total">{formatMoney(recommendation.amount)}</span>}>
     <div className="recommendation-method"><SlidersHorizontal size={14} /><span>{t('plan.method')}: <strong>{t('plan.contributionFirst')}</strong></span></div>
+    <p className="field-hint">{t('plan.cnyFundMapping')}</p>
     {recommendation.items.length ? <div className="recommendation-table"><div className="recommendation-header"><span>{t('etfs.ticker')}</span><span>{t('plan.current')}</span><span>{t('plan.target')}</span><span>{t('plan.gap')}</span><span>{t('plan.suggested')}</span></div>{recommendation.items.map((item) => <div className="recommendation-item" key={item.symbol}><span className="ticker-chip">{item.symbol}</span><span>{formatPercent(item.currentWeight)}</span><span>{formatPercent(item.targetWeight)}</span><span className={decimal(item.gap).gt(0) ? 'text-positive' : decimal(item.gap).lt(0) ? 'text-negative' : ''}>{formatSignedPercent(item.gap)}</span><strong>{formatMoney(item.suggestedAmount)}</strong></div>)}</div> : <EmptyState title={t('common.noData')} />}
   </Panel>
 }

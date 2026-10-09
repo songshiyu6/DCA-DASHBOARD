@@ -80,6 +80,18 @@ describe('plan editor', () => {
     expect(screen.getByText(/\$900\.00/)).toBeInTheDocument()
   })
 
+  it('explains when incomplete CNY FX/NAV prevents a trustworthy next buy', async () => {
+    mockedApi.getRecommendation.mockResolvedValue({
+      data: { amount: '1500', dataStatus: 'PARTIAL',
+        message: 'CNY fund NAV or historical FX is missing', items: [] },
+      meta: { status: 'FRESH', source: 'API' },
+    })
+
+    renderPage()
+
+    expect(await screen.findByText('CNY fund NAV or historical FX is missing')).toBeInTheDocument()
+  })
+
   it('shows the skipped opening cycle as the actual initial contribution', async () => {
     mockedApi.getCycles.mockResolvedValue({
       data: [{ id: 'cycle-2026-01', period: '2026-01', plannedAmount: '0', executedAmount: '0', status: 'SKIPPED', assets: [] }],

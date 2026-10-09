@@ -112,6 +112,7 @@ class CnyFundPlanProjectionTest {
                 .thenReturn(List.of(nav("2026-09-07", "7.20")));
         when(profileRepository.findById(nasdaqId)).thenReturn(Optional.empty());
         // FX first available on September 8, after the September 7 contribution.
+        when(fxService.usdCnyOnOrBefore(FLOW_DATE)).thenReturn(null);
         when(fxService.usdCny(LocalDate.of(2026, 9, 7), TODAY))
                 .thenReturn(new FxDtos.FxSeriesResponse("USD", "CNY", FxService.USD_CNY_SEMANTICS,
                         List.of(rate("2026-09-08", "7.20"))));

@@ -220,7 +220,7 @@ public class PlanService {
         FreshnessStatus status = unavailablePrice ? FreshnessStatus.PARTIAL : stalePrice ? FreshnessStatus.STALE : FreshnessStatus.FRESH;
         String message = cnyExposureUnavailable ? "QQQM-equivalent CNY fund NAV or USD/CNY is unavailable"
                 : unavailablePrice ? "One or more plan assets have no usable price"
-                : stalePrice ? "Market data or CNY fund NAV is delayed; recommendation uses last available values" : null;
+                : stalePrice ? "Market data is stale or CNY fund NAV is delayed; recommendation uses last available values" : null;
         return new RecommendationResponse(amount, status, items, message);
     }
 

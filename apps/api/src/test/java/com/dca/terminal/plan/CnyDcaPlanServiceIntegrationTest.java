@@ -170,7 +170,7 @@ class CnyDcaPlanServiceIntegrationTest {
 
     private static InvestmentPlanEntity plan(UUID id) {
         InvestmentPlanEntity plan = mock(InvestmentPlanEntity.class);
-        when(plan.getId()).thenReturn(id);
+        lenient().when(plan.getId()).thenReturn(id);
         lenient().when(plan.getStartDate()).thenReturn(LocalDate.of(2026, 8, 1));
         lenient().when(plan.getExecutionStartDay()).thenReturn(1);
         lenient().when(plan.getExecutionEndDay()).thenReturn(31);

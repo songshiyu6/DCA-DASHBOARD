@@ -40,7 +40,16 @@ public final class PlanDtos {
 
     public record CycleResponse(UUID id, UUID planId, String period, BigDecimal plannedAmount,
                                 BigDecimal executedAmount, CycleStatus status,
-                                List<CycleAssetResponse> assets, Instant openedAt, Instant completedAt) { }
+                                List<CycleAssetResponse> assets, Instant openedAt, Instant completedAt,
+                                BigDecimal cnyFundExecutedUsd,
+                                @JsonProperty("dataStatus") FreshnessStatus dataStatus) {
+        public CycleResponse(UUID id, UUID planId, String period, BigDecimal plannedAmount,
+                             BigDecimal executedAmount, CycleStatus status,
+                             List<CycleAssetResponse> assets, Instant openedAt, Instant completedAt) {
+            this(id, planId, period, plannedAmount, executedAmount, status, assets, openedAt,
+                    completedAt, BigDecimal.ZERO, FreshnessStatus.FRESH);
+        }
+    }
 
     public record RecommendationItem(String symbol, BigDecimal currentWeight, BigDecimal targetWeight,
                                      BigDecimal currentValue, BigDecimal gap, BigDecimal suggestedAmount,
@@ -65,10 +74,23 @@ public final class PlanDtos {
         }
     }
 
-    public record ContributionMonth(String period, BigDecimal planned, BigDecimal executed, CycleStatus status) { }
+    public record ContributionMonth(String period, BigDecimal planned, BigDecimal executed,
+                                    CycleStatus status, BigDecimal cnyFundExecutedUsd,
+                                    @JsonProperty("dataStatus") FreshnessStatus dataStatus) {
+        public ContributionMonth(String period, BigDecimal planned, BigDecimal executed, CycleStatus status) {
+            this(period, planned, executed, status, BigDecimal.ZERO, FreshnessStatus.FRESH);
+        }
+    }
 
     public record ContributionProgress(int year, BigDecimal executed, BigDecimal planned, BigDecimal remaining,
-                                       BigDecimal executionRate, List<ContributionMonth> months) {
+                                       BigDecimal executionRate, List<ContributionMonth> months,
+                                       BigDecimal cnyFundExecutedUsd,
+                                       @JsonProperty("dataStatus") FreshnessStatus dataStatus) {
+        public ContributionProgress(int year, BigDecimal executed, BigDecimal planned, BigDecimal remaining,
+                                    BigDecimal executionRate, List<ContributionMonth> months) {
+            this(year, executed, planned, remaining, executionRate, months,
+                    BigDecimal.ZERO, FreshnessStatus.FRESH);
+        }
         public ContributionProgress {
             BigDecimal annualExecuted = executed == null ? BigDecimal.ZERO : executed;
             BigDecimal annualPlanned = planned == null ? BigDecimal.ZERO : planned;

@@ -89,7 +89,7 @@ public class MultiCurrencyReportingService {
         TreeMap<LocalDate, BigDecimal> fxRates = fxRates(firstFxDate, today);
 
         List<PortfolioPerformanceSource.ExternalCashFlow> fundFlows = new ArrayList<>();
-        boolean flowComplete = states.stream().allMatch(state -> state.missingExecutionNavDates().isEmpty());
+        boolean flowComplete = states.stream().allMatch(state -> !hasMissingExecutionAtOrBeforeLatestNav(state, today));
         for (RuleState state : states) {
             for (AutoDcaDtos.DailyExecutionResponse execution : state.projection().daily()) {
                 BigDecimal rate = fxRate(fxRates, execution.navDate());
@@ -142,7 +142,7 @@ public class MultiCurrencyReportingService {
             FreshnessStatus status = usdEntry == null || usdValue.signum() == 0
                     ? FreshnessStatus.FRESH : usdEntry.getValue().status();
 
-            Valuation fundValuation = fundValuation(states, purchases, fxRates, date);
+            Valuation fundValuation = fundValuation(states, purchases, fxRates, date, date.equals(today));
             if (!fundValuation.complete()) status = FreshnessStatus.PARTIAL;
             BigDecimal totalValue = fundValuation.valueUsd() == null ? null : usdValue.add(fundValuation.valueUsd(), MC);
             BigDecimal fundFlow = floor(cumulativeFundFlow, date);
@@ -153,10 +153,8 @@ public class MultiCurrencyReportingService {
         }
 
         FxRateEntity currentRate = currentFxRate(today);
-        Valuation currentFunds = fundValuation(states, purchases, fxRates, today);
-        boolean currentFundFactsComplete = states.stream().allMatch(state -> fundFactsCompleteOn(state, today))
-                && purchases.stream().allMatch(state -> fundFactsCompleteOn(state, today));
-        BigDecimal cnyValue = currentFundFactsComplete ? currentFundValueCny(states, purchases, today) : null;
+        Valuation currentFunds = fundValuation(states, purchases, fxRates, today, true);
+        BigDecimal cnyValue = currentFunds.valueCny();
         BigDecimal cnyValueUsd = currentFunds.valueUsd();
         BigDecimal combinedValue = cnyValueUsd == null || usdSummary.marketValue() == null
                 ? null : usdSummary.marketValue().add(cnyValueUsd, MC);
@@ -169,11 +167,21 @@ public class MultiCurrencyReportingService {
         FreshnessStatus currentStatus = usdSummary.status() == FreshnessStatus.FRESH
                 && currentFunds.complete() && reportingFlowComplete ? FreshnessStatus.FRESH : FreshnessStatus.PARTIAL;
 
-        List<MultiCurrencyDtos.FundPosition> positions = currentFundFactsComplete
-                ? currentFundPositions(states, purchases, fxRates, today)
-                : List.of();
+        List<MultiCurrencyDtos.FundPosition> positions = currentFundPositions(states, purchases, fxRates, today);
+        // These CNY cost-based returns are independent of FX and of the combined USD TWR range.
+        // A historical missing execution/NAV makes the invested capital unknowable.
+        boolean fundCostComplete = cnyValue != null && !positions.isEmpty()
+                && positions.stream().allMatch(position -> position.investedCny() != null);
+        BigDecimal fundInvestedCny = fundCostComplete
+                ? positions.stream().map(MultiCurrencyDtos.FundPosition::investedCny)
+                    .reduce(BigDecimal.ZERO, (left, right) -> left.add(right, MC))
+                : null;
+        BigDecimal fundPnlCny = fundInvestedCny == null ? null : cnyValue.subtract(fundInvestedCny, MC);
+        BigDecimal fundReturnRate = fundPnlCny == null || fundInvestedCny.signum() == 0
+                ? null : fundPnlCny.divide(fundInvestedCny, MC);
         MultiCurrencyDtos.Summary summary = new MultiCurrencyDtos.Summary(
-                FxService.USD, usdSummary.marketValue(), cnyValue, cnyValueUsd, combinedValue,
+                FxService.USD, usdSummary.marketValue(), cnyValue,
+                fundInvestedCny, fundPnlCny, fundReturnRate, cnyValueUsd, combinedValue,
                 usdSummary.netInvested(), reportingFlowComplete ? fundExternalFlow : null,
                 combinedExternalFlow, combinedPnl,
                 currentRate == null ? null : currentRate.getRate(), currentRate == null ? null : currentRate.getRateDate(),
@@ -204,6 +212,9 @@ public class MultiCurrencyReportingService {
                 FxService.USD,
                 usdSummary.marketValue(),
                 BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                null,
                 BigDecimal.ZERO,
                 usdSummary.marketValue(),
                 usdSummary.netInvested(),
@@ -310,85 +321,125 @@ public class MultiCurrencyReportingService {
     private Valuation fundValuation(List<RuleState> states,
                                     List<PurchaseState> purchases,
                                     TreeMap<LocalDate, BigDecimal> fxRates,
-                                    LocalDate date) {
+                                    LocalDate date,
+                                    boolean allowValuationDateCarry) {
         BigDecimal rate = fxRate(fxRates, date);
-        BigDecimal total = BigDecimal.ZERO;
+        BigDecimal totalCny = BigDecimal.ZERO;
+        boolean usable = true;
         boolean complete = true;
         for (RuleState state : states) {
-            if (hasMissingExecutionOnOrBefore(state, date)) {
+            boolean hardMissingExecution = allowValuationDateCarry
+                    ? hasMissingExecutionAtOrBeforeLatestNav(state, date)
+                    : hasMissingExecutionBefore(state, date) || hasMissingExecutionOn(state, date);
+            if (hardMissingExecution) {
+                usable = false;
                 complete = false;
                 continue;
             }
+            if (allowValuationDateCarry && hasTrailingMissingExecutionAfterLatestNav(state, date)) {
+                complete = false;
+            }
+
             BigDecimal shares = floor(state.cumulativeShares(), date);
             if (shares == null || shares.signum() == 0) continue;
             Map.Entry<LocalDate, BigDecimal> navEntry = state.navByDate().floorEntry(date);
-            if (navEntry == null || rate == null || rate.signum() <= 0) {
+            if (navEntry == null) {
+                usable = false;
                 complete = false;
                 continue;
             }
-            if (hasUnresolvedNavGapAfter(state, navEntry.getKey(), date)) complete = false;
-            BigDecimal valueCny = shares.multiply(navEntry.getValue(), MC);
-            total = total.add(valueCny.divide(rate, MC), MC);
+            if (hasUnresolvedNavGapAfter(state, navEntry.getKey(), date, allowValuationDateCarry)) {
+                usable = false;
+                complete = false;
+                continue;
+            }
+            if (allowValuationDateCarry && hasTrailingNavLag(state, date)) complete = false;
+            totalCny = totalCny.add(shares.multiply(navEntry.getValue(), MC), MC);
         }
         for (PurchaseState state : purchases) {
             if (state.purchase().purchaseDate().isAfter(date)) continue;
             Map.Entry<LocalDate, BigDecimal> navEntry = state.navByDate().floorEntry(date);
-            if (navEntry == null || rate == null || rate.signum() <= 0) {
+            if (navEntry == null) {
+                usable = false;
                 complete = false;
                 continue;
             }
-            if (hasUnresolvedNavGapAfter(state, navEntry.getKey(), date)) complete = false;
-            BigDecimal valueCny = state.purchase().shares().multiply(navEntry.getValue(), MC);
-            total = total.add(valueCny.divide(rate, MC), MC);
+            if (hasUnresolvedNavGapAfter(state, navEntry.getKey(), date, allowValuationDateCarry)) {
+                usable = false;
+                complete = false;
+                continue;
+            }
+            if (allowValuationDateCarry && hasTrailingNavLag(state, date)) complete = false;
+            totalCny = totalCny.add(state.purchase().shares().multiply(navEntry.getValue(), MC), MC);
         }
-        return new Valuation(complete ? total : null, complete);
+        if (!usable) return new Valuation(null, null, false);
+        if (rate == null || rate.signum() <= 0) return new Valuation(totalCny, null, false);
+        return new Valuation(totalCny, totalCny.divide(rate, MC), complete);
     }
 
-    private boolean fundFactsCompleteOn(RuleState state, LocalDate date) {
-        if (hasMissingExecutionOnOrBefore(state, date)) return false;
-        BigDecimal shares = floor(state.cumulativeShares(), date);
-        if (shares == null || shares.signum() == 0) return true;
-        Map.Entry<LocalDate, BigDecimal> navEntry = state.navByDate().floorEntry(date);
-        return navEntry != null && !hasUnresolvedNavGapAfter(state, navEntry.getKey(), date);
+    private boolean hasMissingExecutionBefore(RuleState state, LocalDate date) {
+        return state.missingExecutionNavDates().stream().anyMatch(missing -> missing.isBefore(date));
     }
 
-    private boolean fundFactsCompleteOn(PurchaseState state, LocalDate date) {
-        if (state.purchase().purchaseDate().isAfter(date)) return true;
-        Map.Entry<LocalDate, BigDecimal> navEntry = state.navByDate().floorEntry(date);
-        return navEntry != null && !hasUnresolvedNavGapAfter(state, navEntry.getKey(), date);
+    private boolean hasMissingExecutionOn(RuleState state, LocalDate date) {
+        return state.missingExecutionNavDates().contains(date);
     }
 
-    private boolean hasMissingExecutionOnOrBefore(RuleState state, LocalDate date) {
-        return state.missingExecutionNavDates().stream().anyMatch(missing -> !missing.isAfter(date));
+    private boolean hasMissingExecutionAtOrBeforeLatestNav(RuleState state, LocalDate date) {
+        if (state.navByDate().isEmpty()) {
+            return state.missingExecutionNavDates().stream().anyMatch(missing -> !missing.isAfter(date));
+        }
+        LocalDate cutoff = state.navByDate().lastKey();
+        if (cutoff.isAfter(date)) cutoff = date;
+        LocalDate finalCutoff = cutoff;
+        return state.missingExecutionNavDates().stream().anyMatch(missing -> !missing.isAfter(finalCutoff));
     }
 
-    private boolean hasUnresolvedNavGapAfter(RuleState state, LocalDate navDate, LocalDate valuationDate) {
+    private boolean hasTrailingMissingExecutionAfterLatestNav(RuleState state, LocalDate date) {
+        if (state.navByDate().isEmpty()) return false;
+        LocalDate latestNavDate = state.navByDate().lastKey();
+        return state.missingExecutionNavDates().stream().anyMatch(missing ->
+                missing.isAfter(latestNavDate) && !missing.isAfter(date));
+    }
+
+    private boolean hasUnresolvedNavGapAfter(
+            RuleState state,
+            LocalDate navDate,
+            LocalDate valuationDate,
+            boolean allowValuationDateCarry) {
+        LocalDate latestNavDate = state.navByDate().isEmpty() ? null : state.navByDate().lastKey();
         return state.openDates().stream().anyMatch(openDate -> openDate.isAfter(navDate)
                 && !openDate.isAfter(valuationDate)
+                && !state.navByDate().containsKey(openDate)
+                && !(allowValuationDateCarry && latestNavDate != null && openDate.isAfter(latestNavDate)));
+    }
+
+    private boolean hasUnresolvedNavGapAfter(
+            PurchaseState state,
+            LocalDate navDate,
+            LocalDate valuationDate,
+            boolean allowValuationDateCarry) {
+        LocalDate latestNavDate = state.navByDate().isEmpty() ? null : state.navByDate().lastKey();
+        return state.openDates().stream().anyMatch(openDate -> openDate.isAfter(navDate)
+                && !openDate.isAfter(valuationDate)
+                && !state.navByDate().containsKey(openDate)
+                && !(allowValuationDateCarry && latestNavDate != null && openDate.isAfter(latestNavDate)));
+    }
+
+    private boolean hasTrailingNavLag(RuleState state, LocalDate date) {
+        if (state.navByDate().isEmpty()) return false;
+        LocalDate latestNavDate = state.navByDate().lastKey();
+        return state.openDates().stream().anyMatch(openDate -> openDate.isAfter(latestNavDate)
+                && !openDate.isAfter(date)
                 && !state.navByDate().containsKey(openDate));
     }
 
-    private boolean hasUnresolvedNavGapAfter(PurchaseState state, LocalDate navDate, LocalDate valuationDate) {
-        return state.openDates().stream().anyMatch(openDate -> openDate.isAfter(navDate)
-                && !openDate.isAfter(valuationDate)
+    private boolean hasTrailingNavLag(PurchaseState state, LocalDate date) {
+        if (state.navByDate().isEmpty()) return false;
+        LocalDate latestNavDate = state.navByDate().lastKey();
+        return state.openDates().stream().anyMatch(openDate -> openDate.isAfter(latestNavDate)
+                && !openDate.isAfter(date)
                 && !state.navByDate().containsKey(openDate));
-    }
-
-    private BigDecimal currentFundValueCny(List<RuleState> states, List<PurchaseState> purchases, LocalDate date) {
-        BigDecimal total = BigDecimal.ZERO;
-        for (RuleState state : states) {
-            BigDecimal shares = floor(state.cumulativeShares(), date);
-            Map.Entry<LocalDate, BigDecimal> nav = state.navByDate().floorEntry(date);
-            if (shares == null || shares.signum() == 0 || nav == null) continue;
-            total = total.add(shares.multiply(nav.getValue(), MC), MC);
-        }
-        for (PurchaseState state : purchases) {
-            if (state.purchase().purchaseDate().isAfter(date)) continue;
-            Map.Entry<LocalDate, BigDecimal> nav = state.navByDate().floorEntry(date);
-            if (nav == null) continue;
-            total = total.add(state.purchase().shares().multiply(nav.getValue(), MC), MC);
-        }
-        return total;
     }
 
     private List<MultiCurrencyDtos.FundPosition> currentFundPositions(
@@ -407,6 +458,15 @@ public class MultiCurrencyReportingService {
             item.shares = item.shares.add(shares, MC);
             item.nav = nav.getValue();
             item.navDate = nav.getKey();
+            for (AutoDcaDtos.DailyExecutionResponse execution : state.projection().daily()) {
+                if (!execution.navDate().isAfter(date)) {
+                    item.investedCny = item.investedCny.add(execution.grossAmount(), MC);
+                }
+            }
+            if (hasMissingExecutionAtOrBeforeLatestNav(state, date)
+                    || hasUnresolvedNavGapAfter(state, nav.getKey(), date, true)) {
+                item.investmentComplete = false;
+            }
         }
         for (PurchaseState state : purchases) {
             if (state.purchase().purchaseDate().isAfter(date)) continue;
@@ -415,6 +475,10 @@ public class MultiCurrencyReportingService {
             FundPositionAccumulator item = grouped.computeIfAbsent(state.purchase().fundCode(), ignored ->
                     new FundPositionAccumulator(state.purchase().fundCode(), state.purchase().fundName()));
             item.shares = item.shares.add(state.purchase().shares(), MC);
+            item.investedCny = item.investedCny.add(state.purchase().grossAmount(), MC);
+            if (hasUnresolvedNavGapAfter(state, nav.getKey(), date, true)) {
+                item.investmentComplete = false;
+            }
             if (item.navDate == null || nav.getKey().isAfter(item.navDate)) {
                 item.nav = nav.getValue();
                 item.navDate = nav.getKey();
@@ -423,7 +487,12 @@ public class MultiCurrencyReportingService {
         return grouped.values().stream().map(item -> {
             BigDecimal cny = item.shares.multiply(item.nav, MC);
             BigDecimal usd = rate == null || rate.signum() <= 0 ? null : cny.divide(rate, MC);
-            return new MultiCurrencyDtos.FundPosition(item.code, item.name, item.shares, item.nav, item.navDate, cny, usd);
+            BigDecimal invested = item.investmentComplete && item.investedCny.signum() > 0
+                    ? item.investedCny : null;
+            BigDecimal pnl = invested == null ? null : cny.subtract(invested, MC);
+            BigDecimal returnRate = pnl == null ? null : pnl.divide(invested, MC);
+            return new MultiCurrencyDtos.FundPosition(item.code, item.name, item.shares, item.nav,
+                    item.navDate, cny, usd, invested, pnl, returnRate);
         }).toList();
     }
 
@@ -463,12 +532,14 @@ public class MultiCurrencyReportingService {
             TreeMap<LocalDate, BigDecimal> navByDate,
             Set<LocalDate> openDates) { }
 
-    private record Valuation(BigDecimal valueUsd, boolean complete) { }
+    private record Valuation(BigDecimal valueCny, BigDecimal valueUsd, boolean complete) { }
 
     private static final class FundPositionAccumulator {
         private final String code;
         private final String name;
         private BigDecimal shares = BigDecimal.ZERO;
+        private BigDecimal investedCny = BigDecimal.ZERO;
+        private boolean investmentComplete = true;
         private BigDecimal nav;
         private LocalDate navDate;
 

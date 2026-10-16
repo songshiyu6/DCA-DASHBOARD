@@ -4,6 +4,7 @@ import {
   normalizeInstrument,
   normalizeMetrics,
   normalizePlan,
+  normalizePlanCycle,
   normalizePricePoints,
   normalizeQuote,
   normalizeRecommendation,
@@ -27,6 +28,25 @@ describe('domain response normalizers', () => {
 
   it('normalizes portfolio fields while retaining partial market values as null', () => {
     expect(normalizeDashboardData({ summary: { marketValue: '101.00' }, portfolioHistory: [{ date: '2026-08-26', marketValue: null, netInvested: '100.00', status: 'PARTIAL' }] }).portfolioHistory).toEqual([{ date: '2026-08-26', marketValue: null, netInvested: '100.00', dataStatus: 'PARTIAL' }])
+  })
+
+  it('preserves CNY fund executed breakdowns and partial FX status on plan reads', () => {
+    expect(normalizePlanCycle({
+      id: 'cycle-1', period: '2026-08', plannedAmount: '150', executedAmount: '90',
+      cnyFundExecutedUsd: '40', dataStatus: 'PARTIAL', status: 'PARTIAL', assets: [],
+    })).toMatchObject({ executedAmount: '90', cnyFundExecutedUsd: '40', dataStatus: 'PARTIAL' })
+    const progress = normalizeDashboardData({
+      contributionProgress: {
+        year: 2026, executed: '90', planned: '150', remaining: '60',
+        executionRate: '0.6', cnyFundExecutedUsd: '40', dataStatus: 'PARTIAL',
+        months: [{ period: '2026-08', planned: '150', executed: '90',
+          cnyFundExecutedUsd: '40', status: 'PARTIAL', dataStatus: 'PARTIAL' }],
+      },
+    }).contributionProgress
+    expect(progress).toMatchObject({
+      executed: '90', cnyFundExecutedUsd: '40', dataStatus: 'PARTIAL',
+      months: [{ cnyFundExecutedUsd: '40', dataStatus: 'PARTIAL' }],
+    })
   })
 
   it('normalizes price and metric domains without filling missing adjusted prices', () => {

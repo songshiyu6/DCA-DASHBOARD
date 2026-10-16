@@ -97,7 +97,7 @@ class PlanServiceCorrectnessTest {
         PlanRepository plans = mock(PlanRepository.class);
         when(plans.findById(planId)).thenReturn(Optional.of(plan));
         PlanService service = new PlanService(plans, assets, cycles, cycleAssets,
-                mock(InstrumentRepository.class), transactions, portfolio, CLOCK, ZoneId.of("UTC"));
+                mock(InstrumentRepository.class), transactions, portfolio, mock(CnyFundPlanProjection.class), CLOCK, ZoneId.of("UTC"));
 
         var result = service.nextDca(planId).orElseThrow();
 
@@ -127,7 +127,7 @@ class PlanServiceCorrectnessTest {
         when(cycleAssets.findAllByCycleIdOrderByIdAsc(cycleId)).thenReturn(List.of(asset));
         PlanService service = new PlanService(mock(PlanRepository.class), mock(AssetRepository.class), cycles,
                 cycleAssets, mock(InstrumentRepository.class), mock(TransactionRepository.class),
-                mock(PortfolioService.class), CLOCK, ZoneId.of("UTC"));
+                mock(PortfolioService.class), mock(CnyFundPlanProjection.class), CLOCK, ZoneId.of("UTC"));
 
         DomainException wrongType = assertThrows(DomainException.class,
                 () -> service.validateCycleForTransaction(cycleId, allowedId, TransactionType.SELL,
@@ -175,7 +175,7 @@ class PlanServiceCorrectnessTest {
 
         PlanService service = new PlanService(plans, assets, mock(CycleRepository.class),
                 mock(CycleAssetRepository.class), mock(InstrumentRepository.class), mock(TransactionRepository.class),
-                portfolio, CLOCK, ZoneId.of("UTC"));
+                portfolio, mock(CnyFundPlanProjection.class), CLOCK, ZoneId.of("UTC"));
 
         var response = service.recommendation(planId, bd("1000"));
 
@@ -212,7 +212,7 @@ class PlanServiceCorrectnessTest {
         when(cycleAssets.findAllByCycleIdOrderByIdAsc(cycleId)).thenReturn(List.of());
 
         PlanService service = new PlanService(plans, mock(AssetRepository.class), cycles, cycleAssets,
-                mock(InstrumentRepository.class), transactions, mock(PortfolioService.class),
+                mock(InstrumentRepository.class), transactions, mock(PortfolioService.class), mock(CnyFundPlanProjection.class),
                 Clock.fixed(Instant.parse("2026-02-28T12:00:00Z"), ZoneId.of("UTC")), ZoneId.of("UTC"));
 
         CycleResponse response = service.cycle(planId, "2026-02");
@@ -277,7 +277,7 @@ class PlanServiceCorrectnessTest {
                 .thenReturn(List.of());
 
         PlanService service = new PlanService(plans, assets, cycles, cycleAssets, instruments, transactions,
-                mock(PortfolioService.class),
+                mock(PortfolioService.class), mock(CnyFundPlanProjection.class),
                 Clock.fixed(Instant.parse("2026-08-05T12:00:00Z"), ZoneId.of("UTC")), ZoneId.of("UTC"));
 
         service.update(planId, new PlanDtos.PlanRequest("Updated", PlanFrequency.MONTHLY, bd("2000"),
@@ -359,7 +359,7 @@ class PlanServiceCorrectnessTest {
                 .thenReturn(List.of(linkedBuy));
 
         PlanService service = new PlanService(plans, assets, cycles, cycleAssets, instruments, transactions,
-                mock(PortfolioService.class), CLOCK, ZoneId.of("UTC"));
+                mock(PortfolioService.class), mock(CnyFundPlanProjection.class), CLOCK, ZoneId.of("UTC"));
 
         service.update(planId, new PlanDtos.PlanRequest("Updated", PlanFrequency.MONTHLY, bd("2000"),
                 LocalDate.of(2026, 8, 1), 1, 7, PlanStatus.ACTIVE,
@@ -414,7 +414,7 @@ class PlanServiceCorrectnessTest {
                 .thenReturn(transactions);
 
         PlanService service = new PlanService(plans, mock(AssetRepository.class), cycles, cycleAssets,
-                mock(InstrumentRepository.class), transactionRepository, mock(PortfolioService.class),
+                mock(InstrumentRepository.class), transactionRepository, mock(PortfolioService.class), mock(CnyFundPlanProjection.class),
                 Clock.fixed(Instant.parse(today + "T12:00:00Z"), ZoneId.of("UTC")), ZoneId.of("UTC"));
         return service.cycle(planId, "2026-08").status();
     }

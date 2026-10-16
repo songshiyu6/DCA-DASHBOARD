@@ -17,12 +17,18 @@ public final class MultiCurrencyDtos {
             BigDecimal nav,
             LocalDate navDate,
             BigDecimal marketValueCny,
-            BigDecimal marketValueUsd) { }
+            BigDecimal marketValueUsd,
+            BigDecimal investedCny,
+            BigDecimal pnlCny,
+            BigDecimal returnRate) { }
 
     public record Summary(
             String reportingCurrency,
             BigDecimal usdAccountValue,
             BigDecimal cnyFundValue,
+            BigDecimal cnyFundInvestedCny,
+            BigDecimal cnyFundPnlCny,
+            BigDecimal cnyFundReturnRate,
             BigDecimal cnyFundValueUsd,
             BigDecimal combinedValueUsd,
             BigDecimal usdExternalFlow,

@@ -85,6 +85,8 @@ class MultiCurrencyReportingServiceTest {
         assertThat(result.summary().combinedExternalFlowUsd()).isEqualByComparingTo("1000");
         assertThat(result.summary().combinedPnlUsd()).isEqualByComparingTo("100");
         assertThat(result.summary().cnyFundValue()).isEqualByComparingTo("0");
+        assertThat(result.summary().cnyFundInvestedCny()).isEqualByComparingTo("0");
+        assertThat(result.summary().cnyFundReturnRate()).isNull();
         assertThat(result.summary().cnyFundValueUsd()).isEqualByComparingTo("0");
         assertThat(result.summary().funds()).isEmpty();
         assertThat(result.performance().externalFlowModel())
@@ -120,6 +122,10 @@ class MultiCurrencyReportingServiceTest {
         assertThat(result.summary().cnyAutoDcaExternalFlowUsd()).isEqualByComparingTo("100");
         assertThat(result.summary().combinedExternalFlowUsd()).isEqualByComparingTo("1100");
         assertThat(result.summary().cnyFundValue()).isEqualByComparingTo("781");
+        assertThat(result.summary().cnyFundInvestedCny()).isEqualByComparingTo("710");
+        assertThat(result.summary().cnyFundPnlCny()).isEqualByComparingTo("71");
+        assertThat(result.summary().cnyFundReturnRate()).isEqualByComparingTo("0.1");
+        assertThat(result.summary().funds().getFirst().returnRate()).isEqualByComparingTo("0.1");
         assertThat(result.summary().cnyFundValueUsd()).isEqualByComparingTo("108.4722222222222222222222222222222");
         assertThat(result.summary().combinedValueUsd()).isEqualByComparingTo("1108.472222222222222222222222222222");
         assertThat(result.summary().combinedPnlUsd()).isEqualByComparingTo("8.472222222222222222222222222222");
@@ -154,6 +160,9 @@ class MultiCurrencyReportingServiceTest {
         assertThat(result.summary().cnyFundValue()).isEqualByComparingTo("781");
         assertThat(result.summary().funds()).hasSize(1);
         assertThat(result.summary().funds().getFirst().shares()).isEqualByComparingTo("100");
+        assertThat(result.summary().cnyFundInvestedCny()).isEqualByComparingTo("710");
+        assertThat(result.summary().cnyFundPnlCny()).isEqualByComparingTo("71");
+        assertThat(result.summary().cnyFundReturnRate()).isEqualByComparingTo("0.1");
         assertThat(result.summary().funds().getFirst().fundCode()).isEqualTo("000001");
         assertThat(result.performance().externalFlowModel())
                 .isEqualTo("USD_CASH_LEDGER_PLUS_CNY_FUND_ACTIVITY_AT_HISTORICAL_USDCNY");
@@ -184,6 +193,9 @@ class MultiCurrencyReportingServiceTest {
 
         assertThat(result.summary().status()).isEqualTo(FreshnessStatus.PARTIAL);
         assertThat(result.summary().cnyFundValueUsd()).isNull();
+        assertThat(result.summary().cnyFundInvestedCny()).isEqualByComparingTo("710");
+        assertThat(result.summary().cnyFundPnlCny()).isEqualByComparingTo("10");
+        assertThat(result.summary().funds().getFirst().pnlCny()).isEqualByComparingTo("10");
         assertThat(result.summary().combinedValueUsd()).isNull();
         assertThat(result.summary().cnyAutoDcaExternalFlowUsd()).isNull();
         assertThat(result.summary().combinedExternalFlowUsd()).isNull();
@@ -192,7 +204,7 @@ class MultiCurrencyReportingServiceTest {
     }
 
     @Test
-    void confirmedOpenDayWithoutNavMakesReportingPartialEvenWithoutAnotherMarketEvent() {
+    void currentOpenDayWithoutNavCarriesLastKnownFundValueButRemainsPartial() {
         UUID instrumentId = UUID.randomUUID();
         UUID ruleId = UUID.randomUUID();
         AutoDcaDtos.RuleResponse rule = rule(ruleId, instrumentId);
@@ -224,12 +236,63 @@ class MultiCurrencyReportingServiceTest {
         MultiCurrencyDtos.Response result = service.report("ALL");
 
         assertThat(result.summary().status()).isEqualTo(FreshnessStatus.PARTIAL);
-        assertThat(result.summary().cnyFundValue()).isNull();
-        assertThat(result.summary().cnyFundValueUsd()).isNull();
-        assertThat(result.summary().combinedValueUsd()).isNull();
+        assertThat(result.summary().cnyFundValue()).isEqualByComparingTo("710");
+        assertThat(result.summary().cnyFundValueUsd()).isNotNull();
+        assertThat(result.summary().combinedValueUsd()).isNotNull();
+        assertThat(result.summary().funds()).hasSize(1);
+        assertThat(result.summary().funds().getFirst().navDate()).isEqualTo(LocalDate.of(2026, 9, 7));
         assertThat(result.performance().liveEndpointIncluded()).isFalse();
         assertThat(result.performance().endpointDate()).isEqualTo(LocalDate.of(2026, 9, 7));
         assertThat(result.performance().points()).allMatch(point -> point.date().isBefore(TODAY));
+    }
+
+    @Test
+    void multiDayTrailingNavLagKeepsConfirmedValueAndFlowVisible() {
+        UUID instrumentId = UUID.randomUUID();
+        UUID ruleId = UUID.randomUUID();
+        AutoDcaDtos.RuleResponse rule = ongoingRule(ruleId, instrumentId, LocalDate.of(2026, 9, 4));
+        AutoDcaDtos.DailyExecutionResponse execution = execution("2026-09-04", "7.10", "710", "100");
+        FundProfileEntity profile = mock(FundProfileEntity.class);
+        FundMarketCalendarDayEntity openSep4 = mock(FundMarketCalendarDayEntity.class);
+        FundMarketCalendarDayEntity openSep7 = mock(FundMarketCalendarDayEntity.class);
+        FundMarketCalendarDayEntity openSep8 = mock(FundMarketCalendarDayEntity.class);
+
+        when(portfolioService.summary()).thenReturn(usdSummary("1000", "1000", "0"));
+        when(portfolioService.history("ALL")).thenReturn(List.of(usdDay("2026-09-04", "1000", "1000")));
+        when(autoDcaService.list()).thenReturn(List.of(rule));
+        when(autoDcaService.projection(ruleId, AutoDcaProjectionEngine.GroupBy.MONTH, true))
+                .thenReturn(projection(rule, execution));
+        when(navRepository.findAllByInstrumentIdOrderByNavDateAscRetrievedAtDesc(instrumentId))
+                .thenReturn(List.of(nav("2026-09-04", "7.10")));
+        when(profile.getCalendarCode()).thenReturn("CN_SSE");
+        when(profileRepository.findById(instrumentId)).thenReturn(Optional.of(profile));
+        when(openSep4.getMarketDate()).thenReturn(LocalDate.of(2026, 9, 4));
+        when(openSep7.getMarketDate()).thenReturn(LocalDate.of(2026, 9, 7));
+        when(openSep8.getMarketDate()).thenReturn(TODAY);
+        when(calendarRepository.findAllByCalendarCodeAndMarketDateBetweenOrderByMarketDateAsc(
+                "CN_SSE", LocalDate.of(2026, 9, 4), TODAY)).thenReturn(List.of(openSep4, openSep7, openSep8));
+        when(fxService.usdCnyOnOrBefore(LocalDate.of(2026, 9, 4))).thenReturn(fx("2026-09-04", "7.10"));
+        when(fxService.usdCny(LocalDate.of(2026, 9, 4), TODAY)).thenReturn(new FxDtos.FxSeriesResponse(
+                "USD", "CNY", FxService.USD_CNY_SEMANTICS,
+                List.of(rate("2026-09-04", "7.10"), rate("2026-09-07", "7.15"), rate("2026-09-08", "7.20"))));
+        when(fxService.usdCnyOnOrBefore(TODAY)).thenReturn(fx("2026-09-08", "7.20"));
+        when(usdPerformanceSource.externalCashFlows()).thenReturn(List.of());
+
+        MultiCurrencyDtos.Response result = service.report("ALL");
+
+        assertThat(result.summary().status()).isEqualTo(FreshnessStatus.PARTIAL);
+        assertThat(result.summary().cnyFundValue()).isEqualByComparingTo("710");
+        assertThat(result.summary().cnyFundValueUsd()).isNotNull();
+        assertThat(result.summary().cnyAutoDcaExternalFlowUsd()).isEqualByComparingTo("100");
+        assertThat(result.summary().combinedExternalFlowUsd()).isEqualByComparingTo("1100");
+        assertThat(result.summary().combinedValueUsd()).isNotNull();
+        assertThat(result.summary().combinedPnlUsd()).isNotNull();
+        assertThat(result.summary().funds()).hasSize(1);
+        assertThat(result.summary().funds().getFirst().navDate()).isEqualTo(LocalDate.of(2026, 9, 4));
+        assertThat(result.summary().funds().getFirst().returnRate()).isEqualByComparingTo("0");
+        assertThat(result.summary().cnyFundReturnRate()).isEqualByComparingTo("0");
+        assertThat(result.performance().liveEndpointIncluded()).isFalse();
+        assertThat(result.performance().endpointDate()).isEqualTo(LocalDate.of(2026, 9, 4));
     }
 
     private static PortfolioDtos.SummaryResponse usdSummary(String value, String flow, String pnl) {
@@ -247,6 +310,13 @@ class MultiCurrencyReportingServiceTest {
         return new AutoDcaDtos.RuleResponse(ruleId, instrumentId, "000001", "Test Fund", new BigDecimal("710"),
                 "CNY", AutoDcaFrequency.DAILY_FUND_TRADING_DAY, LocalDate.of(2026, 9, 7),
                 LocalDate.of(2026, 9, 7), BigDecimal.ZERO, true, "REWRITE_HISTORY");
+    }
+
+    private static AutoDcaDtos.RuleResponse ongoingRule(
+            UUID ruleId, UUID instrumentId, LocalDate startDate) {
+        return new AutoDcaDtos.RuleResponse(ruleId, instrumentId, "000001", "Test Fund", new BigDecimal("710"),
+                "CNY", AutoDcaFrequency.DAILY_FUND_TRADING_DAY, startDate,
+                null, BigDecimal.ZERO, true, "REWRITE_HISTORY");
     }
 
     private static AutoDcaDtos.ProjectionResponse projection(

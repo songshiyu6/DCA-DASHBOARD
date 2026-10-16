@@ -53,6 +53,7 @@ public class PlanService {
     private final InstrumentRepository instrumentRepository;
     private final TransactionRepository transactionRepository;
     private final PortfolioService portfolioService;
+    private final CnyFundPlanProjection cnyFundPlanProjection;
     private final Clock clock;
     private final ZoneId zone;
 
@@ -63,6 +64,7 @@ public class PlanService {
                        InstrumentRepository instrumentRepository,
                        TransactionRepository transactionRepository,
                        PortfolioService portfolioService,
+                       CnyFundPlanProjection cnyFundPlanProjection,
                        Clock clock,
                        ZoneId zone) {
         this.planRepository = planRepository;
@@ -72,6 +74,7 @@ public class PlanService {
         this.instrumentRepository = instrumentRepository;
         this.transactionRepository = transactionRepository;
         this.portfolioService = portfolioService;
+        this.cnyFundPlanProjection = cnyFundPlanProjection;
         this.clock = clock;
         this.zone = zone;
     }
@@ -131,7 +134,11 @@ public class PlanService {
     public List<CycleResponse> cycles(UUID planId) {
         InvestmentPlanEntity plan = getEntity(planId);
         ensureCycles(plan);
-        return cycleRepository.findAllByPlanIdOrderByPeriodAsc(planId).stream().map(this::refreshAndResponse).toList();
+        CnyFundPlanProjection.Snapshot cny = cnySnapshot();
+        return cycleRepository.findAllByPlanIdOrderByPeriodAsc(planId).stream()
+                .map(this::refreshAndResponse)
+                .map(real -> withCnyDca(real, plan, cny))
+                .toList();
     }
 
     @Transactional
@@ -140,11 +147,21 @@ public class PlanService {
         ensureCycle(plan, period);
         InvestmentPlanCycleEntity cycle = cycleRepository.findByPlanIdAndPeriod(planId, period)
                 .orElseThrow(() -> new DomainException(HttpStatus.NOT_FOUND, "CYCLE_NOT_FOUND", "Plan cycle not found"));
-        return refreshAndResponse(cycle);
+        return withCnyDca(refreshAndResponse(cycle), plan, cnySnapshot());
     }
 
     @Transactional
     public RecommendationResponse recommendation(UUID planId, BigDecimal requestedAmount) {
+        // The default Plan-page recommendation uses the same remaining budget as the
+        // dashboard's Next DCA card, including confirmed CNY fund auto-DCA flows.
+        if (requestedAmount == null) {
+            Optional<NextDcaResponse> next = nextDca(planId);
+            if (next.isPresent()) {
+                NextDcaResponse pending = next.get();
+                return new RecommendationResponse(pending.amount(), pending.status(),
+                        pending.items(), pending.message());
+            }
+        }
         InvestmentPlanEntity plan = getEntity(planId);
         BigDecimal amount = requestedAmount == null ? plan.getMonthlyBudget() : requestedAmount;
         if (amount == null || amount.signum() < 0) {
@@ -162,6 +179,20 @@ public class PlanService {
         Map<UUID, BigDecimal> currentValues = assets.stream().collect(java.util.stream.Collectors.toMap(
                 asset -> asset.getInstrument().getId(),
                 asset -> allCurrentValues.getOrDefault(asset.getInstrument().getId(), BigDecimal.ZERO)));
+        CnyFundPlanProjection.Snapshot cny = cnySnapshot();
+        // Add equivalent CNY Nasdaq-fund market value only to QQQM for this plan's
+        // read-only allocation decision; never alter real USD holdings/cash.
+        boolean cnyExposureUnavailable = false;
+        boolean cnyExposureStale = false;
+        for (InvestmentPlanAssetEntity asset : assets) {
+            String symbol = asset.getInstrument().getSymbol();
+            if (cny.unavailableExposureSymbols().contains(symbol)) cnyExposureUnavailable = true;
+            if (cny.staleExposureSymbols().contains(symbol)) cnyExposureStale = true;
+            BigDecimal equivalentValue = cny.exposureByEtfUsd().get(symbol);
+            if (equivalentValue != null) {
+                currentValues.merge(asset.getInstrument().getId(), equivalentValue, (a, b) -> a.add(b, MC));
+            }
+        }
         BigDecimal total = currentValues.values().stream().reduce(BigDecimal.ZERO, (a, b) -> a.add(b, MC));
         Map<UUID, PortfolioService.CurrentValuation> valuations = portfolioService.currentValuations(
                 assets.stream().map(InvestmentPlanAssetEntity::getInstrument).toList()).stream()
@@ -173,8 +204,9 @@ public class PlanService {
                     return valuation == null || valuation.price() == null
                             || valuation.status() == FreshnessStatus.UNAVAILABLE;
                 }));
-        boolean stalePrice = !unavailablePrice && valuations.values().stream()
-                .anyMatch(valuation -> valuation.status() != null && valuation.status() != FreshnessStatus.FRESH);
+        unavailablePrice = unavailablePrice || cnyExposureUnavailable;
+        boolean stalePrice = !unavailablePrice && (cnyExposureStale || valuations.values().stream()
+                .anyMatch(valuation -> valuation.status() != null && valuation.status() != FreshnessStatus.FRESH));
         List<RecommendationDraft> drafts = new ArrayList<>();
         BigDecimal positiveGapTotal = BigDecimal.ZERO;
         BigDecimal afterContribution = total.add(amount, MC);
@@ -196,8 +228,9 @@ public class PlanService {
                         draft.currentValue(), draft.targetWeight().subtract(draft.currentWeight(), MC),
                         draft.suggestedAmount(), draft.positiveGap(), draft.reason(), draft.gap())).toList();
         FreshnessStatus status = unavailablePrice ? FreshnessStatus.PARTIAL : stalePrice ? FreshnessStatus.STALE : FreshnessStatus.FRESH;
-        String message = unavailablePrice ? "One or more plan assets have no usable price"
-                : stalePrice ? "Market data is stale; recommendation uses last available prices" : null;
+        String message = cnyExposureUnavailable ? "QQQM-equivalent CNY fund NAV or USD/CNY is unavailable"
+                : unavailablePrice ? "One or more plan assets have no usable price"
+                : stalePrice ? "Market data is stale or CNY fund NAV is delayed; recommendation uses last available values" : null;
         return new RecommendationResponse(amount, status, items, message);
     }
 
@@ -224,9 +257,15 @@ public class PlanService {
         BigDecimal rate = startedPlanned.signum() == 0 ? BigDecimal.ZERO
                 : cappedExecuted.divide(startedPlanned, MC).min(BigDecimal.ONE);
         List<ContributionMonth> months = annualCycles.stream()
-                .map(cycle -> new ContributionMonth(cycle.period(), cycle.plannedAmount(), cycle.executedAmount(), cycle.status()))
+                .map(cycle -> new ContributionMonth(cycle.period(), cycle.plannedAmount(),
+                        cycle.executedAmount(), cycle.status(), cycle.cnyFundExecutedUsd(), cycle.dataStatus()))
                 .toList();
-        return new ContributionProgress(year, executed, planned, planned.subtract(executed, MC).max(BigDecimal.ZERO), rate, months);
+        BigDecimal cnyExecuted = annualCycles.stream().map(CycleResponse::cnyFundExecutedUsd)
+                .reduce(BigDecimal.ZERO, (a, b) -> a.add(b, MC));
+        FreshnessStatus dataStatus = annualCycles.stream().anyMatch(cycle -> cycle.dataStatus() == FreshnessStatus.PARTIAL)
+                ? FreshnessStatus.PARTIAL : FreshnessStatus.FRESH;
+        return new ContributionProgress(year, executed, planned, planned.subtract(executed, MC).max(BigDecimal.ZERO),
+                rate, months, cnyExecuted, dataStatus);
     }
 
     @Transactional
@@ -245,6 +284,12 @@ public class PlanService {
         if (candidates.isEmpty()) return Optional.empty();
         CycleResponse cycle = candidates.get(0);
         BigDecimal remaining = cycle.plannedAmount().subtract(cycle.executedAmount(), MC).max(BigDecimal.ZERO);
+        if (cycle.dataStatus() == FreshnessStatus.PARTIAL) {
+            return Optional.of(new NextDcaResponse(cycle.period(), remaining,
+                    daysUntilWindow(today, YearMonth.parse(cycle.period()), plan), List.of(),
+                    FreshnessStatus.PARTIAL,
+                    "CNY fund NAV or historical FX is missing; shown remaining is based on confirmed USD-equivalent contributions only"));
+        }
         RecommendationResponse recommendation = recommendation(planId, remaining);
         return Optional.of(new NextDcaResponse(cycle.period(), remaining,
                 daysUntilWindow(today, YearMonth.parse(cycle.period()), plan), recommendation.items(),
@@ -446,6 +491,39 @@ public class PlanService {
         YearMonth period = YearMonth.parse(cycle.getPeriod());
         int startDay = Math.max(1, Math.min(cycle.getPlan().getExecutionStartDay(), period.lengthOfMonth()));
         return period.atDay(startDay).isAfter(today);
+    }
+
+    private CnyFundPlanProjection.Snapshot cnySnapshot() {
+        CnyFundPlanProjection.Snapshot snapshot = cnyFundPlanProjection.snapshot(
+                LocalDate.now(clock.withZone(ZoneId.of("Asia/Shanghai"))));
+        return snapshot == null ? CnyFundPlanProjection.Snapshot.empty() : snapshot;
+    }
+
+    private CycleResponse withCnyDca(CycleResponse real, InvestmentPlanEntity plan,
+                                      CnyFundPlanProjection.Snapshot snapshot) {
+        // The first INITIAL-capital month intentionally has no recurring USD DCA budget.
+        if (real.plannedAmount().signum() == 0 && real.status() == CycleStatus.SKIPPED) return real;
+        CnyFundPlanProjection.Month cny = snapshot.month(YearMonth.parse(real.period()));
+        if (cny.executedUsd().signum() == 0 && cny.complete()) return real;
+
+        BigDecimal executed = real.executedAmount().add(cny.executedUsd(), MC);
+        YearMonth period = YearMonth.parse(real.period());
+        LocalDate today = LocalDate.now(clock.withZone(zone));
+        LocalDate windowStart = period.atDay(executionStartDay(period, plan));
+        LocalDate windowEnd = period.atDay(executionEndDay(period, plan));
+        CycleStatus status;
+        if (today.isBefore(windowStart)) status = CycleStatus.UPCOMING;
+        else if (executed.compareTo(real.plannedAmount()) >= 0) status = CycleStatus.COMPLETED;
+        else if (executed.signum() > 0) status = CycleStatus.PARTIAL;
+        else if (!today.isAfter(windowEnd)) status = CycleStatus.OPEN;
+        else status = CycleStatus.SKIPPED;
+        List<CycleAssetResponse> assets = real.assets().stream().map(asset ->
+                new CycleAssetResponse(asset.symbol(), asset.targetWeight(), asset.plannedAmount(),
+                        asset.executedAmount().add(
+                                cny.byEtfUsd().getOrDefault(asset.symbol(), BigDecimal.ZERO), MC))).toList();
+        return new CycleResponse(real.id(), real.planId(), real.period(), real.plannedAmount(),
+                executed, status, assets, real.openedAt(), real.completedAt(), cny.executedUsd(),
+                cny.complete() ? FreshnessStatus.FRESH : FreshnessStatus.PARTIAL);
     }
 
     private CycleResponse refreshAndResponse(InvestmentPlanCycleEntity cycle) {

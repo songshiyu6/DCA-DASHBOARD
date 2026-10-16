@@ -10,12 +10,18 @@ export interface MultiCurrencyFundPosition {
   navDate: string
   marketValueCny: string
   marketValueUsd: string | null
+  investedCny: string | null
+  pnlCny: string | null
+  returnRate: string | null
 }
 
 export interface MultiCurrencySummary {
   reportingCurrency: 'USD'
   usdAccountValue: string | null
   cnyFundValue: string | null
+  cnyFundInvestedCny: string | null
+  cnyFundPnlCny: string | null
+  cnyFundReturnRate: string | null
   cnyFundValueUsd: string | null
   combinedValueUsd: string | null
   usdExternalFlow: string | null

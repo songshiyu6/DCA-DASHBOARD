@@ -15,7 +15,9 @@ export const queryKeys = {
   pricesRange: (symbol: string, range: string) => ['prices', symbol, range] as const,
   plans: ['plans'] as const,
   plan: (id: string) => ['plan', id] as const,
+  planCycleFamily: ['plan-cycles'] as const,
   planCycles: (id: string) => ['plan-cycles', id] as const,
+  recommendationFamily: ['recommendation'] as const,
   recommendation: (id: string) => ['recommendation', id] as const,
   contributionAnalysis: (id: string) => ['contribution-analysis', id] as const,
   transactions: ['transactions'] as const,
@@ -56,8 +58,19 @@ export function invalidateInstrumentHistoryQueries(queryClient: QueryClient, sym
   return Promise.all(keys.map((queryKey) => invalidate(queryClient, queryKey))).then(() => undefined)
 }
 
+export function invalidateCnyDcaPlanQueries(queryClient: QueryClient): Promise<void> {
+  return Promise.all([
+    invalidate(queryClient, queryKeys.dashboard),
+    invalidate(queryClient, queryKeys.planCycleFamily),
+    invalidate(queryClient, queryKeys.recommendationFamily),
+  ]).then(() => undefined)
+}
+
 export function invalidateFundQueries(queryClient: QueryClient, fundId?: string): Promise<void> {
-  const keys: QueryKey[] = [queryKeys.funds, queryKeys.autoDcaRules, queryKeys.multiCurrencyReports]
+  const keys: QueryKey[] = [
+    queryKeys.funds, queryKeys.autoDcaRules, queryKeys.multiCurrencyReports,
+    queryKeys.dashboard, queryKeys.planCycleFamily, queryKeys.recommendationFamily,
+  ]
   if (fundId) keys.push(queryKeys.fundPurchases(fundId), queryKeys.fundNav(fundId), queryKeys.fundCalendar(fundId))
   return Promise.all(keys.map((queryKey) => invalidate(queryClient, queryKey))).then(() => undefined)
 }
@@ -66,6 +79,7 @@ export function invalidateAutoDcaQueries(queryClient: QueryClient): Promise<void
   return Promise.all([
     invalidate(queryClient, queryKeys.autoDcaRules),
     invalidate(queryClient, queryKeys.multiCurrencyReports),
+    invalidateCnyDcaPlanQueries(queryClient),
   ]).then(() => undefined)
 }
 

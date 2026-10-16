@@ -85,15 +85,14 @@ function PerformanceChart({ lines }: { lines: ReturnType<typeof rebasePerformanc
 
   useEffect(() => {
     if (!ref.current || !lines.length) return
-    const dates = [...new Set(lines.flatMap((line) => line.points.map((point) => point.date)))].sort()
-    if (!dates.length) return
+    if (!lines.some((line) => line.points.length)) return
     const chart = echarts.init(ref.current)
     const styles = getComputedStyle(document.documentElement)
     const text = styles.getPropertyValue('--text-muted').trim() || '#7c8798'
     const grid = styles.getPropertyValue('--line-subtle').trim() || '#27303d'
-    const lookup = new Map(lines.map((line) => [line.key, new Map(line.points.map((point) => [point.date, point.value]))]))
 
     chart.setOption({
+      useUTC: true,
       animationDuration: 350,
       grid: { left: 8, right: 12, top: 48, bottom: 8, containLabel: true },
       legend: {
@@ -113,11 +112,14 @@ function PerformanceChart({ lines }: { lines: ReturnType<typeof rebasePerformanc
         borderColor: grid,
         textStyle: { color: '#e8eef6', fontSize: 12 },
         formatter: (raw: unknown) => {
-          const params = Array.isArray(raw) ? raw as Array<{ axisValueLabel?: string; seriesName?: string; value?: unknown; marker?: string }> : []
+          const params = Array.isArray(raw) ? raw as Array<{ axisValue?: number; axisValueLabel?: string; seriesName?: string; value?: unknown; marker?: string }> : []
           if (!params.length) return ''
-          const rows = [`<strong>${params[0].axisValueLabel ?? ''}</strong>`]
+          const date = params[0].axisValue
+          const label = typeof date === 'number' ? new Date(date).toISOString().slice(0, 10) : params[0].axisValueLabel ?? ''
+          const rows = [`<strong>${label}</strong>`]
           for (const item of params) {
             const value = Array.isArray(item.value) ? item.value.at(-1) : item.value
+            if (value === null || value === undefined || value === '-') continue
             const numeric = typeof value === 'number' ? value : Number(value)
             if (!Number.isFinite(numeric)) continue
             rows.push(`${item.marker ?? ''} ${item.seriesName ?? ''}: ${formatSignedPercent(String(numeric / 100))}`)
@@ -126,11 +128,11 @@ function PerformanceChart({ lines }: { lines: ReturnType<typeof rebasePerformanc
         },
       },
       xAxis: {
-        type: 'category',
-        data: dates,
-        boundaryGap: false,
+        type: 'time',
+        boundaryGap: [0, 0],
+        minInterval: 24 * 60 * 60 * 1000,
         axisLine: { lineStyle: { color: grid } },
-        axisLabel: { color: text, fontSize: 10, hideOverlap: true },
+        axisLabel: { color: text, fontSize: 10, hideOverlap: true, formatter: '{yyyy}-{MM}-{dd}' },
         axisTick: { show: false },
       },
       yAxis: {
@@ -150,7 +152,8 @@ function PerformanceChart({ lines }: { lines: ReturnType<typeof rebasePerformanc
           showSymbol: false,
           connectNulls: false,
           z: portfolio ? 4 : 2,
-          data: dates.map((date) => lookup.get(line.key)?.get(date) ?? null),
+          // Each market supplies its own sessions; only explicit nulls break the line.
+          data: line.points.map((point) => [`${point.date}T00:00:00Z`, point.value]),
           lineStyle: { width: portfolio ? 2.6 : 1.8 },
           emphasis: { focus: 'series' },
           markLine: portfolio ? {
@@ -264,14 +267,14 @@ export function PortfolioPerformancePanel({ history, inceptionCagr, inceptionXir
     if (!startDay || !endDay) return []
     const lines: PerformanceLine[] = []
     if (portfolioVisible) {
-      const realtimePoints = serverPerformance?.points.flatMap((point) => {
+      const realtimePoints = serverPerformance?.points.map((point) => {
         const level = point.level === null ? Number.NaN : Number(point.level)
-        return Number.isFinite(level) && level > 0 ? [{ date: point.date, value: level }] : []
+        return { date: point.date, value: Number.isFinite(level) && level > 0 ? level : null }
       })
       lines.push({
         key: 'PORTFOLIO',
         label: isZh ? '投资组合 TWR' : 'Portfolio TWR',
-        points: realtimePoints?.length ? realtimePoints : portfolioTwrLevels(history, startDay, endDay),
+        points: realtimePoints?.some((point) => point.value !== null) ? realtimePoints : portfolioTwrLevels(history, startDay, endDay),
       })
     }
     benchmarks.forEach((item, index) => {
@@ -347,7 +350,7 @@ export function PortfolioPerformancePanel({ history, inceptionCagr, inceptionXir
       <span><small>{isZh ? '最大回撤' : 'Max drawdown'}</small><strong>{formatSignedPercent(displayedMaxDrawdown)}</strong><em>{rangeMetricLabel}</em></span>
     </div>
     <small className="performance-footnote">{isZh
-      ? 'Portfolio 历史使用常规收盘估值，最后一个点使用完整的实时总资产；DEPOSIT / WITHDRAWAL 从 TWR 中剔除。所有可见曲线在所选区间的第一个共同有效点归零。CAGR 与 XIRR 始终为成立以来年化指标。'
-      : 'Portfolio history uses regular-close valuations and the final point uses a complete live total account value; DEPOSIT/WITHDRAWAL are removed from TWR. Visible lines are rebased at their first common valid point. CAGR and XIRR remain since-inception annualized metrics.'}</small>
+      ? 'Portfolio 历史使用常规收盘估值，最后一个点使用完整的实时总资产；DEPOSIT / WITHDRAWAL 从 TWR 中剔除。所有可见曲线在所选区间的第一个共同有效点归零。各市场按自身行情日期绘制，休市期间连接相邻有效点，不补造行情。CAGR 与 XIRR 始终为成立以来年化指标。'
+      : 'Portfolio history uses regular-close valuations and the final point uses a complete live total account value; DEPOSIT/WITHDRAWAL are removed from TWR. Visible lines are rebased at their first common valid point. Each market uses its own observation dates; lines span market closures without adding prices. CAGR and XIRR remain since-inception annualized metrics.'}</small>
   </Panel>
 }

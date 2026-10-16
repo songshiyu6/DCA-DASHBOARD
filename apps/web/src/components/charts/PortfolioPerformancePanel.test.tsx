@@ -73,6 +73,46 @@ describe('portfolio performance benchmark search', () => {
     await waitFor(() => expect(localStorage.getItem('dca-performance-benchmarks-v1')).toContain('"type":"EQUITY"'))
   })
 
+  it('plots each market on its own dates while retaining explicit unavailable points', async () => {
+    localStorage.setItem('dca-performance-benchmarks-v1', JSON.stringify([{
+      symbol: '000001.SS', name: 'Shanghai', type: 'INDEX', visible: true,
+    }]))
+    mockedBenchmarksApi.history.mockResolvedValue({
+      data: { points: [
+        { date: '2026-09-04', value: '100' },
+        { date: '2026-09-07', value: '102' },
+        { date: '2026-09-08', value: '103' },
+        { date: '2026-09-10', value: '104' },
+      ] },
+    })
+    renderPanel([
+      { date: '2026-09-04', marketValue: '100', netInvested: '100', dataStatus: 'FRESH' },
+      { date: '2026-09-08', marketValue: '101', netInvested: '100', dataStatus: 'FRESH' },
+      { date: '2026-09-09', marketValue: null, netInvested: '100', dataStatus: 'PARTIAL' },
+      { date: '2026-09-10', marketValue: '102', netInvested: '100', dataStatus: 'FRESH' },
+    ])
+    await waitFor(() => {
+      const chart = mockedEcharts.init.mock.results.at(-1)?.value
+      const option = chart?.setOption.mock.calls.at(-1)?.[0]
+      expect(option?.series).toHaveLength(2)
+      expect(option.xAxis.type).toBe('time')
+      expect(option.useUTC).toBe(true)
+      expect(option.series[0].data.map(([date]: [string, number | null]) => date.slice(0, 10))).toEqual([
+        '2026-09-04', '2026-09-08', '2026-09-09', '2026-09-10',
+      ])
+      expect(option.series[0].data[2]).toEqual(['2026-09-09T00:00:00Z', null])
+      expect(option.series[0].connectNulls).toBe(false)
+      expect(option.series[1].data.map(([date]: [string, number]) => date.slice(0, 10))).toEqual([
+        '2026-09-04', '2026-09-07', '2026-09-08', '2026-09-10',
+      ])
+      const tooltip = option.tooltip.formatter([
+        { axisValue: Date.parse('2026-09-09'), seriesName: 'Unavailable', value: ['2026-09-09', null] },
+      ])
+      expect(tooltip).toContain('2026-09-09')
+      expect(tooltip).not.toContain('0.00%')
+    })
+  })
+
   it('refetches selected benchmarks when the latest portfolio endpoint advances', async () => {
     localStorage.setItem('dca-performance-benchmarks-v1', JSON.stringify([{
       symbol: 'QQQ', name: 'Invesco QQQ Trust', exchange: 'NASDAQ', type: 'ETF', visible: true,

@@ -41,6 +41,24 @@ afterEach(() => {
 })
 
 describe('API contract adapter', () => {
+  it('keeps dated missing benchmark prices so the chart can display a real data gap', async () => {
+    vi.resetModules()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      data: { symbol: 'VOO', type: 'ETF', points: [
+        { date: '2026-09-01', value: '100' },
+        { date: '2026-09-02', value: null },
+        { date: '2026-09-03', value: '102' },
+      ] },
+    })))
+    const { benchmarksApi } = await import('./api/benchmarks')
+    const result = await benchmarksApi.history({ symbol: 'VOO', name: 'VOO', type: 'ETF', exchange: null })
+    expect(result.data.points).toEqual([
+      { date: '2026-09-01', value: '100' },
+      { date: '2026-09-02', value: null },
+      { date: '2026-09-03', value: '102' },
+    ])
+  })
+
   it('preserves NUMERIC(20,6) and NUMERIC(20,8) strings from raw JSON through normalizers', async () => {
     const money = '99999999999999.123456'
     const quantity = '999999999999.12345678'

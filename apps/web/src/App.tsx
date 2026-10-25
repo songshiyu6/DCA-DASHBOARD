@@ -1,7 +1,9 @@
+import { readPreference } from './lib/preferences'
 import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import { AppShell } from './components/AppShell'
+import { ErrorState } from './components/DataState'
 import { ContributionsPage } from './pages/ContributionsPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { EtfDetailPage } from './pages/EtfDetailPage'
@@ -27,16 +29,18 @@ function prefersLightTheme(): boolean {
 }
 
 function RequireSession() {
+  const { t } = useTranslation()
   const location = useLocation()
   const session = useQuery({ queryKey: queryKeys.session, queryFn: api.getSession, staleTime: 300_000, retry: 2 })
   if (session.data?.data.authenticated) return <Outlet />
-  if (session.isLoading || session.isFetching || session.isError) return <RouteLoading />
+  if (session.isLoading || session.isFetching) return <RouteLoading />
+  if (session.isError) return <main className="route-loading"><ErrorState message={t('errors.apiOffline')} onRetry={() => { void session.refetch() }} /></main>
   return <Navigate to="/login" replace state={{ from: location.pathname }} />
 }
 
 export default function App() {
   useEffect(() => {
-    const savedTheme = localStorage.getItem('dca-theme')
+    const savedTheme = readPreference('dca-theme')
     const theme = savedTheme === 'light' || savedTheme === 'dark' ? savedTheme : prefersLightTheme() ? 'light' : 'dark'
     document.documentElement.dataset.theme = theme
   }, [])

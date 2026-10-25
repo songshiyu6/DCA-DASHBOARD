@@ -88,15 +88,22 @@ export function benchmarkPriceLevels(
   // Do not apply the US market calendar here: an A-share may trade on a US holiday and vice versa.
   return points
     .filter((point) => point.date >= startDay && point.date <= endDay)
-    .flatMap((point) => {
+    .map((point) => {
       const value = Number(point.value)
-      return Number.isFinite(value) && value > 0 ? [{ date: point.date, value }] : []
+      return { date: point.date, value: Number.isFinite(value) && value > 0 ? value : null }
     })
     .sort((left, right) => left.date.localeCompare(right.date))
 }
 
 export function rebasePerformanceLines(lines: PerformanceLine[]): { startDay: string | null; lines: RebasedPerformanceLine[] } {
-  const active = lines.filter((line) => line.points.some((point) => point.value !== null))
+  const active = lines.map((line) => ({
+    ...line,
+    // A live observation supersedes the regular close on the same business date.
+    points: [...new Map(line.points.map((point) => [point.date, {
+      ...point,
+      value: point.value !== null && Number.isFinite(point.value) && point.value > 0 ? point.value : null,
+    }])).values()].sort((left, right) => left.date.localeCompare(right.date)),
+  })).filter((line) => line.points.some((point) => point.value !== null))
   if (!active.length) return { startDay: null, lines: [] }
 
   let commonDates: Set<string> | null = null

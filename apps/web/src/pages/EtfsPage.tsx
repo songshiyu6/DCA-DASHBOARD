@@ -1,3 +1,4 @@
+import { readPreference, writePreference } from '../lib/preferences'
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient, useQueries } from '@tanstack/react-query'
 import { ArrowDown, ArrowUp, ArrowUpRight, Check, ChevronRight, Plus, Search, X } from 'lucide-react'
@@ -18,7 +19,7 @@ const ETF_ORDER_STORAGE_KEY = 'dca-terminal:tracked-etf-order'
 function loadEtfOrder(): string[] {
   if (typeof window === 'undefined') return []
   try {
-    const value = JSON.parse(window.localStorage.getItem(ETF_ORDER_STORAGE_KEY) ?? '[]')
+    const value = JSON.parse(readPreference(ETF_ORDER_STORAGE_KEY) ?? '[]')
     return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
   } catch {
     return []
@@ -27,7 +28,7 @@ function loadEtfOrder(): string[] {
 
 function saveEtfOrder(order: string[]) {
   if (typeof window === 'undefined') return
-  window.localStorage.setItem(ETF_ORDER_STORAGE_KEY, JSON.stringify(order))
+  writePreference(ETF_ORDER_STORAGE_KEY, JSON.stringify(order))
 }
 
 function EtfCard({ instrument, quote, canMoveUp, canMoveDown, onMoveUp, onMoveDown, onOpen }: {

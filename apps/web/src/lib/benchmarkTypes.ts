@@ -11,7 +11,7 @@ export interface BenchmarkSearchResult {
 
 export interface BenchmarkPricePoint {
   date: string
-  value: string
+  value: string | null
 }
 
 export interface BenchmarkHistory {

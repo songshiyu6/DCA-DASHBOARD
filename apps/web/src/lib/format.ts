@@ -96,9 +96,11 @@ export function formatCompactMoney(value: string | number | null | undefined, cu
 
 export function formatDate(value: string | null | undefined, options?: Intl.DateTimeFormatOptions): string {
   if (!value) return '—'
-  const date = new Date(value.includes('T') ? value : `${value}T12:00:00Z`)
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(value)
+  const date = new Date(dateOnly ? `${value}T00:00:00Z` : value)
   if (Number.isNaN(date.getTime())) return value
-  return new Intl.DateTimeFormat(undefined, options ?? { month: 'short', day: 'numeric', year: 'numeric' }).format(date)
+  const displayOptions: Intl.DateTimeFormatOptions = options ?? { month: 'short', day: 'numeric', year: 'numeric' }
+  return new Intl.DateTimeFormat(undefined, dateOnly ? { ...displayOptions, timeZone: 'UTC' } : displayOptions).format(date)
 }
 
 export function formatTime(value: string | null | undefined, timeZone = MARKET_TIME_ZONE): string {

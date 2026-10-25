@@ -10,6 +10,38 @@ const point = (date: string, marketValue: string, netInvested: string): Portfoli
 })
 
 describe('performance series', () => {
+  it('preserves explicitly invalid benchmark observations as gaps', () => {
+    expect(benchmarkPriceLevels([
+      { date: '2026-09-04', value: '100' },
+      { date: '2026-09-07', value: 'NaN' },
+      { date: '2026-09-08', value: '102' },
+    ], '2026-09-01', '2026-09-30')).toEqual([
+      { date: '2026-09-04', value: 100 },
+      { date: '2026-09-07', value: null },
+      { date: '2026-09-08', value: 102 },
+    ])
+  })
+
+  it('uses the last observation on each date without a vertical close/live segment', () => {
+    const result = rebasePerformanceLines([{ key: 'PORTFOLIO', label: 'Portfolio', points: [
+      { date: '2026-09-02', value: 1.1 },
+      { date: '2026-09-01', value: 1 },
+      { date: '2026-09-02', value: 1.2 },
+    ] }])
+    expect(result.lines[0].points).toHaveLength(2)
+    expect(result.lines[0].points[0]).toEqual({ date: '2026-09-01', value: 0 })
+    expect(result.lines[0].points[1].value).toBeCloseTo(20)
+  })
+
+  it('starts comparison at a finite positive common baseline', () => {
+    const result = rebasePerformanceLines([
+      { key: 'a', label: 'A', points: [{ date: '2026-09-01', value: NaN }, { date: '2026-09-02', value: 2 }] },
+      { key: 'b', label: 'B', points: [{ date: '2026-09-01', value: 1 }, { date: '2026-09-02', value: 2 }] },
+    ])
+    expect(result.startDay).toBe('2026-09-02')
+    expect(result.lines.every((line) => line.points[0].value === 0)).toBe(true)
+  })
+
   it('removes additional capital from the portfolio return curve', () => {
     const levels = portfolioTwrLevels([
       point('2026-08-03', '1000', '1000'),

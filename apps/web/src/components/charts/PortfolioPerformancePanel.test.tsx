@@ -53,6 +53,34 @@ beforeEach(() => {
 })
 
 describe('portfolio performance benchmark search', () => {
+  it('keeps controls usable when browser storage is full', async () => {
+    const write = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Storage full', 'QuotaExceededError')
+    })
+    try {
+      renderPanel()
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: 'AAPL' } })
+      fireEvent.click(await screen.findByText('AAPL'))
+      expect(screen.getByRole('button', { name: 'Remove AAPL' })).toBeInTheDocument()
+    } finally {
+      write.mockRestore()
+    }
+  })
+
+  it('does not interpret benchmark labels as tooltip HTML', () => {
+    renderPanel([{ date: '2026-09-01', marketValue: '100', netInvested: '100', dataStatus: 'FRESH' }])
+    const option = mockedEcharts.init.mock.results.at(-1)?.value.setOption.mock.calls.at(-1)?.[0]
+    const tooltip = option.tooltip.formatter([{
+      axisValue: Date.parse('2026-09-01'),
+      seriesName: '<img src=x onerror=alert(1)> & Fund',
+      value: ['2026-09-01T00:00:00Z', 1],
+    }])
+    const container = document.createElement('div')
+    container.innerHTML = tooltip
+    expect(container.querySelector('img')).toBeNull()
+    expect(container).toHaveTextContent('<img src=x onerror=alert(1)> & Fund')
+  })
+
   it('debounces typing, shows ETF/index/equity results, and persists an equity selection', async () => {
     renderPanel()
     const input = screen.getByRole('textbox')
@@ -139,6 +167,16 @@ describe('portfolio performance benchmark search', () => {
 })
 
 describe('performance range summary', () => {
+  it('does not replace an unavailable server curve with a conflicting historical estimate', async () => {
+    mockedAppApi.getPortfolioPerformance.mockResolvedValue({ data: {
+      requestedStartDate: '2026-09-01', endpointDate: '2026-09-03', points: [],
+      twr: null, cagr: null, xirr: null, maximumDrawdown: null, dataStatus: 'UNAVAILABLE',
+    } })
+    renderPanel([{ date: '2026-09-01', marketValue: '100', netInvested: '100', dataStatus: 'FRESH' }])
+    await waitFor(() => expect(screen.queryByRole('img', { name: 'Portfolio performance benchmark chart' })).not.toBeInTheDocument())
+    expect(screen.getByText('Portfolio performance is unavailable for this range.')).toBeInTheDocument()
+  })
+
   it('offers ALL and uses provided integration fallback values with correct metric semantics', () => {
     renderPanel([], {
       inceptionCagr: '0.08',

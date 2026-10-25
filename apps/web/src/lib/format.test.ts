@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { MARKET_TIME_ZONE, USER_TIME_ZONE, formatMoney, formatPercent, formatShares, formatSignedMoney, formatSignedPercent, formatTime, formatUserTime } from './format'
+import { MARKET_TIME_ZONE, USER_TIME_ZONE, formatDate, formatMoney, formatPercent, formatShares, formatSignedMoney, formatSignedPercent, formatTime, formatUserTime } from './format'
 
 describe('financial display formatting', () => {
+  it('keeps calendar-only transaction and NAV dates independent of display timezone', () => {
+    const options: Intl.DateTimeFormatOptions = { year: 'numeric', month: '2-digit', day: '2-digit' }
+    const utc = formatDate('2026-10-25', { ...options, timeZone: 'UTC' })
+    expect(formatDate('2026-10-25', { ...options, timeZone: 'Pacific/Auckland' })).toBe(utc)
+    expect(formatDate('2026-10-25T23:00:00Z', { ...options, timeZone: 'Asia/Shanghai' })).not.toBe(utc)
+  })
+
   it('formats money from decimal strings without locale float artifacts', () => {
     expect(formatMoney('28421.62')).toBe('$28,421.62')
     expect(formatSignedMoney('-0.01')).toBe('-$0.01')

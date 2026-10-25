@@ -37,6 +37,35 @@ beforeEach(() => {
 })
 
 describe('plan editor', () => {
+  it('requires explicit new-plan facts and updates asset labels after selection', async () => {
+    mockedApi.getPlans.mockResolvedValue({ data: [], meta: { status: 'FRESH', source: 'API' } })
+    mockedApi.createPlan.mockResolvedValue({ data: fixturePlan, meta: { status: 'FRESH', source: 'API' } })
+    const user = userEvent.setup()
+    renderPage()
+    expect(await screen.findByLabelText('Plan name')).toHaveValue('')
+    expect(screen.getByLabelText('Monthly budget')).toHaveValue('')
+    expect(screen.getByLabelText('Start date')).toHaveValue('')
+    expect(screen.getByLabelText('Asset 1')).toHaveValue('')
+    await user.click(screen.getByRole('button', { name: 'Create plan' }))
+    expect(mockedApi.createPlan).not.toHaveBeenCalled()
+
+    await user.type(screen.getByLabelText('Plan name'), 'My plan')
+    await user.type(screen.getByLabelText('Monthly budget'), '250')
+    await user.type(screen.getByLabelText('Start date'), '2026-10-25')
+    await user.selectOptions(screen.getByLabelText('Asset 1'), 'VOO')
+    expect(screen.getByLabelText('VOO target weight')).toHaveValue('100')
+    await user.clear(screen.getByLabelText('Start day'))
+    await user.type(screen.getByLabelText('Start day'), '5')
+    await user.clear(screen.getByLabelText('End day'))
+    await user.type(screen.getByLabelText('End day'), '9')
+    await user.click(screen.getByRole('button', { name: 'Create plan' }))
+    await waitFor(() => expect(mockedApi.createPlan).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'My plan', monthlyBudget: '250.00', startDate: '2026-10-25',
+      executionStartDay: 5, executionEndDay: 9,
+      assets: [{ symbol: 'VOO', targetWeight: '1.00000000' }],
+    })))
+  })
+
   it('blocks a plan whose target weights do not total 100 percent', async () => {
     const user = userEvent.setup()
     renderPage()

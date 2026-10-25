@@ -33,7 +33,7 @@ function normalizeHistory(value: unknown): BenchmarkHistory {
   const points = Array.isArray(body.points) ? body.points.filter(isRecord).flatMap((point) => {
     const date = stringValue(point.date)
     const price = stringValue(point.value)
-    return date && price ? [{ date, value: price }] : []
+    return date ? [{ date, value: price || null }] : []
   }) : []
   return {
     symbol: stringValue(body.symbol),

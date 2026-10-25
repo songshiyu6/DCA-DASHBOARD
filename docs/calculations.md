@@ -107,6 +107,15 @@ level_t        = level_(t-1) * gross_t
 
 Only complete positive valuations participate. A PARTIAL current value cannot become a live performance endpoint.
 
+### Benchmark chart presentation
+
+- Each market is plotted on its own observed dates using a UTC daily time axis. Market closures do not insert artificial null prices.
+- Explicit null, non-finite, or non-positive benchmark prices remain gaps. A missing observation must not be silently converted into zero return.
+- The last supplied observation for each business date is used, so a live point supersedes that date's regular close without drawing a vertical segment.
+- Visible curves are rebased at their first shared finite positive observation. This chart baseline can differ from the server's selected-range summary baseline.
+- A successful server response with an empty/unavailable performance series remains unavailable. Historical client estimation is used only when there is no server response.
+- Calendar-only ledger and NAV dates are displayed without timezone conversion; timestamps retain the requested display timezone.
+
 ### TWR
 
 ```text

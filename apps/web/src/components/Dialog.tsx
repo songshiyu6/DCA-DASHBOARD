@@ -26,6 +26,7 @@ export function Dialog({ children, labelledBy, describedBy, className = '', onCl
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const dialog = dialogRef.current
     const focusFrame = requestAnimationFrame(() => {
+      if (dialog?.contains(document.activeElement)) return
       const firstFocusable = dialog?.querySelector<HTMLElement>(focusableSelector)
       ;(firstFocusable ?? dialog)?.focus()
     })

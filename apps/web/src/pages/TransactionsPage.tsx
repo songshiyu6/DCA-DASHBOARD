@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowDownLeft, ArrowUpRight, FileUp, Pencil, Plus, Trash2, Upload, X } from 'lucide-react'
 import { useForm } from 'react-hook-form'
@@ -41,7 +41,7 @@ const transactionSchema = z.object({
   quantity: z.string().optional(),
   unitPrice: z.string().optional(),
   amount: z.string().optional(),
-  fee: z.string().regex(/^\d*(?:\.\d{0,6})?$/, 'validation.feeInvalid'),
+  fee: z.string().regex(/^(?:\d+(?:\.\d{0,6})?|\.\d{1,6})?$/, 'validation.feeInvalid'),
   notes: z.string().optional(),
   planCycleId: z.string().optional(),
   contributionType: z.enum(['INITIAL', 'DCA', 'UNPLANNED', 'UNCLASSIFIED']).optional(),
@@ -71,7 +71,7 @@ const transactionSchema = z.object({
 
 type TransactionFormValues = z.infer<typeof transactionSchema>
 
-const initialForm: TransactionFormValues = { tradeDate: '', transactionType: 'BUY', instrumentSymbol: 'VOO', quantity: '', unitPrice: '', amount: '', fee: '0.00', notes: '', planCycleId: '', contributionType: 'UNPLANNED' }
+const initialForm: TransactionFormValues = { tradeDate: '', transactionType: 'BUY', instrumentSymbol: '', quantity: '', unitPrice: '', amount: '', fee: '0.00', notes: '', planCycleId: '', contributionType: 'UNPLANNED' }
 
 function localDateInputValue(date = new Date()): string {
   const year = date.getFullYear()
@@ -179,28 +179,57 @@ function CsvModal({ planId, onClose, onImported }: { planId?: string; onClose: (
   const { t, i18n } = useTranslation()
   const isZh = (i18n.resolvedLanguage ?? i18n.language).toLowerCase().startsWith('zh')
   const queryClient = useQueryClient()
-  const [csv, setCsv] = useState('date,type,symbol,quantity,price,amount,fee\
-2026-09-01,DEPOSIT,,,,10000,\
-2026-09-01,BUY,VOO,1.2,620.00,,0')
+  const [csv, setCsv] = useState('')
+  const sourceRevision = useRef(0)
   const [fileName, setFileName] = useState<string | null>(null)
+  const [readingFile, setReadingFile] = useState(false)
+  const [fileError, setFileError] = useState<string | null>(null)
   const [preview, setPreview] = useState<ImportPreviewUx | null>(null)
-  const previewMutation = useMutation({ mutationFn: () => api.previewTransactionImport(csv), onSuccess: (result) => setPreview(result.data as ImportPreviewUx) })
-  const importMutation = useMutation({ mutationFn: () => api.commitTransactionImport(preview as TransactionImportPreview), onSuccess: () => { void invalidateTransactionQueries(queryClient, planId); onImported() } })
+  const previewMutation = useMutation({
+    mutationFn: (source: { csv: string; revision: number }) => api.previewTransactionImport(source.csv),
+    onMutate: () => setPreview(null),
+    onSuccess: (result, source) => {
+      if (source.revision === sourceRevision.current) setPreview(result.data as ImportPreviewUx)
+    },
+  })
+  const importMutation = useMutation({ mutationFn: (currentPreview: TransactionImportPreview) => api.commitTransactionImport(currentPreview), onSuccess: () => { void invalidateTransactionQueries(queryClient, planId); onImported() } })
   const duplicateRows = preview?.duplicateRows ?? []
   const warnings = preview?.warnings ?? []
   const hasPreviewErrors = Boolean(preview && (preview.errors.length > 0 || duplicateRows.length > 0))
   const resultingCashIsNegative = Boolean(preview?.negativeCash || (preview?.resultingCashBalance && decimal(preview.resultingCashBalance).lt(0)))
-  const previewError = previewMutation.error instanceof Error ? previewMutation.error.message : importMutation.error instanceof Error ? importMutation.error.message : undefined
+  const previewError = fileError ?? (previewMutation.variables?.revision === sourceRevision.current && previewMutation.error instanceof Error ? previewMutation.error.message : importMutation.error instanceof Error ? importMutation.error.message : undefined)
+  const editCsv = (text: string) => {
+    sourceRevision.current++
+    setCsv(text)
+    setFileName(null)
+    setReadingFile(false)
+    setFileError(null)
+    setPreview(null)
+    importMutation.reset()
+  }
   const handleFile = async (file?: File) => {
     if (!file) return
-    const text = await file.text()
-    setCsv(text)
+    const revision = ++sourceRevision.current
+    setReadingFile(true)
+    setFileError(null)
     setFileName(file.name)
     setPreview(null)
+    importMutation.reset()
+    try {
+      const text = await file.text()
+      if (revision === sourceRevision.current) setCsv(text)
+    } catch {
+      if (revision === sourceRevision.current) {
+        setCsv('')
+        setFileError(isZh ? '无法读取 CSV 文件，请重新选择或粘贴内容。' : 'Could not read the CSV file. Choose it again or paste its contents.')
+      }
+    } finally {
+      if (revision === sourceRevision.current) setReadingFile(false)
+    }
   }
   return <Dialog className="modal-wide modal-csv" labelledBy="csv-title" describedBy="csv-description" onClose={onClose}><button type="button" className="modal-close icon-button" onClick={onClose} aria-label={t('common.close')}><X size={17} /></button><span className="modal-icon modal-icon-blue"><Upload size={18} /></span><h2 id="csv-title">{t('transactions.csvTitle')}</h2><p id="csv-description">{isZh ? '选择 CSV 文件或直接粘贴内容。浏览器不再维护金融校验规则；Preview 与 Commit 均以后端结果为准。' : 'Choose a CSV file or paste its contents. Financial validation is server-authoritative; the browser only presents Preview and Commit results.'}</p>
-    <div className="csv-source-actions"><label className="button button-secondary csv-file-button"><FileUp size={15} />{fileName ?? (isZh ? '选择 CSV 文件' : 'Choose CSV file')}<input type="file" accept=".csv,text/csv" onChange={(event) => { void handleFile(event.target.files?.[0]) }} /></label><span>{isZh ? '或粘贴 CSV' : 'or paste CSV'}</span></div>
-    <label className="sr-only" htmlFor="csv-input">{t('transactions.csvInput')}</label><textarea id="csv-input" className="csv-editor" rows={7} value={csv} onChange={(event) => { setCsv(event.target.value); setFileName(null); setPreview(null) }} />
+    <div className="csv-source-actions"><label className="button button-secondary csv-file-button"><FileUp size={15} />{fileName ?? (isZh ? '选择 CSV 文件' : 'Choose CSV file')}<input type="file" accept=".csv,text/csv" disabled={importMutation.isPending} onChange={(event) => { void handleFile(event.target.files?.[0]) }} /></label><span>{isZh ? '或粘贴 CSV' : 'or paste CSV'}</span></div>
+    <label className="sr-only" htmlFor="csv-input">{t('transactions.csvInput')}</label><textarea id="csv-input" className="csv-editor" rows={7} value={csv} disabled={importMutation.isPending} placeholder="date,type,symbol,quantity,price,amount,fee" onChange={(event) => editCsv(event.target.value)} />
     {!preview ? <div className="csv-preview-empty"><strong>{isZh ? '先生成服务端 Preview' : 'Generate a server preview first'}</strong><span>{isZh ? 'DEPOSIT / WITHDRAWAL / INTEREST 可以没有 symbol；解析、重复项和资金影响均由服务端决定。' : 'DEPOSIT / WITHDRAWAL / INTEREST may omit symbol. Parsing, duplicates, and financial impacts are decided by the server.'}</span></div> : null}
     {preview ? <div className="csv-preview server-preview"><div className="csv-preview-header"><span>{isZh ? '服务端 Preview' : 'Server preview'}</span><strong>{t('transactions.validRows', { count: preview.rows.length })}</strong></div>
       <div className="csv-impact-summary"><span><small>{isZh ? '现金影响' : 'Cash impact'}</small><strong>{preview.cashImpact ?? '—'}</strong></span><span><small>{isZh ? '证券影响' : 'Security impact'}</small><strong>{preview.securityImpact ?? '—'}</strong></span><span><small>{isZh ? 'Preview 后现金' : 'Cash after preview'}</small><strong>{preview.resultingCashBalance ? formatMoney(preview.resultingCashBalance) : '—'}</strong></span></div>
@@ -209,7 +238,7 @@ function CsvModal({ planId, onClose, onImported }: { planId?: string; onClose: (
     {preview && hasPreviewErrors ? <div className="csv-errors" role="alert" id="csv-errors">{preview.errors.map((error) => <span key={error}>{error}</span>)}{duplicateRows.length ? <span>{t('transactions.duplicateRows', { rows: duplicateRows.join(', ') })}</span> : null}</div> : null}
     {preview && (warnings.length > 0 || resultingCashIsNegative) ? <div className="csv-warnings" role="status">{resultingCashIsNegative ? <strong>{isZh ? '警告：导入后现金余额可能为负。系统不会自动补现金。' : 'Warning: cash may be negative after import. No cash will be added automatically.'}</strong> : null}{warnings.map((warning) => <span key={warning}>{warning}</span>)}</div> : null}
     {previewError ? <p className="form-alert" role="alert">{previewError}</p> : null}
-    <div className="form-footer"><button type="button" className="button button-secondary" onClick={() => { void previewMutation.mutate() }} disabled={previewMutation.isPending || !csv.trim()}>{previewMutation.isPending ? t('transactions.validating') : (isZh ? '服务端 Preview' : 'Server preview')}</button><button type="button" className="button button-primary" onClick={() => { void importMutation.mutate() }} disabled={!preview || hasPreviewErrors || preview.rows.length === 0 || importMutation.isPending}><Upload size={15} />{t('transactions.importRows', { count: preview?.rows.length ?? 0 })}</button></div>
+    <div className="form-footer"><button type="button" className="button button-secondary" onClick={() => { previewMutation.mutate({ csv, revision: sourceRevision.current }) }} disabled={previewMutation.isPending || importMutation.isPending || readingFile || !csv.trim()}>{previewMutation.isPending ? t('transactions.validating') : (isZh ? '服务端 Preview' : 'Server preview')}</button><button type="button" className="button button-primary" onClick={() => { if (preview) importMutation.mutate(preview) }} disabled={!preview || hasPreviewErrors || preview.rows.length === 0 || previewMutation.isPending || readingFile || importMutation.isPending}><Upload size={15} />{t('transactions.importRows', { count: preview?.rows.length ?? 0 })}</button></div>
   </Dialog>
 }
 

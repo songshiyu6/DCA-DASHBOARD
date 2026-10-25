@@ -124,7 +124,7 @@ Completed in V025 / Phase 3:
 | C-04 | P1 | Yahoo `CNY=X` and EastMoney lack first-class health/fallback/gap operator views. | Long-running external data degradation may go unnoticed. |
 | C-05 | P1 | Auto-DCA rule edit still has `REWRITE_HISTORY` semantics. | Historical derived reporting can change after a rule edit. |
 | C-06 | P1 | China open dates are persisted confirmed history, not a future official holiday calendar. | Future-date scheduling must not assume complete exchange calendar coverage. |
-| C-07 | P1 | Transaction/Plan/CSV forms still contain submit-able fixed sample/default facts. | Sample values can be mistaken for real account activity. |
+| C-07 | Resolved | New transaction tickers, plan name/budget/start date/asset, and CSV import contents start empty. | Account facts require explicit input; existing records still load for editing. |
 | C-08 | P1 | No centralized action queue for open/partial/missed USD DCA cycles. | Execution discipline remains scattered across views. |
 | C-09 | P1 | Funding attribution vs BUY-lot contribution attribution is not fully reconciled in UI. | Users can confuse money funded with money invested. |
 | C-10 | P1 | Contribution batch P/L excludes dividend/interest/standalone fee/funding flows. | Batch totals require an explicit bridge to full account P/L. |

@@ -12,6 +12,7 @@ import type { PortfolioPerformanceRange } from '../../lib/api/portfolio'
 import type { BenchmarkSearchResult } from '../../lib/benchmarkTypes'
 import { CHART_RANGE_OPTIONS, latestFreshPortfolioHistoryPoint, portfolioRangeStartDay, timeWeightedReturn, type ChartRange } from '../../lib/dashboardPerformance'
 import { formatSignedPercent } from '../../lib/format'
+import { readPreference, writePreference } from '../../lib/preferences'
 import { benchmarkPriceLevels, portfolioTwrLevels, rebasePerformanceLines, type PerformanceLine } from '../../lib/performanceSeries'
 import type { PortfolioHistoryPoint } from '../../types'
 import { EmptyState } from '../DataState'
@@ -50,7 +51,7 @@ interface StoredBenchmark extends BenchmarkSearchResult {
 
 function loadStoredBenchmarks(): StoredBenchmark[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = readPreference(STORAGE_KEY)
     if (!raw) return []
     const parsed = JSON.parse(raw) as unknown
     if (!Array.isArray(parsed)) return []
@@ -77,7 +78,13 @@ function lineKey(item: BenchmarkSearchResult): string {
 }
 
 function firstFreshDay(history: PortfolioHistoryPoint[]): string | null {
-  return history.find((point) => point.dataStatus === 'FRESH' && point.marketValue !== null)?.date.slice(0, 10) ?? null
+  return history.filter((point) => point.dataStatus === 'FRESH' && point.marketValue !== null)
+    .map((point) => point.date.slice(0, 10)).sort()[0] ?? null
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 }
 
 function PerformanceChart({ lines }: { lines: ReturnType<typeof rebasePerformanceLines>['lines'] }) {
@@ -115,14 +122,15 @@ function PerformanceChart({ lines }: { lines: ReturnType<typeof rebasePerformanc
           const params = Array.isArray(raw) ? raw as Array<{ axisValue?: number; axisValueLabel?: string; seriesName?: string; value?: unknown; marker?: string }> : []
           if (!params.length) return ''
           const date = params[0].axisValue
-          const label = typeof date === 'number' ? new Date(date).toISOString().slice(0, 10) : params[0].axisValueLabel ?? ''
-          const rows = [`<strong>${label}</strong>`]
+          const instant = typeof date === 'number' ? new Date(date) : null
+          const label = instant && Number.isFinite(instant.getTime()) ? instant.toISOString().slice(0, 10) : params[0].axisValueLabel ?? ''
+          const rows = [`<strong>${escapeHtml(label)}</strong>`]
           for (const item of params) {
             const value = Array.isArray(item.value) ? item.value.at(-1) : item.value
             if (value === null || value === undefined || value === '-') continue
             const numeric = typeof value === 'number' ? value : Number(value)
             if (!Number.isFinite(numeric)) continue
-            rows.push(`${item.marker ?? ''} ${item.seriesName ?? ''}: ${formatSignedPercent(String(numeric / 100))}`)
+            rows.push(`${item.marker ?? ''} ${escapeHtml(item.seriesName ?? '')}: ${formatSignedPercent(String(numeric / 100))}`)
           }
           return rows.join('<br/>')
         },
@@ -229,7 +237,7 @@ export function PortfolioPerformancePanel({ history, inceptionCagr, inceptionXir
     : range === 'ALL' ? maxDrawdown ?? null : null
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(benchmarks))
+    writePreference(STORAGE_KEY, JSON.stringify(benchmarks))
   }, [benchmarks])
 
   useEffect(() => {
@@ -269,12 +277,12 @@ export function PortfolioPerformancePanel({ history, inceptionCagr, inceptionXir
     if (portfolioVisible) {
       const realtimePoints = serverPerformance?.points.map((point) => {
         const level = point.level === null ? Number.NaN : Number(point.level)
-        return { date: point.date, value: Number.isFinite(level) && level > 0 ? level : null }
+        return { date: point.date, value: point.dataStatus === 'FRESH' && Number.isFinite(level) && level > 0 ? level : null }
       })
       lines.push({
         key: 'PORTFOLIO',
         label: isZh ? '投资组合 TWR' : 'Portfolio TWR',
-        points: realtimePoints?.some((point) => point.value !== null) ? realtimePoints : portfolioTwrLevels(history, startDay, endDay),
+        points: realtimePoints ?? portfolioTwrLevels(history, startDay, endDay),
       })
     }
     benchmarks.forEach((item, index) => {
@@ -328,7 +336,7 @@ export function PortfolioPerformancePanel({ history, inceptionCagr, inceptionXir
         <Search size={14} />
         <input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder={addLabel} aria-label={addLabel} />
         {searchText ? <button type="button" className="benchmark-search-clear" onClick={() => setSearchText('')} aria-label={isZh ? '清空搜索' : 'Clear search'}><X size={13} /></button> : null}
-        {debouncedSearch && (search.isFetching || searchResults.length || search.isError || search.isSuccess) ? <div className="benchmark-search-results">
+        {debouncedSearch && normalizedSearch === debouncedSearch && (search.isFetching || searchResults.length || search.isError || search.isSuccess) ? <div className="benchmark-search-results">
           {search.isFetching ? <small>{isZh ? '搜索中…' : 'Searching…'}</small> : null}
           {!search.isFetching && searchResults.map((item) => <button type="button" key={lineKey(item)} onClick={() => addBenchmark(item)}>
             <span><strong>{item.symbol}</strong><small>{item.name}{item.exchange ? ` · ${item.exchange}` : ''}</small></span><em>{item.type}</em><Plus size={14} />
@@ -339,6 +347,7 @@ export function PortfolioPerformancePanel({ history, inceptionCagr, inceptionXir
       </div>
     </div>
     {performance.isError ? <p className="performance-note performance-warning">{isZh ? '实时组合表现暂时不可用，当前使用最近可靠的历史收盘数据。' : 'Realtime portfolio performance is temporarily unavailable; using the latest reliable close history.'}</p> : null}
+    {serverPerformance?.dataStatus === 'UNAVAILABLE' ? <p className="performance-note performance-warning">{isZh ? '当前区间的组合表现数据不可用。' : 'Portfolio performance is unavailable for this range.'}</p> : null}
     {anyError ? <p className="performance-note performance-warning">{isZh ? '部分基准行情暂时不可用；其余曲线仍可正常比较。' : 'Some benchmark history is unavailable; remaining lines are still comparable.'}</p> : null}
     {anyStale && !anyError ? <p className="performance-note performance-warning">{isZh ? '部分基准尚未取得其所属市场最近已完成交易日的收盘数据，正在自动刷新。' : 'Some benchmarks have not published the latest completed close for their own market yet; refreshing automatically.'}</p> : null}
     {anyLoading ? <p className="performance-note">{isZh ? '正在载入基准历史…' : 'Loading benchmark history…'}</p> : null}

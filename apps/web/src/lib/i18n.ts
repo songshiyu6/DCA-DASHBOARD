@@ -1,3 +1,4 @@
+import { readPreference } from './preferences'
 import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
 
@@ -330,7 +331,7 @@ const resources = {
 
 void i18n.use(initReactI18next).init({
   resources,
-  lng: localStorage.getItem('dca-language') ?? (navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en'),
+  lng: readPreference('dca-language') ?? (navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en'),
   fallbackLng: 'en',
   interpolation: { escapeValue: false },
 })

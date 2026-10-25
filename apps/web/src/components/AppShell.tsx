@@ -1,3 +1,4 @@
+import { writePreference } from '../lib/preferences'
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
@@ -43,7 +44,7 @@ export function AppShell() {
   const toggleLanguage = () => {
     const next = i18n.language === 'zh' ? 'en' : 'zh'
     void i18n.changeLanguage(next)
-    localStorage.setItem('dca-language', next)
+    writePreference('dca-language', next)
   }
 
   const logout = async () => {

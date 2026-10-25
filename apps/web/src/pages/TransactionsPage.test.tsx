@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -46,6 +46,28 @@ beforeEach(() => {
 })
 
 describe('transaction form', () => {
+  it('requires an explicit ticker for a new purchase', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: 'Add transaction' }))
+    expect(screen.getByLabelText('Ticker')).toHaveValue('')
+    await user.type(screen.getByLabelText('Quantity'), '1')
+    await user.type(screen.getByLabelText('Unit price'), '500')
+    await user.click(screen.getByRole('button', { name: 'Save transaction' }))
+    expect(await screen.findByText('Symbol is required.')).toBeInTheDocument()
+    expect(mockedApi.createTransaction).not.toHaveBeenCalled()
+  })
+
+  it('rejects a lone decimal point as a fee before submitting', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: 'Edit' }))
+    fireEvent.change(screen.getByLabelText('Fee'), { target: { value: '.' } })
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(await screen.findByText('Enter a valid fee.')).toBeInTheDocument()
+    expect(mockedApi.updateTransaction).not.toHaveBeenCalled()
+  })
+
   it('defaults a new transaction to the browser local date', async () => {
     const user = userEvent.setup()
     const expectedDate = localDateValue()
@@ -172,6 +194,7 @@ describe('transaction form', () => {
     expect(initialOption).toBeEnabled()
     await user.selectOptions(source, 'INITIAL')
 
+    await user.type(screen.getByLabelText('Ticker'), 'VOO')
     await user.type(screen.getByLabelText('Quantity'), '2')
     await user.type(screen.getByLabelText('Unit price'), '500')
     await user.click(screen.getByRole('button', { name: 'Save transaction' }))
@@ -188,6 +211,64 @@ describe('transaction form', () => {
 })
 
 describe('server-authoritative CSV import', () => {
+  it('keeps pasted input when an older file read completes afterward', async () => {
+    const user = userEvent.setup()
+    let finishRead!: (text: string) => void
+    const file = new File(['old data'], 'old.csv', { type: 'text/csv' })
+    Object.defineProperty(file, 'text', { value: () => new Promise<string>((resolve) => { finishRead = resolve }) })
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: 'Import CSV' }))
+    await user.upload(screen.getByLabelText('Choose CSV file'), file)
+    expect(screen.getByRole('button', { name: 'Server preview' })).toBeDisabled()
+    const editor = screen.getByLabelText('CSV input')
+    fireEvent.change(editor, { target: { value: 'new pasted content' } })
+    await act(async () => finishRead('old file content'))
+    expect(editor).toHaveValue('new pasted content')
+    expect(screen.getByRole('button', { name: 'Server preview' })).toBeEnabled()
+  })
+
+  it('shows file read failures and permits recovery by pasting CSV', async () => {
+    const user = userEvent.setup()
+    const file = new File([], 'unreadable.csv', { type: 'text/csv' })
+    Object.defineProperty(file, 'text', { value: () => Promise.reject(new Error('read failure')) })
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: 'Import CSV' }))
+    await user.upload(screen.getByLabelText('Choose CSV file'), file)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not read the CSV file')
+    expect(screen.getByRole('button', { name: 'Server preview' })).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('CSV input'), { target: { value: 'new content' } })
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Server preview' })).toBeEnabled()
+  })
+
+  it('opens without sample transactions ready for import', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: 'Import CSV' }))
+    expect(screen.getByLabelText('CSV input')).toHaveValue('')
+    expect(screen.getByRole('button', { name: 'Server preview' })).toBeDisabled()
+  })
+
+  it('discards a preview that finishes after its input has changed', async () => {
+    const user = userEvent.setup()
+    let resolvePreview!: (value: unknown) => void
+    mockedApi.previewTransactionImport.mockReturnValue(new Promise((resolve) => { resolvePreview = resolve }))
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: 'Import CSV' }))
+    const editor = screen.getByLabelText('CSV input')
+    fireEvent.change(editor, { target: { value: 'date,type,amount\n2026-09-01,DEPOSIT,100' } })
+    await user.click(screen.getByRole('button', { name: 'Server preview' }))
+    fireEvent.change(editor, { target: { value: 'date,type,amount\n2026-09-01,DEPOSIT,200' } })
+    await act(async () => resolvePreview({ data: {
+      batchId: 'old-batch', errors: [], rows: [
+        { tradeDate: '2026-09-01', transactionType: 'DEPOSIT', amount: '100', fee: '0', currency: 'USD' },
+      ],
+    } }))
+    await waitFor(() => expect(screen.getByRole('button', { name: /Import \d+ rows/ })).toBeDisabled())
+    expect(screen.queryByText('Server preview', { selector: '.csv-preview-header span' })).not.toBeInTheDocument()
+    expect(mockedApi.commitTransactionImport).not.toHaveBeenCalled()
+  })
+
   it('does not gate preview on browser financial validation and commits only the server preview', async () => {
     const user = userEvent.setup()
     const preview = {

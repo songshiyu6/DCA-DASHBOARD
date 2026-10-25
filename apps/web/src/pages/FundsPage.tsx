@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, CalendarDays, ChevronDown, ChevronRight, Edit3, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react'
@@ -9,11 +9,11 @@ import { FundPurchasesPanel } from '../components/FundPurchasesPanel'
 import { FundNavChart } from '../components/charts/FundNavChart'
 import { Panel } from '../components/Panel'
 import { api } from '../lib/api'
+import { chinaBusinessDate as today } from '../lib/businessDate'
 import type { FundLookupResult } from '../lib/api/funds'
 import { invalidateAutoDcaQueries, invalidateFundQueries, queryKeys } from '../lib/queryKeys'
 import type { AutoDcaRule, AutoDcaRuleInput, MutualFund, MutualFundInput } from '../types'
 
-const today = () => new Date().toISOString().slice(0, 10)
 const emptyFundForm = () => ({ code: '', name: '', managementFeeRate: '', confirmationTradingDays: '', shareClass: '' })
 
 function copy(isZh: boolean) {
@@ -97,6 +97,7 @@ export function FundsPage() {
   const [editingFund, setEditingFund] = useState<MutualFund | null>(null)
   const [fundForm, setFundForm] = useState(emptyFundForm)
   const [fundLookup, setFundLookup] = useState<FundLookupResult | null>(null)
+  const fundEditorRevision = useRef(0)
   const [fundToDelete, setFundToDelete] = useState<MutualFund | null>(null)
   const [ruleDialogOpen, setRuleDialogOpen] = useState(false)
   const [editingRule, setEditingRule] = useState<AutoDcaRule | null>(null)
@@ -133,8 +134,9 @@ export function FundsPage() {
   const latestNav = newestNav(nav.data?.data ?? [])
 
   const lookupFund = useMutation({
-    mutationFn: (code: string) => api.lookupFund(code),
-    onSuccess: (result) => {
+    mutationFn: ({ code }: { code: string; revision: number }) => api.lookupFund(code),
+    onSuccess: (result, variables) => {
+      if (variables.revision !== fundEditorRevision.current || result.data.code !== variables.code) return
       const lookup = result.data
       setFundLookup(lookup)
       setFundForm((current) => ({
@@ -206,6 +208,7 @@ export function FundsPage() {
   })
 
   const openFund = (fund?: MutualFund) => {
+    fundEditorRevision.current += 1
     setEditingFund(fund ?? null)
     setFundLookup(null)
     lookupFund.reset()
@@ -220,14 +223,22 @@ export function FundsPage() {
   }
 
   const changeFundCode = (value: string) => {
+    fundEditorRevision.current += 1
     const code = value.replace(/\D/g, '').slice(0, 6)
-    setFundForm((current) => ({ ...current, code }))
-    if (fundLookup?.code !== code) setFundLookup(null)
+    setFundForm({ ...emptyFundForm(), code })
+    setFundLookup(null)
     lookupFund.reset()
   }
 
   const runFundLookup = () => {
-    if (/^\d{6}$/.test(fundForm.code)) lookupFund.mutate(fundForm.code)
+    if (/^\d{6}$/.test(fundForm.code)) lookupFund.mutate({ code: fundForm.code, revision: fundEditorRevision.current })
+  }
+
+  const closeFund = () => {
+    if (saveFund.isPending) return
+    fundEditorRevision.current += 1
+    lookupFund.reset()
+    setFundDialogOpen(false)
   }
 
   const submitFund = (event: FormEvent) => {
@@ -323,7 +334,7 @@ export function FundsPage() {
           {nav.isLoading ? <LoadingBlock lines={5} /> : nav.isError ? <ErrorState onRetry={() => void nav.refetch()} /> : (nav.data?.data.length ?? 0) > 1 ? <FundNavChart data={nav.data?.data ?? []} /> : <p className="fund-nav-empty">{t.noNavHistory}</p>}
         </Panel>
 
-        <FundPurchasesPanel fund={selectedFund} isZh={isZh} locale={locale} />
+        <FundPurchasesPanel key={selectedFund.id} fund={selectedFund} isZh={isZh} locale={locale} />
 
         <Panel title={t.rules} action={<button type="button" className="button button-primary button-small" onClick={() => openRule()}><Plus size={14} />{t.addRule}</button>}>
           {rules.isLoading ? <LoadingBlock lines={3} /> : rules.isError ? <ErrorState onRetry={() => void rules.refetch()} /> : fundRules.length === 0 ? <EmptyState title={t.noRules} action={<button type="button" className="button button-secondary button-small" onClick={() => openRule()}>{t.addRule}</button>} /> : <div className="fund-rule-list">{fundRules.map((rule) => <button key={rule.id} type="button" className={`fund-rule-card ${rule.id === selectedRuleId ? 'fund-rule-card-active' : ''}`} onClick={() => setSelectedRuleId(rule.id)}><span className="fund-rule-main"><strong>{cny(rule.amount, locale)}</strong><small>{t.amountPerDay} · {rule.startDate}{rule.endDate ? ` → ${rule.endDate}` : ''}</small></span><span className="fund-rule-side"><span className={rule.enabled ? 'status-chip status-chip-ok' : 'status-chip'}>{rule.enabled ? t.enabled : t.disabled}</span><span>{percent(rule.purchaseFeeRate)}</span><span className="fund-rule-edit" role="button" tabIndex={0} onClick={(event) => { event.stopPropagation(); openRule(rule) }} onKeyDown={(event) => { if (event.key === 'Enter') { event.stopPropagation(); openRule(rule) } }}><Edit3 size={14} /></span></span></button>)}</div>}
@@ -339,9 +350,9 @@ export function FundsPage() {
       </> : null}</div>
     </div>}
 
-    {fundDialogOpen ? <Dialog labelledBy="fund-dialog-title" onClose={() => setFundDialogOpen(false)}><button type="button" className="modal-close icon-button" onClick={() => setFundDialogOpen(false)} aria-label={t.cancel}><X size={17} /></button><h2 id="fund-dialog-title">{editingFund ? t.fundDialogEdit : t.fundDialogCreate}</h2><form className="fund-form" onSubmit={submitFund}>
+    {fundDialogOpen ? <Dialog labelledBy="fund-dialog-title" onClose={closeFund}><button type="button" className="modal-close icon-button" onClick={closeFund} aria-label={t.cancel}><X size={17} /></button><h2 id="fund-dialog-title">{editingFund ? t.fundDialogEdit : t.fundDialogCreate}</h2><form className="fund-form" onSubmit={submitFund}>
       {creatingFund ? <>
-        <div className="fund-code-lookup"><label><span>{t.code}</span><input required inputMode="numeric" maxLength={6} value={fundForm.code} onChange={(event) => changeFundCode(event.target.value)} placeholder="000001" /></label><button type="button" className="button button-secondary" disabled={!/^\d{6}$/.test(fundForm.code) || lookupFund.isPending} onClick={runFundLookup}><Search size={14} />{lookupFund.isPending ? t.lookingUp : t.lookup}</button></div>
+        <div className="fund-code-lookup"><label><span>{t.code}</span><input required inputMode="numeric" maxLength={6} disabled={saveFund.isPending} value={fundForm.code} onChange={(event) => changeFundCode(event.target.value)} placeholder="000001" /></label><button type="button" className="button button-secondary" disabled={!/^\d{6}$/.test(fundForm.code) || lookupFund.isPending || saveFund.isPending} onClick={runFundLookup}><Search size={14} />{lookupFund.isPending ? t.lookingUp : t.lookup}</button></div>
         <small>{t.lookupHint}</small>
         {fundLookup ? <><div className="fund-lookup-status"><strong>{t.lookupOk}</strong><small>{t.autoField}</small></div><div className="fund-lookup-preview"><div><span>{t.name}</span><strong>{fundLookup.name}</strong></div><div><span>{t.fundType}</span><strong>{fundLookup.fundType ?? '—'}</strong></div><div><span>{t.inceptionDate}</span><strong>{fundLookup.inceptionDate ?? '—'}</strong></div><div><span>{t.latestNav}</span><strong>{fundLookup.latestNav ? `${navValue(fundLookup.latestNav)} · ${fundLookup.latestNavDate ?? ''}` : '—'}</strong></div><div><span>{t.historyAvailability}</span><strong>{fundLookup.historicalNavAvailable ? t.historyAvailable : t.historyUnavailable}</strong></div><div><span>{t.source}</span><strong>{fundLookup.source}</strong></div></div></> : lookupFund.isError ? <div className="fund-lookup-status fund-lookup-status-error"><strong>{t.lookupFallback}</strong><small>{lookupFund.error instanceof Error ? lookupFund.error.message : String(lookupFund.error)}</small></div> : null}
       </> : <label><span>{t.code}</span><input required maxLength={16} value={fundForm.code} onChange={(event) => setFundForm({ ...fundForm, code: event.target.value })} /></label>}
@@ -352,7 +363,7 @@ export function FundsPage() {
         <label><span>{t.confirmationDays}</span><input required type="number" min="0" max="10" step="1" readOnly={creatingFund && lookupConfirmationResolved} value={fundForm.confirmationTradingDays} onChange={(event) => setFundForm({ ...fundForm, confirmationTradingDays: event.target.value })} /></label>
         <label><span>{t.shareClass}</span><input maxLength={16} readOnly={creatingFund && lookupShareClassResolved} value={fundForm.shareClass} onChange={(event) => setFundForm({ ...fundForm, shareClass: event.target.value })} placeholder="A / C" /></label>
       </> : null}
-      <div className="fund-form-actions"><button type="button" className="button button-secondary" onClick={() => setFundDialogOpen(false)}>{t.cancel}</button><button type="submit" className="button button-primary" disabled={saveFund.isPending || !metadataVisible}>{t.save}</button></div>
+      <div className="fund-form-actions"><button type="button" className="button button-secondary" onClick={closeFund}>{t.cancel}</button><button type="submit" className="button button-primary" disabled={saveFund.isPending || !metadataVisible}>{t.save}</button></div>
     </form></Dialog> : null}
 
     {fundToDelete ? <Dialog labelledBy="fund-delete-dialog-title" onClose={() => { if (!deleteFund.isPending) setFundToDelete(null) }}><button type="button" className="modal-close icon-button" disabled={deleteFund.isPending} onClick={() => setFundToDelete(null)} aria-label={t.cancel}><X size={17} /></button><h2 id="fund-delete-dialog-title">{t.deleteTitle}</h2><p className="fund-delete-name"><strong>{fundToDelete.code}</strong> · {fundToDelete.name}</p><div className="fund-delete-warning"><AlertTriangle size={17} /><span>{t.deleteWarning}</span></div><div className="fund-form-actions"><button type="button" className="button button-secondary" disabled={deleteFund.isPending} onClick={() => setFundToDelete(null)}>{t.cancel}</button><button type="button" className="button fund-delete-confirm" disabled={deleteFund.isPending} onClick={() => deleteFund.mutate(fundToDelete.id)}><Trash2 size={15} />{deleteFund.isPending ? t.deleting : t.deleteConfirm}</button></div></Dialog> : null}

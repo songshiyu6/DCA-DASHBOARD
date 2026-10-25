@@ -101,14 +101,14 @@ export function rebasePerformanceLines(lines: PerformanceLine[]): { startDay: st
     // A live observation supersedes the regular close on the same business date.
     points: [...new Map(line.points.map((point) => [point.date, {
       ...point,
-      value: point.value !== null && Number.isFinite(point.value) && point.value > 0 ? point.value : null,
+      value: point.value !== null && Number.isFinite(point.value) && point.value >= 0 ? point.value : null,
     }])).values()].sort((left, right) => left.date.localeCompare(right.date)),
-  })).filter((line) => line.points.some((point) => point.value !== null))
+  })).filter((line) => line.points.some((point) => point.value !== null && point.value > 0))
   if (!active.length) return { startDay: null, lines: [] }
 
   let commonDates: Set<string> | null = null
   for (const line of active) {
-    const dates = new Set<string>(line.points.filter((point) => point.value !== null).map((point) => point.date))
+    const dates = new Set<string>(line.points.filter((point) => point.value !== null && point.value > 0).map((point) => point.date))
     if (commonDates === null) {
       commonDates = new Set<string>(dates)
       continue

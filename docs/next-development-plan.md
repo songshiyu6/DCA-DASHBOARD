@@ -4,6 +4,8 @@
 >
 > Fact priority: current source/migrations > current tests > exact runtime/CI evidence > living docs > dated SA reports.
 
+The 2026-10-25 correctness audit covers numeric/import boundaries, zero-balance performance, dated XIRR, fund confirmation/NAV timing, API client errors, and asynchronous fund/settings editors. See [the audit report](correctness-audit-2026-10-25.md) for regressions, verification, and remaining scope limits.
+
 ## 1. Product direction
 
 DCA Terminal is a single-user long-term investing/DCA workspace with a real USD account ledger plus explicitly derived reporting projections.

@@ -6,10 +6,10 @@ import { Dialog } from './Dialog'
 import { EmptyState, ErrorState, LoadingBlock } from './DataState'
 import { Panel } from './Panel'
 import { api } from '../lib/api'
+import { chinaBusinessDate as today } from '../lib/businessDate'
 import { invalidateFundQueries, queryKeys } from '../lib/queryKeys'
 import type { FundPurchase, FundPurchaseInput, MutualFund } from '../types'
 
-const today = () => new Date().toISOString().slice(0, 10)
 const emptyForm = () => ({ purchaseDate: today(), grossAmount: '', purchaseFeeRate: '0', notes: '' })
 
 type PurchaseWithPendingNav = Omit<FundPurchase, 'nav' | 'shares'> & { nav: string | null; shares: string | null }

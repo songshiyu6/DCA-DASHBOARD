@@ -277,7 +277,7 @@ export function PortfolioPerformancePanel({ history, inceptionCagr, inceptionXir
     if (portfolioVisible) {
       const realtimePoints = serverPerformance?.points.map((point) => {
         const level = point.level === null ? Number.NaN : Number(point.level)
-        return { date: point.date, value: point.dataStatus === 'FRESH' && Number.isFinite(level) && level > 0 ? level : null }
+        return { date: point.date, value: point.dataStatus === 'FRESH' && Number.isFinite(level) && level >= 0 ? level : null }
       })
       lines.push({
         key: 'PORTFOLIO',

@@ -53,6 +53,21 @@ beforeEach(() => {
 })
 
 describe('portfolio performance benchmark search', () => {
+  it('plots a server-confirmed total loss as minus 100 percent', async () => {
+    mockedAppApi.getPortfolioPerformance.mockResolvedValue({ data: {
+      requestedStartDate: '2026-09-01', endpointDate: '2026-09-03', dataStatus: 'FRESH',
+      twr: '-1', cagr: '-1', xirr: null, maximumDrawdown: '-1',
+      points: [{ date: '2026-09-01', level: '1', dataStatus: 'FRESH' },
+        { date: '2026-09-03', level: '0', dataStatus: 'FRESH' }],
+    } })
+    renderPanel()
+    await waitFor(() => {
+      const option = mockedEcharts.init.mock.results.at(-1)?.value.setOption.mock.calls.at(-1)?.[0]
+      expect(option?.series[0].data).toEqual([
+        ['2026-09-01T00:00:00Z', 0], ['2026-09-03T00:00:00Z', -100],
+      ])
+    })
+  })
   it('keeps controls usable when browser storage is full', async () => {
     const write = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new DOMException('Storage full', 'QuotaExceededError')

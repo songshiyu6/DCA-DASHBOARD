@@ -8,6 +8,8 @@ import com.dca.terminal.marketdata.MarketDataEntities.FundNavDailyEntity;
 import jakarta.validation.Valid;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.Clock;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -30,17 +32,19 @@ public class AutoDcaService {
     private final FundProfileRepository profileRepository;
     private final FundNavDailyRepository navRepository;
     private final FundDataSyncService syncService;
+    private final Clock clock;
 
     public AutoDcaService(AutoDcaRuleRepository ruleRepository,
                           FundService fundService,
                           FundProfileRepository profileRepository,
                           FundNavDailyRepository navRepository,
-                          FundDataSyncService syncService) {
+                          FundDataSyncService syncService, Clock clock) {
         this.ruleRepository = ruleRepository;
         this.fundService = fundService;
         this.profileRepository = profileRepository;
         this.navRepository = navRepository;
         this.syncService = syncService;
+        this.clock = clock;
     }
 
     @Transactional(readOnly = true)
@@ -79,7 +83,8 @@ public class AutoDcaService {
                 : syncService.tradingDays(profile.getCalendarCode(), rule.getStartDate(), calendarEnd);
         AutoDcaProjectionEngine.Projection projection = AutoDcaProjectionEngine.project(
                 new AutoDcaProjectionEngine.RuleSpec(rule.getStartDate(), rule.getEndDate(), rule.getAmount(),
-                        rule.getPurchaseFeeRate(), profile.getConfirmationTradingDays()), nav, grouping, tradingDays);
+                        rule.getPurchaseFeeRate(), profile.getConfirmationTradingDays()), nav, grouping, tradingDays,
+                LocalDate.now(clock.withZone(ZoneId.of("Asia/Shanghai"))));
         List<DailyExecutionResponse> daily = includeDaily
                 ? projection.daily().stream().map(this::dailyResponse).toList()
                 : List.of();

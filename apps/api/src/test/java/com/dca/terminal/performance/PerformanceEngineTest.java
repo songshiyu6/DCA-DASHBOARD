@@ -12,6 +12,38 @@ import static org.assertj.core.api.Assertions.assertThat;
 class PerformanceEngineTest {
 
     @Test
+    void completeWithdrawalRemainsAnEndpointWithoutCreatingALoss() {
+        var result = new PerformanceEngine(new StubSource(
+                List.of(day("2026-09-01", "1000", "1000"), day("2026-09-02", "1100", "1000")),
+                current("2026-09-03", "0", "-100", FreshnessStatus.FRESH),
+                List.of(flow("2026-09-01", "1000"), flow("2026-09-03", "-1100")))).performance("ALL");
+        assertThat(result.liveEndpointIncluded()).isTrue();
+        assertThat(result.endpointDate()).isEqualTo(LocalDate.parse("2026-09-03"));
+        assertThat(result.twr()).isEqualByComparingTo("0.1");
+    }
+
+    @Test
+    void aCompleteLossIsNotHiddenByDroppingTheZeroValuation() {
+        var result = new PerformanceEngine(new StubSource(List.of(day("2025-09-01", "1000", "1000")),
+                current("2026-09-01", "0", "1000", FreshnessStatus.FRESH), List.of())).performance("ALL");
+        assertThat(result.twr()).isEqualByComparingTo("-1");
+        assertThat(result.maximumDrawdown()).isEqualByComparingTo("-1");
+        assertThat(result.cagr()).isEqualByComparingTo("-1");
+    }
+
+    @Test
+    void fundingAfterAnEmptyAccountDoesNotDropOrMisalignHistoryPoints() {
+        var result = new PerformanceEngine(new StubSource(List.of(
+                day("2026-08-30", "0", "0"),
+                day("2026-09-01", "1000", "1000"),
+                day("2026-09-02", "0", "0"),
+                day("2026-09-03", "500", "500")), null, List.of())).performance("ALL");
+        assertThat(result.inceptionDate()).isEqualTo(LocalDate.parse("2026-09-01"));
+        assertThat(result.points()).hasSize(3);
+        assertThat(result.twr()).isEqualByComparingTo("0");
+    }
+
+    @Test
     void inceptionCloseKeepsReturnEarnedAfterInitialFunding() {
         StubSource source = new StubSource(
                 List.of(day("2026-09-01", "1100", "1000")),

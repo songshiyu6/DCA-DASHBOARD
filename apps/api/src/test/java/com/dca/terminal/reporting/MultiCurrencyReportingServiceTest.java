@@ -107,7 +107,8 @@ class MultiCurrencyReportingServiceTest {
         when(autoDcaService.projection(ruleId, AutoDcaProjectionEngine.GroupBy.MONTH, true))
                 .thenReturn(projection(rule, execution));
         when(navRepository.findAllByInstrumentIdOrderByNavDateAscRetrievedAtDesc(instrumentId))
-                .thenReturn(List.of(nav("2026-09-07", "7.10"), nav("2026-09-08", "7.81")));
+                .thenReturn(List.of(nav("2026-09-07", "7.10"), nav("2026-09-08", "7.81"),
+                        nav("2026-09-09", "9999")));
         when(profileRepository.findById(instrumentId)).thenReturn(Optional.empty());
         when(fxService.usdCnyOnOrBefore(LocalDate.of(2026, 9, 7))).thenReturn(fx("2026-09-07", "7.10"));
         when(fxService.usdCny(LocalDate.of(2026, 9, 7), TODAY)).thenReturn(new FxDtos.FxSeriesResponse(
@@ -128,6 +129,7 @@ class MultiCurrencyReportingServiceTest {
         assertThat(result.summary().funds().getFirst().returnRate()).isEqualByComparingTo("0.1");
         assertThat(result.summary().cnyFundValueUsd()).isEqualByComparingTo("108.4722222222222222222222222222222");
         assertThat(result.summary().combinedValueUsd()).isEqualByComparingTo("1108.472222222222222222222222222222");
+        assertThat(result.performance().endpointDate()).isEqualTo(TODAY);
         assertThat(result.summary().combinedPnlUsd()).isEqualByComparingTo("8.472222222222222222222222222222");
         assertThat(result.summary().status()).isEqualTo(FreshnessStatus.FRESH);
         assertThat(result.performance().externalFlowModel())

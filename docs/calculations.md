@@ -105,12 +105,15 @@ gross_t        = (V_t - externalFlow_t) / V_(t-1)
 level_t        = level_(t-1) * gross_t
 ```
 
-Only complete positive valuations participate. A PARTIAL current value cannot become a live performance endpoint.
+Only complete non-negative valuations participate. Leading zero balances without invested capital do not establish inception. A PARTIAL current value cannot become a live performance endpoint.
+
+A zero balance after a complete withdrawal remains a valid endpoint: subtracting the negative external flow preserves the investment return. A zero valuation without a withdrawal represents a full loss, including -100% TWR/drawdown and -100% CAGR when elapsed time is positive. After an empty account is funded again, the new interval uses its new external capital as the denominator; it never divides by a zero opening balance. An interval without a definable denominator yields no calculated return.
 
 ### Benchmark chart presentation
 
 - Each market is plotted on its own observed dates using a UTC daily time axis. Market closures do not insert artificial null prices.
 - Explicit null, non-finite, or non-positive benchmark prices remain gaps. A missing observation must not be silently converted into zero return.
+- A server-confirmed zero portfolio performance level is retained as -100% after a positive comparison baseline. Benchmark price validation remains strictly positive.
 - The last supplied observation for each business date is used, so a live point supersedes that date's regular close without drawing a vertical segment.
 - Visible curves are rebased at their first shared finite positive observation. This chart baseline can differ from the server's selected-range summary baseline.
 - A successful server response with an empty/unavailable performance series remains unavailable. Historical client estimation is used only when there is no server response.
@@ -150,7 +153,7 @@ valuation  = +current real USD account value
 
 BUY/SELL/DIVIDEND/FEE/INTEREST are not separate XIRR flows.
 
-The solver uses dated cash flows, deterministic bracketing, and bisection. Invalid/no-root cases return null.
+The solver nets cash flows on each date before bracketing. Same-day funding and liquidation, fully cancelled flows, or remaining flows without both signs return null because no annualized return is defined. Extreme-rate probes that overflow fractional-power arithmetic do not prevent searching the finite region. Deterministic bracketing and bisection remain the numerical method; invalid/no-root cases return null.
 
 ## Today performance
 
@@ -176,6 +179,8 @@ shares           = net subscription / NAV
 ```
 
 A derived execution requires an observed NAV on that date. A confirmed China open day with missing NAV does not receive a carry-forward NAV and does not create a purchase.
+
+Confirmation dates may be known in advance, but a projected execution stays `PENDING_CONFIRMATION` until its confirmation date is reached in `Asia/Shanghai`. Future NAV observations are excluded from current automatic-DCA projections and combined reporting. Manual NAV entry rejects dates after the current Shanghai date. Fund purchase and NAV forms use the same Shanghai calendar date, including before UTC midnight.
 
 Management fee is metadata only because published mutual-fund NAV already reflects accrued fund-level expenses.
 

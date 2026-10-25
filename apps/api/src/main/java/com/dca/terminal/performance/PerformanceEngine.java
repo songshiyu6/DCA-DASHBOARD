@@ -38,7 +38,8 @@ public class PerformanceEngine {
 
         List<Valuation> valuations = new ArrayList<>();
         for (PortfolioPerformanceSource.DailyValuation item : history) {
-            if (item.dataStatus() != FreshnessStatus.FRESH || !positive(item.totalValue())) continue;
+            if (item.dataStatus() != FreshnessStatus.FRESH || !nonNegative(item.totalValue())) continue;
+            if (valuations.isEmpty() && !positive(item.totalValue()) && !positive(item.cumulativeExternalFlow())) continue;
             valuations.add(new Valuation(item.date(), null, item.totalValue(), item.cumulativeExternalFlow(),
                     PointType.REGULAR_CLOSE, item.dataStatus()));
         }
@@ -46,7 +47,8 @@ public class PerformanceEngine {
         // A partial current portfolio value can look like a sudden loss. Only a complete FRESH account
         // valuation is allowed to extend the otherwise immutable regular-close history.
         boolean liveIncluded = current != null && current.businessDate() != null && current.asOf() != null
-                && positive(current.totalValue()) && current.dataStatus() == FreshnessStatus.FRESH;
+                && nonNegative(current.totalValue()) && current.dataStatus() == FreshnessStatus.FRESH
+                && (!valuations.isEmpty() || positive(current.totalValue()) || positive(current.cumulativeExternalFlow()));
         if (liveIncluded) {
             valuations.add(new Valuation(current.businessDate(), current.asOf(), current.totalValue(),
                     current.cumulativeExternalFlow(), PointType.LIVE, FreshnessStatus.FRESH));
@@ -97,7 +99,7 @@ public class PerformanceEngine {
     }
 
     private BigDecimal xirr(PortfolioPerformanceSource.CurrentValuation current) {
-        if (current == null || current.businessDate() == null || !positive(current.totalValue())) return null;
+        if (current == null || current.businessDate() == null || !nonNegative(current.totalValue())) return null;
         List<PortfolioPerformanceSource.ExternalCashFlow> external = source.externalCashFlows();
         if (external == null || external.isEmpty()) return null;
         List<XirrCalculator.CashFlow> flows = new ArrayList<>();
@@ -121,13 +123,19 @@ public class PerformanceEngine {
         result.add(new LevelPoint(previous.date(), previous.asOf(), level, previous.pointType(), previous.dataStatus()));
         for (int index = 1; index < valuations.size(); index++) {
             Valuation current = valuations.get(index);
-            if (!positive(previous.totalValue()) || !positive(current.totalValue())) continue;
             BigDecimal previousFlow = zero(previous.cumulativeExternalFlow());
             BigDecimal currentFlow = zero(current.cumulativeExternalFlow());
             BigDecimal externalFlow = currentFlow.subtract(previousFlow, MC);
-            BigDecimal numerator = current.totalValue().subtract(externalFlow, MC);
-            BigDecimal gross = numerator.divide(previous.totalValue(), MC);
-            level = level.multiply(gross, MC);
+            BigDecimal gross;
+            if (positive(previous.totalValue())) {
+                gross = current.totalValue().subtract(externalFlow, MC).divide(previous.totalValue(), MC);
+            } else if (positive(externalFlow)) {
+                // Reinvesting after a full withdrawal starts a new funded interval.
+                gross = current.totalValue().divide(externalFlow, MC);
+            } else {
+                gross = current.totalValue().signum() == 0 ? BigDecimal.ONE : null;
+            }
+            level = level == null || gross == null ? null : level.multiply(gross, MC);
             result.add(new LevelPoint(current.date(), current.asOf(), level, current.pointType(), current.dataStatus()));
             previous = current;
         }
@@ -139,7 +147,8 @@ public class PerformanceEngine {
         BigDecimal peak = null;
         BigDecimal maximum = BigDecimal.ZERO;
         for (PerformancePoint point : points) {
-            if (point == null || !positive(point.level())) continue;
+            if (point == null || !nonNegative(point.level())) continue;
+            if (peak == null && point.level().signum() == 0) continue;
             if (peak == null || point.level().compareTo(peak) > 0) peak = point.level();
             BigDecimal drawdown = point.level().divide(peak, MC).subtract(BigDecimal.ONE, MC);
             if (drawdown.compareTo(maximum) < 0) maximum = drawdown;
@@ -152,7 +161,8 @@ public class PerformanceEngine {
         long days = ChronoUnit.DAYS.between(inception, endpoint);
         if (days <= 0) return null;
         BigDecimal terminal = levels.getLast().level();
-        if (!positive(terminal)) return null;
+        if (!nonNegative(terminal)) return null;
+        if (terminal.signum() == 0) return BigDecimal.ONE.negate();
         double years = days / 365.2425d;
         double result = Math.pow(terminal.doubleValue(), 1d / years) - 1d;
         return Double.isFinite(result) ? BigDecimal.valueOf(result) : null;
@@ -178,6 +188,10 @@ public class PerformanceEngine {
 
     private static boolean positive(BigDecimal value) {
         return value != null && value.signum() > 0;
+    }
+
+    private static boolean nonNegative(BigDecimal value) {
+        return value != null && value.signum() >= 0;
     }
 
     record Valuation(LocalDate date, java.time.Instant asOf, BigDecimal totalValue,

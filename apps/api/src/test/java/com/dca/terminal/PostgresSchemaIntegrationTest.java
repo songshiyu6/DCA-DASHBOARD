@@ -59,6 +59,34 @@ class PostgresSchemaIntegrationTest {
     @Autowired
     MultipartProperties multipartProperties;
 
+    @Autowired
+    com.dca.terminal.fund.FundService fundService;
+
+    @Autowired
+    com.dca.terminal.fund.FundPurchaseService fundPurchases;
+
+    @Autowired
+    com.dca.terminal.reporting.MultiCurrencyReportingService reportingService;
+
+    @Test
+    void reportCanSettlePendingPurchasesWhenTheirNavArrives() {
+        var fund = fundService.create(new com.dca.terminal.fund.FundDtos.FundRequest(
+                "F" + UUID.randomUUID().toString().replace("-", "").substring(0, 10), "Settlement test", null, 1, "A"));
+        LocalDate date = LocalDate.of(2026, 8, 3);
+        try {
+            var purchase = fundPurchases.create(fund.id(), new com.dca.terminal.fund.FundDtos.FundPurchaseRequest(
+                    date, new BigDecimal("100"), BigDecimal.ZERO, null));
+            fundService.putNav(fund.id(), new com.dca.terminal.fund.FundDtos.NavRequest(date, BigDecimal.ONE, "MANUAL"));
+
+            reportingService.report("ALL");
+
+            assertEquals(new BigDecimal("100.00000000"), jdbcTemplate.queryForObject(
+                    "select shares from fund_purchase where id = ?", BigDecimal.class, purchase.id()));
+        } finally {
+            fundService.delete(fund.id());
+        }
+    }
+
     @DynamicPropertySource
     static void postgresProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
@@ -167,14 +195,19 @@ class PostgresSchemaIntegrationTest {
         InstrumentEntity instrument = instrumentRepository.saveAndFlush(instrument("S" + UUID.randomUUID().toString().replace("-", "").substring(0, 10)));
         long before = transactionRepository.count();
         CsvRowRequest valid = new CsvRowRequest("2026-08-01", "BUY", instrument.getSymbol(), "1", "100", "0", null, null, null);
-        CsvRowRequest tooPrecise = new CsvRowRequest("2026-08-02", "BUY", instrument.getSymbol(),
-                "10000000000000000000.123456789", "100", "0", null, null, null);
+        CsvRowRequest rejectedByDatabase = new CsvRowRequest("2026-08-02", "BUY", instrument.getSymbol(),
+                "1", "100", "0", null, null, "simulate-csv-flush-failure");
+        // Precision is now rejected before any write. Use a disposable database constraint
+        // to retain coverage of rollback when the second persisted row fails at flush.
+        jdbcTemplate.execute("ALTER TABLE investment_transaction ADD CONSTRAINT csv_flush_failure_test "
+                + "CHECK (notes IS DISTINCT FROM 'simulate-csv-flush-failure')");
 
         try {
             assertThrows(DataIntegrityViolationException.class, () -> transactionService.commit(
-                    new CsvCommitRequest(UUID.randomUUID(), List.of(valid, tooPrecise))));
+                    new CsvCommitRequest(UUID.randomUUID(), List.of(valid, rejectedByDatabase))));
             assertEquals(before, transactionRepository.count());
         } finally {
+            jdbcTemplate.execute("ALTER TABLE investment_transaction DROP CONSTRAINT csv_flush_failure_test");
             instrumentRepository.deleteById(instrument.getId());
             instrumentRepository.flush();
         }

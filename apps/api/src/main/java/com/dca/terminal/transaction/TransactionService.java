@@ -185,26 +185,29 @@ public class TransactionService {
         List<CsvRowPreview> rows = new ArrayList<>();
         Set<String> fingerprints = new HashSet<>();
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(file.getInputStream(), StandardCharsets.UTF_8))) {
-            String header = reader.readLine();
-            if (header == null) throw invalidCsv("CSV is empty");
-            List<String> columns = parseLine(header);
+            reader.mark(1);
+            if (reader.read() != '\uFEFF') reader.reset();
+            List<String> columns = readCsvRecord(reader);
+            if (columns == null) throw invalidCsv("CSV is empty");
             List<String> headerErrors = csvFieldLengthErrors(columns, columns);
             if (!headerErrors.isEmpty()) throw csvFieldTooLong(1, headerErrors);
-            Set<String> normalizedColumns = columns.stream()
-                    .map(value -> value.replace("\uFEFF", "").trim().toLowerCase(Locale.ROOT))
-                    .collect(java.util.stream.Collectors.toSet());
+            Set<String> normalizedColumns = new HashSet<>();
+            for (String column : columns) {
+                String normalized = column.replace("\uFEFF", "").trim().toLowerCase(Locale.ROOT).replace("_", "");
+                if (!normalizedColumns.add(normalized)) throw invalidCsv("Duplicate CSV column");
+            }
             if (!normalizedColumns.containsAll(Set.of("date", "type"))) {
                 throw invalidCsv("CSV must contain date,type columns");
             }
             int rowNumber = 1;
-            String line;
-            while ((line = reader.readLine()) != null) {
+            List<String> values;
+            while ((values = readCsvRecord(reader)) != null) {
                 rowNumber++;
-                if (line.isBlank()) continue;
+                if (values.size() == 1 && values.getFirst().isBlank()) continue;
                 if (rows.size() >= maxCsvRows) throw csvTooManyRows();
-                List<String> values = parseLine(line);
                 CsvRowRequest row = rowFromColumns(columns, values);
                 List<String> errors = mergeErrors(csvFieldLengthErrors(columns, values), validateRow(row));
+                if (values.size() != columns.size()) errors = append(errors, "CSV column count does not match header");
                 String fingerprint = fingerprint(row);
                 if (!fingerprints.add(fingerprint) || transactionRepository.existsByImportFingerprint(fingerprint)) {
                     errors = append(errors, "Duplicate row");
@@ -438,6 +441,10 @@ public class TransactionService {
         if (request.fee() != null && request.fee().signum() < 0) {
             throw new DomainException(HttpStatus.BAD_REQUEST, "INVALID_TRANSACTION", "Fee cannot be negative");
         }
+        validatePrecision(request.quantity(), 12, 8, "quantity");
+        validatePrecision(request.unitPrice(), 14, 6, "price");
+        validatePrecision(request.amount(), 14, 6, "amount");
+        validatePrecision(request.fee(), 14, 6, "fee");
         switch (request.type()) {
             case BUY, SELL -> {
                 if (request.quantity() == null || request.quantity().signum() <= 0 || request.unitPrice() == null
@@ -454,6 +461,10 @@ public class TransactionService {
                 if (request.amount() == null || request.amount().signum() < 0) {
                     throw new DomainException(HttpStatus.BAD_REQUEST, "INVALID_TRANSACTION",
                             "DIVIDEND and FEE require a non-negative amount");
+                }
+                if (request.quantity() != null || request.unitPrice() != null) {
+                    throw new DomainException(HttpStatus.BAD_REQUEST, "INVALID_TRANSACTION",
+                            request.type() + " does not accept quantity or unit price");
                 }
                 rejectFeeField(request);
             }
@@ -515,6 +526,10 @@ public class TransactionService {
     private List<String> validateRow(CsvRowRequest row) {
         List<String> errors = new ArrayList<>();
         if (row == null) return List.of("row is required");
+        csvPrecision(row.quantity(), 12, 8, "quantity", errors);
+        csvPrecision(row.price(), 14, 6, "price", errors);
+        csvPrecision(row.amount(), 14, 6, "amount", errors);
+        csvPrecision(row.fee(), 14, 6, "fee", errors);
         LocalDate tradeDate = parseDate(row.date());
         if (tradeDate == null) errors.add("date must be YYYY-MM-DD");
         else if (tradeDate.isAfter(LocalDate.now(clock.withZone(zone)))) errors.add("trade date cannot be in the future");
@@ -547,6 +562,8 @@ public class TransactionService {
             if (row.amount() != null && !row.amount().isBlank()) errors.add("amount is not valid for BUY/SELL");
         } else if (type == TransactionType.DIVIDEND || type == TransactionType.FEE) {
             if (decimal(row.amount()) == null || decimal(row.amount()).signum() < 0) errors.add("amount is required");
+            if (row.quantity() != null && !row.quantity().isBlank()) errors.add("quantity is not valid for cash events");
+            if (row.price() != null && !row.price().isBlank()) errors.add("price is not valid for cash events");
         } else if (type == TransactionType.DEPOSIT || type == TransactionType.WITHDRAWAL
                 || type == TransactionType.INTEREST) {
             if (decimal(row.amount()) == null || decimal(row.amount()).signum() <= 0) errors.add("positive amount is required");
@@ -657,7 +674,7 @@ public class TransactionService {
                 ? null : ContributionType.valueOf(row.contributionType().trim().toUpperCase(Locale.ROOT));
         UUID contributionPlanId = row.contributionPlanId() == null || row.contributionPlanId().isBlank()
                 ? null : UUID.fromString(row.contributionPlanId().trim());
-        return new TransactionRequest(row.symbol(), type, LocalDate.parse(row.date()), decimal(row.quantity()),
+        return new TransactionRequest(row.symbol(), type, LocalDate.parse(row.date().trim()), decimal(row.quantity()),
                 decimal(row.price()), decimal(row.amount()), decimal(row.fee()), cycleId,
                 contributionType, contributionPlanId, row.notes());
     }
@@ -675,7 +692,33 @@ public class TransactionService {
 
     private BigDecimal decimal(String value) {
         if (value == null || value.isBlank()) return null;
-        try { return new BigDecimal(value.trim()); } catch (NumberFormatException ignored) { return null; }
+        if (value.length() > maxCsvFieldLength) return null;
+        try {
+            BigDecimal parsed = new BigDecimal(value.trim());
+            return fitsPrecision(parsed, 14, 8) ? parsed : null;
+        } catch (ArithmeticException | NumberFormatException ignored) { return null; }
+    }
+
+    private static boolean fitsPrecision(BigDecimal value, int integerDigits, int fractionDigits) {
+        if (value == null) return true;
+        BigDecimal normalized = value.stripTrailingZeros();
+        return normalized.scale() <= fractionDigits
+                && (long) normalized.precision() - normalized.scale() <= integerDigits;
+    }
+
+    private void validatePrecision(BigDecimal value, int integerDigits, int fractionDigits, String field) {
+        if (!fitsPrecision(value, integerDigits, fractionDigits)) {
+            throw new DomainException(HttpStatus.BAD_REQUEST, "INVALID_TRANSACTION",
+                    field + " exceeds supported numeric precision");
+        }
+    }
+
+    private void csvPrecision(String value, int integerDigits, int fractionDigits, String field, List<String> errors) {
+        if (value == null || value.isBlank()) return;
+        BigDecimal parsed = decimal(value);
+        if (parsed == null || !fitsPrecision(parsed, integerDigits, fractionDigits)) {
+            errors.add(field + " is invalid or exceeds supported numeric precision");
+        }
     }
 
     private LocalDate parseDate(String value) {
@@ -775,21 +818,51 @@ public class TransactionService {
         return "CSV field " + field + " exceeds maximum field length of " + maxCsvFieldLength;
     }
 
-    private List<String> parseLine(String line) {
+    private List<String> readCsvRecord(BufferedReader reader) throws IOException {
         List<String> values = new ArrayList<>();
         StringBuilder current = new StringBuilder();
         boolean quoted = false;
-        for (int i = 0; i < line.length(); i++) {
-            char character = line.charAt(i);
-            if (character == '"') {
-                if (quoted && i + 1 < line.length() && line.charAt(i + 1) == '"') { current.append('"'); i++; }
-                else quoted = !quoted;
-            } else if (character == ',' && !quoted) {
+        boolean closedQuote = false;
+        boolean started = false;
+        int next;
+        while ((next = reader.read()) != -1) {
+            started = true;
+            char character = (char) next;
+            if (quoted) {
+                if (character == '"') {
+                    reader.mark(1);
+                    if (reader.read() == '"') current.append('"');
+                    else {
+                        reader.reset();
+                        quoted = false;
+                        closedQuote = true;
+                    }
+                } else current.append(character);
+                continue;
+            }
+            if (character == '\n' || character == '\r') {
+                if (character == '\r') {
+                    reader.mark(1);
+                    if (reader.read() != '\n') reader.reset();
+                }
+                values.add(current.toString());
+                return values;
+            }
+            if (character == ',') {
                 values.add(current.toString());
                 current.setLength(0);
-            } else current.append(character);
+                closedQuote = false;
+            } else if (character == '"') {
+                if (closedQuote || !current.toString().isBlank()) throw invalidCsv("Invalid CSV quote");
+                current.setLength(0);
+                quoted = true;
+            } else {
+                if (closedQuote && character != ' ' && character != '\t') throw invalidCsv("Invalid text after CSV quote");
+                if (!closedQuote) current.append(character);
+            }
         }
         if (quoted) throw invalidCsv("Unclosed CSV quote");
+        if (!started) return null;
         values.add(current.toString());
         return values;
     }

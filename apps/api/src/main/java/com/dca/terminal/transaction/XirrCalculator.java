@@ -9,6 +9,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.TreeMap;
 
 public final class XirrCalculator {
     private static final MathContext MC = new MathContext(34, RoundingMode.HALF_EVEN);
@@ -24,14 +25,22 @@ public final class XirrCalculator {
                 || flows.stream().noneMatch(flow -> flow.amount().signum() < 0)
                 || flows.stream().noneMatch(flow -> flow.amount().signum() > 0)) return null;
 
-        List<CashFlow> ordered = flows.stream().sorted(Comparator.comparing(CashFlow::date)).toList();
+        // Same-day transfers have no elapsed investment time. Net them before checking signs
+        // so a fully cancelled ledger cannot turn an arbitrary probe into a reported return.
+        var byDate = new TreeMap<LocalDate, BigDecimal>();
+        flows.forEach(flow -> byDate.merge(flow.date(), flow.amount(), BigDecimal::add));
+        List<CashFlow> ordered = byDate.entrySet().stream()
+                .filter(entry -> entry.getValue().signum() != 0)
+                .map(entry -> new CashFlow(entry.getKey(), entry.getValue())).toList();
+        if (ordered.size() < 2
+                || ordered.stream().noneMatch(flow -> flow.amount().signum() < 0)
+                || ordered.stream().noneMatch(flow -> flow.amount().signum() > 0)) return null;
         LocalDate origin = ordered.get(0).date();
         Bracket bracket = findBracket(ordered, origin);
         if (bracket == null) return null;
         BigDecimal left = bracket.left();
         BigDecimal right = bracket.right();
         BigDecimal leftValue = bracket.leftValue();
-        BigDecimal rightValue = bracket.rightValue();
 
         for (int i = 0; i < 200; i++) {
             BigDecimal middle = left.add(right, MC).divide(BigDecimal.valueOf(2), MC);
@@ -45,7 +54,6 @@ public final class XirrCalculator {
                 leftValue = middleValue;
             } else {
                 right = middle;
-                rightValue = middleValue;
             }
         }
         return left.add(right, MC).divide(BigDecimal.valueOf(2), MC);
@@ -79,16 +87,19 @@ public final class XirrCalculator {
             probes.add(rate);
         }
         List<Bracket> brackets = new ArrayList<>();
-        BigDecimal previousRate = probes.get(0);
-        BigDecimal previousValue = npv(flows, origin, previousRate);
-        if (previousValue == null) return null;
-        if (previousValue.signum() == 0) return new Bracket(previousRate, previousRate, previousValue, previousValue);
-        for (int index = 1; index < probes.size(); index++) {
-            BigDecimal currentRate = probes.get(index);
+        BigDecimal previousRate = null;
+        BigDecimal previousValue = null;
+        for (BigDecimal currentRate : probes) {
             BigDecimal currentValue = npv(flows, origin, currentRate);
-            if (currentValue == null) return null;
+            // Extreme rates can overflow fractional-power arithmetic on long histories.
+            // Continue searching the finite region instead of abandoning an ordinary root.
+            if (currentValue == null) {
+                previousRate = null;
+                previousValue = null;
+                continue;
+            }
             if (currentValue.signum() == 0) return new Bracket(currentRate, currentRate, currentValue, currentValue);
-            if (previousValue.signum() != currentValue.signum()) {
+            if (previousValue != null && previousValue.signum() != currentValue.signum()) {
                 brackets.add(new Bracket(previousRate, currentRate, previousValue, currentValue));
             }
             previousRate = currentRate;

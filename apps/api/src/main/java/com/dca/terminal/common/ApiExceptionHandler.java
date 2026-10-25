@@ -6,6 +6,9 @@ import java.time.Instant;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.beans.TypeMismatchException;
+import org.springframework.web.ErrorResponse;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -45,6 +48,11 @@ public class ApiExceptionHandler {
         return problem(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "Request contains an invalid value", request);
     }
 
+    @ExceptionHandler({HttpMessageNotReadableException.class, TypeMismatchException.class})
+    public ProblemDetail malformedRequest(Exception exception, HttpServletRequest request) {
+        return problem(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "Request contains an invalid value", request);
+    }
+
     @ExceptionHandler(ResponseStatusException.class)
     public ProblemDetail responseStatus(ResponseStatusException exception, HttpServletRequest request) {
         HttpStatus status = HttpStatus.resolve(exception.getStatusCode().value());
@@ -65,6 +73,14 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ProblemDetail unexpected(Exception exception, HttpServletRequest request) {
+        // MVC errors (missing parameters, unsupported methods/media types, missing resources)
+        // already carry a protocol status. The catch-all must not turn them into HTTP 500.
+        if (exception instanceof ErrorResponse error) {
+            HttpStatus status = HttpStatus.resolve(error.getStatusCode().value());
+            if (status != null && status.is4xxClientError()) {
+                return problem(status, "INVALID_REQUEST", "Request rejected", request);
+            }
+        }
         return problem(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "Unexpected server error", request);
     }
 

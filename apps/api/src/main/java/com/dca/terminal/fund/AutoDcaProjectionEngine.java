@@ -76,13 +76,20 @@ public final class AutoDcaProjectionEngine {
 
     public static Projection project(RuleSpec rule, List<NavPoint> navPoints, GroupBy groupBy,
                                      List<LocalDate> tradingDays) {
+        return project(rule, navPoints, groupBy, tradingDays, null);
+    }
+
+    public static Projection project(RuleSpec rule, List<NavPoint> navPoints, GroupBy groupBy,
+                                     List<LocalDate> tradingDays, LocalDate asOf) {
         validateRule(rule);
         TreeMap<LocalDate, BigDecimal> navByDate = normalizeNav(navPoints);
+        if (asOf != null) navByDate.tailMap(asOf, false).clear();
         if (navByDate.isEmpty()) return new Projection(List.of(), List.of(), null, null);
 
         List<LocalDate> observedDates = new ArrayList<>(navByDate.keySet());
         List<LocalDate> calendarDates = normalizeDates(tradingDays);
         LocalDate latestNavDate = observedDates.getLast();
+        LocalDate confirmationAsOf = asOf == null ? latestNavDate : asOf;
         BigDecimal latestNav = navByDate.get(latestNavDate);
         LocalDate effectiveEnd = rule.endDate() == null || rule.endDate().isAfter(latestNavDate)
                 ? latestNavDate : rule.endDate();
@@ -97,7 +104,7 @@ public final class AutoDcaProjectionEngine {
             BigDecimal shares = net.divide(nav, MC).setScale(DecimalMath.QUANTITY_SCALE, RoundingMode.HALF_UP);
             LocalDate confirmationDate = confirmationDate(navDate, index, rule.confirmationTradingDays(),
                     observedDates, calendarDates);
-            ConfirmationStatus status = confirmationDate == null
+            ConfirmationStatus status = confirmationDate == null || confirmationDate.isAfter(confirmationAsOf)
                     ? ConfirmationStatus.PENDING_CONFIRMATION : ConfirmationStatus.CONFIRMED;
             daily.add(new Execution(navDate, navDate, confirmationDate, nav,
                     DecimalMath.money(rule.amount()), DecimalMath.money(fee), DecimalMath.money(net), shares, status));

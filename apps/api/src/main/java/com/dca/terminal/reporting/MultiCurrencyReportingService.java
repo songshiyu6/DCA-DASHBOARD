@@ -74,7 +74,9 @@ public class MultiCurrencyReportingService {
         this.clock = clock;
     }
 
-    @Transactional(readOnly = true)
+    // Reading the report also settles pending purchases whose exact-date NAV has arrived.
+    // A read-only outer transaction would silently discard those managed-entity updates.
+    @Transactional
     public MultiCurrencyDtos.Response report(String range) {
         LocalDate today = LocalDate.now(clock);
         PortfolioDtos.SummaryResponse usdSummary = portfolioService.summary();
@@ -279,7 +281,10 @@ public class MultiCurrencyReportingService {
     private TreeMap<LocalDate, BigDecimal> navByDate(UUID instrumentId) {
         TreeMap<LocalDate, BigDecimal> result = new TreeMap<>();
         Map<LocalDate, FundNavDailyEntity> selected = new LinkedHashMap<>();
+        LocalDate today = LocalDate.now(clock);
         navRepository.findAllByInstrumentIdOrderByNavDateAscRetrievedAtDesc(instrumentId)
+                .stream().filter(row -> row.getNavDate() != null && !row.getNavDate().isAfter(today)
+                        && row.getNav() != null && row.getNav().signum() > 0)
                 .forEach(row -> selected.putIfAbsent(row.getNavDate(), row));
         selected.forEach((date, row) -> result.put(date, row.getNav()));
         return result;

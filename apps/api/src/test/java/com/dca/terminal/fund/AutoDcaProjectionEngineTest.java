@@ -12,6 +12,24 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AutoDcaProjectionEngineTest {
 
     @Test
+    void confirmationUsesBusinessDateAndExcludesFutureNav() {
+        var rule = new AutoDcaProjectionEngine.RuleSpec(LocalDate.parse("2026-07-01"), null,
+                new BigDecimal("100"), BigDecimal.ZERO, 1);
+        var nav = List.of(nav("2026-07-01", "1"), nav("2026-07-03", "2"));
+        var calendar = List.of(LocalDate.parse("2026-07-01"), LocalDate.parse("2026-07-02"),
+                LocalDate.parse("2026-07-03"));
+        var before = AutoDcaProjectionEngine.project(rule, nav, AutoDcaProjectionEngine.GroupBy.MONTH,
+                calendar, LocalDate.parse("2026-07-01"));
+        assertEquals(1, before.daily().size());
+        assertEquals(AutoDcaProjectionEngine.ConfirmationStatus.PENDING_CONFIRMATION, before.daily().getFirst().status());
+        assertEquals(LocalDate.parse("2026-07-01"), before.latestNavDate());
+        var after = AutoDcaProjectionEngine.project(rule, nav, AutoDcaProjectionEngine.GroupBy.MONTH,
+                calendar, LocalDate.parse("2026-07-02"));
+        assertEquals(1, after.summaries().getFirst().confirmedCount());
+        assertEquals(1, after.daily().size());
+    }
+
+    @Test
     void derivesDailyPurchasesFromObservedNavDatesAndTracksConfirmationLag() {
         AutoDcaProjectionEngine.RuleSpec rule = new AutoDcaProjectionEngine.RuleSpec(
                 LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 6),
@@ -67,6 +85,9 @@ class AutoDcaProjectionEngineTest {
         assertEquals(LocalDate.parse("2026-07-02"), projection.daily().getFirst().confirmationDate());
         assertEquals(LocalDate.parse("2026-07-06"), projection.daily().get(1).confirmationDate());
         assertEquals(LocalDate.parse("2026-07-07"), projection.daily().getLast().confirmationDate());
+        assertEquals(AutoDcaProjectionEngine.ConfirmationStatus.PENDING_CONFIRMATION,
+                projection.daily().getLast().status());
+        assertEquals(2, projection.summaries().getFirst().confirmedCount());
         assertTrue(projection.daily().stream().noneMatch(row -> row.navDate().equals(LocalDate.parse("2026-07-02"))));
     }
 

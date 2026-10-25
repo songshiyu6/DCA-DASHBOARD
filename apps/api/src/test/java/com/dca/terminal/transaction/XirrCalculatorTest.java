@@ -13,6 +13,34 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class XirrCalculatorTest {
 
     @Test
+    void sameDayFundingAndLiquidationDoNotHaveAnAnnualizedReturn() {
+        LocalDate date = LocalDate.of(2026, 8, 1);
+        assertNull(XirrCalculator.solve(List.of(
+                new XirrCalculator.CashFlow(date, new BigDecimal("-1000")),
+                new XirrCalculator.CashFlow(date, new BigDecimal("1000")))));
+    }
+
+    @Test
+    void cancellingFlowsOnDifferentDatesDoNotInventARoot() {
+        LocalDate date = LocalDate.of(2026, 8, 1);
+        assertNull(XirrCalculator.solve(List.of(
+                new XirrCalculator.CashFlow(date, new BigDecimal("-1000")),
+                new XirrCalculator.CashFlow(date, new BigDecimal("1000")),
+                new XirrCalculator.CashFlow(date.plusDays(1), new BigDecimal("-200")),
+                new XirrCalculator.CashFlow(date.plusDays(1), new BigDecimal("200")))));
+    }
+
+    @Test
+    void longHoldingPeriodsSurviveOverflowAtExtremeProbeRates() {
+        LocalDate date = LocalDate.of(1980, 1, 1);
+        BigDecimal result = XirrCalculator.solve(List.of(
+                new XirrCalculator.CashFlow(date, new BigDecimal("-1000")),
+                new XirrCalculator.CashFlow(date.plusDays(14610), new BigDecimal("2000"))));
+        assertNotNull(result);
+        assertTrue(Math.abs(result.doubleValue() - (Math.pow(2, 365d / 14610) - 1)) < 1e-9);
+    }
+
+    @Test
     void solvesAOneYearTenPercentReturn() {
         BigDecimal result = XirrCalculator.solve(List.of(
                 new XirrCalculator.CashFlow(LocalDate.of(2023, 1, 1), new BigDecimal("-1000")),

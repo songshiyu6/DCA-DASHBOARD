@@ -108,3 +108,9 @@ describe('performance series', () => {
     expect(result.lines[2].points[1].value).toBeCloseTo(2, 10)
   })
 })
+it('keeps a real zero performance level after a positive common baseline', () => {
+  const result = rebasePerformanceLines([{ key: 'portfolio', label: 'Portfolio', points: [
+    { date: '2026-09-01', value: 1 }, { date: '2026-09-02', value: 0 },
+  ] }])
+  expect(result.lines[0].points[1].value).toBe(-100)
+})

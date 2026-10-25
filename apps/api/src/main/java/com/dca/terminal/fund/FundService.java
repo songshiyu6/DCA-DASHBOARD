@@ -131,6 +131,10 @@ public class FundService {
 
     @Transactional
     public NavResponse putNav(UUID fundId, @Valid NavRequest request) {
+        if (request.navDate().isAfter(java.time.LocalDate.now(clock.withZone(java.time.ZoneId.of("Asia/Shanghai"))))) {
+            throw new DomainException(HttpStatus.BAD_REQUEST, "FUND_NAV_DATE_IN_FUTURE",
+                    "Fund NAV date cannot be in the future");
+        }
         FundProfileEntity profile = profile(fundId);
         String source = request.source() == null || request.source().isBlank()
                 ? "MANUAL" : request.source().trim().toUpperCase(Locale.ROOT);

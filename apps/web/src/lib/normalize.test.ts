@@ -14,6 +14,13 @@ import {
 } from './api/normalize'
 
 describe('domain response normalizers', () => {
+  it('retains leveraged cycle execution details as decimal strings', () => {
+    const result = normalizePlanCycle({ id: 'cycle', assets: [{ symbol: 'QQQM', executedAmount: '3124.800000',
+      equivalentExposureAmount: '9374.400000', executions: [{ symbol: 'TQQQ', amount: '3124.800000',
+        exposureMultiplier: '3', equivalentExposureAmount: '9374.400000' }] }] })
+    expect(result.assets[0].executions?.[0]).toEqual({ symbol: 'TQQQ', amount: '3124.800000',
+      exposureMultiplier: '3', equivalentExposureAmount: '9374.400000' })
+  })
   it('normalizes the auth domain without changing the session contract', () => {
     expect(normalizeSession({ authenticated: true, username: 'alice' })).toEqual({ authenticated: true, username: 'alice' })
   })

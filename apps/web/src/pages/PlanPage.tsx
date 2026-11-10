@@ -82,16 +82,18 @@ function CycleRow({ cycle, planStartDate, initialPrincipal }: { cycle: PlanCycle
   const ratio = planned.gt(0) ? decimalMin(decimalMax(decimal(cycle.executedAmount).div(planned), 0), 1).toNumber() * 100 : 0
   return <div className="cycle-row">
     <div className="cycle-period"><span className={`cycle-marker cycle-marker-${cycle.status.toLowerCase()}`}>{cycle.status === 'COMPLETED' ? <Check size={13} /> : cycle.status === 'PARTIAL' ? '½' : '·'}</span><div><strong>{formatPeriod(cycle.period)}</strong><small>{cycle.period}</small></div></div>
-    <div className="cycle-progress"><div className="cycle-track"><span style={{ width: `${ratio}%` }} /></div><small>{formatMoney(cycle.executedAmount)} <span>/ {formatMoney(cycle.plannedAmount)}</span></small>{cycle.cnyFundExecutedUsd && decimal(cycle.cnyFundExecutedUsd).gt(0) ? <small>{t('plan.cnyFundExecuted')}: {formatMoney(cycle.cnyFundExecutedUsd)}</small> : null}{cycle.dataStatus === 'PARTIAL' ? <small>{t('plan.cnyFundPartial')}</small> : null}</div>
+    <div className="cycle-progress"><div className="cycle-track"><span style={{ width: `${ratio}%` }} /></div><small>{formatMoney(cycle.executedAmount)} <span>/ {formatMoney(cycle.plannedAmount)}</span></small>{cycle.cnyFundExecutedUsd && decimal(cycle.cnyFundExecutedUsd).gt(0) ? <small>{t('plan.cnyFundExecuted')}: {formatMoney(cycle.cnyFundExecutedUsd)}</small> : null}{cycle.assets.flatMap((asset) => (asset.executions ?? []).filter((entry) => !decimal(entry.exposureMultiplier).eq(1)).map((entry, index) => <small key={`${asset.symbol}-${entry.symbol}-${index}`}>{entry.symbol} → {asset.symbol} · {isZh ? '实际投入' : 'Cash paid'} {formatMoney(entry.amount)} · {entry.exposureMultiplier}× {isZh ? '目标日敞口' : 'target daily exposure'} {formatMoney(entry.equivalentExposureAmount)}</small>))}{cycle.dataStatus === 'PARTIAL' ? <small>{t('plan.cnyFundPartial')}</small> : null}</div>
     <div className="cycle-status"><StatusBadge status={cycle.status} compact /></div>
   </div>
 }
 
 function RecommendationPanel({ recommendation }: { recommendation: Recommendation }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const isZh = (i18n.resolvedLanguage ?? i18n.language).toLowerCase().startsWith('zh')
   return <Panel title={t('plan.recommendation')} detail={t('plan.recommendationHint')} action={<span className="recommendation-total">{formatMoney(recommendation.amount)}</span>}>
     <div className="recommendation-method"><SlidersHorizontal size={14} /><span>{t('plan.method')}: <strong>{t('plan.contributionFirst')}</strong></span></div>
     <p className="field-hint">{t('plan.cnyFundMapping')}</p>
+    <p className="field-hint">{isZh ? 'QQQ / QQQM 可接受 QLD（2×）、TQQQ（3×）作为定投执行。投入进度按实际支付金额，配置建议按目标日敞口折算；账户持仓和收益保留真实交易。' : 'QQQ / QQQM cycles accept QLD (2×) and TQQQ (3×). Contribution progress uses cash paid; allocation recommendations use target daily exposure. Portfolio holdings and returns use actual trades.'}</p>
     {recommendation.items.length ? <div className="recommendation-table"><div className="recommendation-header"><span>{t('etfs.ticker')}</span><span>{t('plan.current')}</span><span>{t('plan.target')}</span><span>{t('plan.gap')}</span><span>{t('plan.suggested')}</span></div>{recommendation.items.map((item) => <div className="recommendation-item" key={item.symbol}><span className="ticker-chip">{item.symbol}</span><span>{formatPercent(item.currentWeight)}</span><span>{formatPercent(item.targetWeight)}</span><span className={decimal(item.gap).gt(0) ? 'text-positive' : decimal(item.gap).lt(0) ? 'text-negative' : ''}>{formatSignedPercent(item.gap)}</span><strong>{formatMoney(item.suggestedAmount)}</strong></div>)}</div> : <EmptyState title={t('common.noData')} />}
   </Panel>
 }

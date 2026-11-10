@@ -314,6 +314,8 @@ Cash is shown separately and is not a pseudo security. V025 Reporting fund posit
 
 ## USD plan cycles
 
+QQQ/QQQM targets also accept QLD and TQQQ BUY executions through explicit positive Nasdaq-100 mappings. Cash progress and cycle completion count actual notional plus fees once; target equivalent exposure uses 2×/3× notional excluding fees. Plan recommendations include mapped current holdings using these daily exposure multipliers. Real holdings, cash and P/L remain based on original instruments and prices. See [leveraged plan execution](leveraged-plan-execution.md) for matching, ambiguity rules and examples.
+
 Actual cycle execution remains linked real BUY cash outlay:
 
 ```text

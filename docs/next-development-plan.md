@@ -1,12 +1,14 @@
 # DCA Terminal Current State and Next Development Plan
 
-> Current Flyway chain: `V001`–`V025`.
+> Current Flyway chain: `V001`–`V028`.
 >
 > Fact priority: current source/migrations > current tests > exact runtime/CI evidence > living docs > dated SA reports.
 
 The 2026-10-25 correctness audit covers numeric/import boundaries, zero-balance performance, dated XIRR, fund confirmation/NAV timing, API client errors, and asynchronous fund/settings editors. See [the audit report](correctness-audit-2026-10-25.md) for regressions, verification, and remaining scope limits.
 
 ## 1. Product direction
+
+Nasdaq plan cycles now support explicit QQQ/QQQM/QLD/TQQQ execution equivalence, with cash progress and target daily exposure reported separately. See [leveraged plan execution](leveraged-plan-execution.md). Transaction deletion/recovery is documented in [transaction recovery](transaction-recovery.md).
 
 DCA Terminal is a single-user long-term investing/DCA workspace with a real USD account ledger plus explicitly derived reporting projections.
 

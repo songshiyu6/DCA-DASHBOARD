@@ -179,6 +179,13 @@ public class PlanService {
         Map<UUID, BigDecimal> currentValues = assets.stream().collect(java.util.stream.Collectors.toMap(
                 asset -> asset.getInstrument().getId(),
                 asset -> allCurrentValues.getOrDefault(asset.getInstrument().getId(), BigDecimal.ZERO)));
+        List<InstrumentEntity> planInstruments = assets.stream().map(InvestmentPlanAssetEntity::getInstrument).toList();
+        List<UUID> outsideIds = allCurrentValues.keySet().stream().filter(id -> !currentValues.containsKey(id)).toList();
+        for (InstrumentEntity held : instrumentRepository.findAllById(outsideIds)) {
+            PlanAssetEquivalence.resolve(held, planInstruments).ifPresent(match -> currentValues.merge(
+                    match.asset().getId(), allCurrentValues.get(held.getId()).multiply(match.multiplier(), MC),
+                    (a, b) -> a.add(b, MC)));
+        }
         CnyFundPlanProjection.Snapshot cny = cnySnapshot();
         // Add equivalent CNY Nasdaq-fund market value only to QQQM for this plan's
         // read-only allocation decision; never alter real USD holdings/cash.
@@ -325,8 +332,11 @@ public class PlanService {
             throw new DomainException(HttpStatus.BAD_REQUEST, "PLAN_CYCLE_OUTSIDE_WINDOW",
                     "Trade date is outside the plan cycle execution window");
         }
-        if (cycleAssetRepository.findAllByCycleIdOrderByIdAsc(cycleId).stream()
-                .noneMatch(asset -> asset.getInstrument().getId().equals(instrumentId))) {
+        List<InstrumentEntity> targets = cycleAssetRepository.findAllByCycleIdOrderByIdAsc(cycleId).stream()
+                .map(InvestmentPlanCycleAssetEntity::getInstrument).toList();
+        boolean directMatch = targets.stream().anyMatch(asset -> asset.getId().equals(instrumentId));
+        InstrumentEntity alternate = directMatch ? null : instrumentRepository.findById(instrumentId).orElse(null);
+        if (!directMatch && PlanAssetEquivalence.resolve(alternate, targets).isEmpty()) {
             throw new DomainException(HttpStatus.BAD_REQUEST, "INVALID_PLAN_CYCLE", "Instrument is not part of this plan cycle");
         }
     }
@@ -519,8 +529,9 @@ public class PlanService {
         else status = CycleStatus.SKIPPED;
         List<CycleAssetResponse> assets = real.assets().stream().map(asset ->
                 new CycleAssetResponse(asset.symbol(), asset.targetWeight(), asset.plannedAmount(),
-                        asset.executedAmount().add(
-                                cny.byEtfUsd().getOrDefault(asset.symbol(), BigDecimal.ZERO), MC))).toList();
+                        asset.executedAmount().add(cny.byEtfUsd().getOrDefault(asset.symbol(), BigDecimal.ZERO), MC),
+                        asset.equivalentExposureAmount().add(cny.byEtfUsd().getOrDefault(asset.symbol(), BigDecimal.ZERO), MC),
+                        asset.executions())).toList();
         return new CycleResponse(real.id(), real.planId(), real.period(), real.plannedAmount(),
                 executed, status, assets, real.openedAt(), real.completedAt(), cny.executedUsd(),
                 cny.complete() ? FreshnessStatus.FRESH : FreshnessStatus.PARTIAL);
@@ -553,18 +564,29 @@ public class PlanService {
         if (executed.signum() > 0 && cycle.getOpenedAt() == null) cycle.setOpenedAt(clock.instant());
         if (status == CycleStatus.COMPLETED && cycle.getCompletedAt() == null) cycle.setCompletedAt(clock.instant());
         cycleRepository.save(cycle);
-        Map<UUID, BigDecimal> byInstrument = new HashMap<>();
+        var cycleAssets = cycleAssetRepository.findAllByCycleIdOrderByIdAsc(cycle.getId());
+        var targets = cycleAssets.stream().map(InvestmentPlanCycleAssetEntity::getInstrument).toList();
+        Map<UUID, List<PlanDtos.CycleExecutionResponse>> executions = new HashMap<>();
         transactions.stream().filter(transaction -> transaction.getTransactionType() == TransactionType.BUY)
-                .forEach(transaction -> byInstrument.merge(transaction.getInstrument().getId(),
-                        transaction.getQuantity().multiply(transaction.getUnitPrice(), MC).add(DecimalMath.zeroIfNull(transaction.getFee()), MC),
-                        (a, b) -> a.add(b, MC)));
-        List<CycleAssetResponse> assetResponses = cycleAssetRepository.findAllByCycleIdOrderByIdAsc(cycle.getId()).stream()
+                .forEach(transaction -> PlanAssetEquivalence.resolve(transaction.getInstrument(), targets).ifPresent(match -> {
+                    BigDecimal notional = transaction.getQuantity().multiply(transaction.getUnitPrice(), MC);
+                    BigDecimal paid = notional.add(DecimalMath.zeroIfNull(transaction.getFee()), MC);
+                    executions.computeIfAbsent(match.asset().getId(), ignored -> new ArrayList<>()).add(
+                            new PlanDtos.CycleExecutionResponse(transaction.getInstrument().getSymbol(), paid,
+                                    match.multiplier(), notional.multiply(match.multiplier(), MC)));
+                }));
+        List<CycleAssetResponse> assetResponses = cycleAssets.stream()
                 .map(asset -> {
-                    BigDecimal assetExecuted = byInstrument.getOrDefault(asset.getInstrument().getId(), BigDecimal.ZERO);
+                    var details = executions.getOrDefault(asset.getInstrument().getId(), List.of());
+                    BigDecimal assetExecuted = details.stream().map(PlanDtos.CycleExecutionResponse::amount)
+                            .reduce(BigDecimal.ZERO, BigDecimal::add);
+                    BigDecimal exposure = details.stream().map(PlanDtos.CycleExecutionResponse::equivalentExposureAmount)
+                            .reduce(BigDecimal.ZERO, BigDecimal::add);
                     asset.setExecutedAmount(assetExecuted);
                     cycleAssetRepository.save(asset);
                     BigDecimal assetPlanned = skipForInitialCapital ? BigDecimal.ZERO : asset.getPlannedAmount();
-                    return new CycleAssetResponse(asset.getInstrument().getSymbol(), asset.getTargetWeight(), assetPlanned, assetExecuted);
+                    return new CycleAssetResponse(asset.getInstrument().getSymbol(), asset.getTargetWeight(), assetPlanned,
+                            assetExecuted, exposure, List.copyOf(details));
                 }).toList();
         return new CycleResponse(cycle.getId(), cycle.getPlan().getId(), cycle.getPeriod(), effectivePlannedAmount,
                 executed, status, assetResponses, cycle.getOpenedAt(), cycle.getCompletedAt());

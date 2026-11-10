@@ -35,8 +35,16 @@ public final class PlanDtos {
                                int executionEndDay, PlanStatus status, List<PlanAssetResponse> assets,
                                Instant createdAt, Instant updatedAt) { }
 
+    public record CycleExecutionResponse(String symbol, BigDecimal amount, BigDecimal exposureMultiplier,
+                                         BigDecimal equivalentExposureAmount) { }
+
     public record CycleAssetResponse(String symbol, BigDecimal targetWeight, BigDecimal plannedAmount,
-                                     BigDecimal executedAmount) { }
+                                     BigDecimal executedAmount, BigDecimal equivalentExposureAmount,
+                                     List<CycleExecutionResponse> executions) {
+        public CycleAssetResponse(String symbol, BigDecimal targetWeight, BigDecimal plannedAmount, BigDecimal executedAmount) {
+            this(symbol, targetWeight, plannedAmount, executedAmount, executedAmount, List.of());
+        }
+    }
 
     public record CycleResponse(UUID id, UUID planId, String period, BigDecimal plannedAmount,
                                 BigDecimal executedAmount, CycleStatus status,

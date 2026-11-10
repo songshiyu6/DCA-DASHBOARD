@@ -291,6 +291,12 @@ function normalizePlanCycleAsset(value: unknown): PlanCycleAsset {
     targetWeight: stringValue(body.targetWeight),
     plannedAmount: stringValue(body.plannedAmount),
     executedAmount: stringValue(body.executedAmount),
+    ...(body.equivalentExposureAmount != null ? { equivalentExposureAmount: stringValue(body.equivalentExposureAmount) } : {}),
+    ...(Array.isArray(body.executions) ? { executions: body.executions.filter(isRecord).map((entry) => ({
+      symbol: stringValue(entry.symbol, ''), amount: stringValue(entry.amount),
+      exposureMultiplier: stringValue(entry.exposureMultiplier, '1'),
+      equivalentExposureAmount: stringValue(entry.equivalentExposureAmount),
+    })) } : {}),
   }
 }
 

@@ -37,6 +37,15 @@ beforeEach(() => {
 })
 
 describe('plan editor', () => {
+  it('shows leveraged execution cash separately from target daily exposure', async () => {
+    mockedApi.getCycles.mockResolvedValue({ data: [{ id: 'nov-cycle', period: '2026-11', plannedAmount: '4000',
+      executedAmount: '3124.80', status: 'PARTIAL', assets: [{ symbol: 'QQQM', targetWeight: '1',
+        plannedAmount: '4000', executedAmount: '3124.80', equivalentExposureAmount: '9374.40', executions: [
+          { symbol: 'TQQQ', amount: '3124.80', exposureMultiplier: '3', equivalentExposureAmount: '9374.40' },
+        ] }] }], meta: { status: 'FRESH', source: 'API' } })
+    renderPage()
+    expect(await screen.findByText(/TQQQ → QQQM/)).toHaveTextContent('Cash paid $3,124.80 · 3× target daily exposure $9,374.40')
+  })
   it('requires explicit new-plan facts and updates asset labels after selection', async () => {
     mockedApi.getPlans.mockResolvedValue({ data: [], meta: { status: 'FRESH', source: 'API' } })
     mockedApi.createPlan.mockResolvedValue({ data: fixturePlan, meta: { status: 'FRESH', source: 'API' } })

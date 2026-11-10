@@ -117,6 +117,8 @@ export interface PlanCycleAsset {
   targetWeight: string
   plannedAmount: string
   executedAmount: string
+  equivalentExposureAmount?: string
+  executions?: Array<{ symbol: string; amount: string; exposureMultiplier: string; equivalentExposureAmount: string }>
 }
 
 export interface PlanCycle {

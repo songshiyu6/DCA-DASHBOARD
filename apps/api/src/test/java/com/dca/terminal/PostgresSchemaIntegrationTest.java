@@ -10,6 +10,7 @@ import com.dca.terminal.transaction.TransactionDtos.CsvRowRequest;
 import com.dca.terminal.transaction.TransactionService;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -55,6 +56,49 @@ class PostgresSchemaIntegrationTest {
 
     @Autowired
     TransactionService transactionService;
+
+    @Autowired
+    com.dca.terminal.transaction.TransactionRecoveryService recoveryService;
+
+    @Test
+    void deletionCanBeRestoredOnceWithOriginalIdentityAndPrecision() {
+        var created = transactionService.create(new com.dca.terminal.transaction.TransactionDtos.TransactionRequest(
+                null, TransactionType.DEPOSIT, LocalDate.of(2026, 8, 1), null, null,
+                new BigDecimal("123.456789"), BigDecimal.ZERO, null, "recovery integration"));
+        try {
+            Instant originalCreatedAt = transactionRepository.findById(created.getId()).orElseThrow().getCreatedAt();
+            transactionService.delete(created.getId());
+            var entry = recoveryService.list().stream().filter(item -> item.transactionId().equals(created.getId())).findFirst().orElseThrow();
+            assertEquals("123.456789", entry.amount());
+            assertEquals("DEPOSIT", entry.type());
+            var restored = recoveryService.restore(entry.id());
+            assertEquals(created.getId(), restored.getId());
+            assertEquals(created.getLedgerOrder(), restored.getLedgerOrder());
+            assertEquals(originalCreatedAt, restored.getCreatedAt());
+            assertEquals(0, created.getAmount().compareTo(restored.getAmount()));
+            assertTrue(recoveryService.list().stream().noneMatch(item -> item.id().equals(entry.id())));
+            assertThrows(com.dca.terminal.common.DomainException.class, () -> recoveryService.restore(entry.id()));
+        } finally {
+            transactionRepository.deleteById(created.getId());
+        }
+    }
+
+    @Test
+    void rejectedRestoreRollsBackAndKeepsTheRecordRecoverable() {
+        var created = transactionService.create(new com.dca.terminal.transaction.TransactionDtos.TransactionRequest(
+                null, TransactionType.DEPOSIT, LocalDate.of(2026, 8, 1), null, null,
+                new BigDecimal("42"), BigDecimal.ZERO, null, "recovery rollback"));
+        transactionService.delete(created.getId());
+        var entry = recoveryService.list().stream().filter(item -> item.transactionId().equals(created.getId())).findFirst().orElseThrow();
+        jdbcTemplate.execute("ALTER TABLE investment_transaction ADD CONSTRAINT restore_failure_test CHECK (notes IS DISTINCT FROM 'recovery rollback')");
+        try {
+            assertThrows(DataIntegrityViolationException.class, () -> recoveryService.restore(entry.id()));
+            assertTrue(transactionRepository.findById(created.getId()).isEmpty());
+            assertTrue(recoveryService.list().stream().anyMatch(item -> item.id().equals(entry.id())));
+        } finally {
+            jdbcTemplate.execute("ALTER TABLE investment_transaction DROP CONSTRAINT restore_failure_test");
+        }
+    }
 
     @Autowired
     MultipartProperties multipartProperties;

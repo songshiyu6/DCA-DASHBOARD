@@ -68,6 +68,8 @@ const demoApiProxy = {
   previewContributionClassifications: (id: string, items: Parameters<typeof liveApi.previewContributionClassifications>[1]) => loadDemoApi().then((adapter) => adapter.previewContributionClassifications(id, items)),
   commitContributionClassifications: (id: string, previewHash: string, items: Parameters<typeof liveApi.commitContributionClassifications>[2]) => loadDemoApi().then((adapter) => adapter.commitContributionClassifications(id, previewHash, items)),
   getTransactions: () => loadDemoApi().then((adapter) => adapter.getTransactions()),
+  getDeletedTransactions: () => emptyDemoResult([]),
+  restoreTransaction: (_id: string) => { throw new Error('Transaction recovery is unavailable in demo mode') },
   createTransaction: (input: Parameters<typeof liveApi.createTransaction>[0]) => loadDemoApi().then((adapter) => adapter.createTransaction(input)),
   updateTransaction: (id: string, input: Parameters<typeof liveApi.updateTransaction>[1]) => loadDemoApi().then((adapter) => adapter.updateTransaction(id, input)),
   previewTransactionImport: (csv: string) => loadDemoApi().then((adapter) => adapter.previewTransactionImport(csv)),

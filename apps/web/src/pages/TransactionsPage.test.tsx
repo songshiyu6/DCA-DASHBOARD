@@ -15,6 +15,8 @@ const mockedApi = vi.hoisted(() => ({
   updateTransaction: vi.fn(),
   createTransaction: vi.fn(),
   deleteTransaction: vi.fn(),
+  getDeletedTransactions: vi.fn(),
+  restoreTransaction: vi.fn(),
   previewTransactionImport: vi.fn(),
   commitTransactionImport: vi.fn(),
 }))
@@ -42,10 +44,36 @@ beforeEach(() => {
   mockedApi.updateTransaction.mockResolvedValue({ data: transaction, meta: { status: 'FRESH', source: 'API' } })
   mockedApi.createTransaction.mockResolvedValue({ data: transaction, meta: { status: 'FRESH', source: 'API' } })
   mockedApi.deleteTransaction.mockResolvedValue({ data: { id: transaction.id }, meta: { status: 'FRESH', source: 'API' } })
+  mockedApi.getDeletedTransactions.mockResolvedValue({ data: [], meta: { status: 'FRESH', source: 'API' } })
+  mockedApi.restoreTransaction.mockResolvedValue({ data: { id: transaction.id }, meta: { status: 'FRESH', source: 'API' } })
   mockedApi.commitTransactionImport.mockResolvedValue({ data: { batchId: 'batch-1', importedRows: 2, transactionIds: ['txn-a', 'txn-b'] }, meta: { status: 'FRESH', source: 'API' } })
 })
 
 describe('transaction form', () => {
+  it('requires confirmation and allows cancellation before deleting', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: 'Delete' }))
+    expect(mockedApi.deleteTransaction).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog')).toHaveTextContent(fixtureTransactions[0].tradeDate)
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(mockedApi.deleteTransaction).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await user.click(screen.getByRole('button', { name: 'Confirm removal' }))
+    await waitFor(() => expect(mockedApi.deleteTransaction).toHaveBeenCalledWith(fixtureTransactions[0].id))
+  })
+
+  it('lists deleted records and restores using the archive identity', async () => {
+    mockedApi.getDeletedTransactions.mockResolvedValue({ data: [{ id: 'archive-id', transactionId: 'original-id',
+      deletedAt: '2026-11-10T01:07:07Z', date: '2026-09-08', symbol: 'QQQM', type: 'BUY',
+      quantity: '10', unitPrice: '295.90', amount: null, fee: '0' }], meta: { status: 'FRESH', source: 'API' } })
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(screen.getByRole('button', { name: 'Recycle bin' }))
+    expect(await screen.findByText('2026-09-08')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Restore' }))
+    await waitFor(() => expect(mockedApi.restoreTransaction).toHaveBeenCalledWith('archive-id'))
+  })
   it('requires an explicit ticker for a new purchase', async () => {
     const user = userEvent.setup()
     renderPage()

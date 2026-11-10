@@ -416,7 +416,7 @@ public class TransactionService {
         return new ContributionSource(null, null);
     }
 
-    private void validateLedger() {
+    void validateLedger() {
         List<TransactionEntity> transactions = transactionRepository.findAllByOrderByTradeDateAscLedgerOrderAscIdAsc();
         if (transactions.isEmpty()) return;
         LocalDate asOf = transactions.stream().map(TransactionEntity::getTradeDate)

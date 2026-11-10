@@ -4,6 +4,19 @@ import { isRecord, normalizeApiResponse, normalizeResult, normalizeTransaction }
 
 type CashTransactionType = Transaction['transactionType'] | 'DEPOSIT' | 'WITHDRAWAL' | 'INTEREST'
 
+export interface DeletedTransaction {
+  id: string
+  transactionId: string
+  deletedAt: string
+  symbol: string | null
+  type: string
+  date: string
+  quantity: string | null
+  unitPrice: string | null
+  amount: string | null
+  fee: string | null
+}
+
 interface ServerCsvPreviewImpact {
   rowNumber?: number
   cashImpact?: string | null
@@ -94,6 +107,8 @@ function normalizeDelete(value: unknown): { id: string } {
 }
 
 export const transactionsApi = {
+  getDeletedTransactions: async (): ApiResponse<DeletedTransaction[]> => normalizeResult(await request<DeletedTransaction[]>('/transactions/trash'), (value) => value as DeletedTransaction[], apiMeta()),
+  restoreTransaction: async (id: string): ApiResponse<{ id: string }> => normalizeResult(await request<unknown>(`/transactions/trash/${encodeURIComponent(id)}/restore`, { method: 'POST' }), normalizeDelete, apiMeta()),
   getTransactions: async (): ApiResponse<Transaction[]> => normalizeResult(await request<unknown>('/transactions'), normalizeCashReadyTransactions, apiMeta()),
   createTransaction: async (input: TransactionInput): ApiResponse<Transaction> => normalizeResult(await request<unknown>('/transactions', {
     method: 'POST',
